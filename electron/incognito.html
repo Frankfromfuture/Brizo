@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self';"
+    >
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Brizo - Incognito</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        overflow: hidden;
+        background: #1e211f;
+        color: #eef1ee;
+        font: 13px "HarmonyOS Sans SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      .toolbar {
+        height: 58px;
+        padding: 0 14px 0 82px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-bottom: 1px solid #393d3a;
+        -webkit-app-region: drag;
+      }
+      button, input { font: inherit; }
+      button, form { -webkit-app-region: no-drag; }
+      button {
+        height: 30px;
+        padding: 0 10px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: #d9ddda;
+        cursor: pointer;
+      }
+      button:hover, button:focus-visible {
+        background: #343936;
+        outline: none;
+      }
+      button:disabled { opacity: 0.35; pointer-events: none; }
+      form {
+        min-width: 180px;
+        max-width: 680px;
+        height: 34px;
+        flex: 1;
+        display: flex;
+        align-items: center;
+        margin-left: 5px;
+        padding: 0 12px;
+        border-radius: 9px;
+        background: #303431;
+      }
+      input {
+        width: 100%;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: #f5f7f5;
+      }
+      .badge {
+        margin-left: auto;
+        color: #aab3ac;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="toolbar">
+      <button id="back" type="button">Back</button>
+      <button id="forward" type="button">Forward</button>
+      <button id="reload" type="button">Reload</button>
+      <form id="address-form">
+        <input id="address" aria-label="Address" autocomplete="off" spellcheck="false">
+      </form>
+      <span class="badge">Private window</span>
+    </header>
+    <script src="./incognito-renderer.js"></script>
+  </body>
+</html>

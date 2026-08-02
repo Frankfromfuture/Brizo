@@ -1,0 +1,97 @@
+{
+  "name": "brizo",
+  "productName": "Brizo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/prepare-sites-build.mjs",
+    "icons:prepare": "python3 scripts/prepare-app-icons.py",
+    "desktop": "npm run build && electron electron/main.mjs",
+    "desktop:run": "electron electron/main.mjs",
+    "desktop:startup-benchmark": "electron electron/main.mjs --startup-benchmark",
+    "desktop:browser-smoke": "npm run build && electron electron/main.mjs --browser-smoke",
+    "desktop:pdf-smoke": "npm run build && electron electron/main.mjs --pdf-smoke",
+    "desktop:smoke": "npm run build && electron electron/main.mjs --smoke-test",
+    "dist": "npm run icons:prepare && npm run build && electron-builder",
+    "dist:mac": "npm run icons:prepare && npm run build && electron-builder --mac",
+    "dist:win": "npm run icons:prepare && npm run build && electron-builder --win",
+    "dist:linux": "npm run icons:prepare && npm run build && electron-builder --linux",
+    "preview": "vite preview",
+    "perf:startup": "node scripts/benchmark-startup.mjs",
+    "test:sites": "node --test tests/sites-worker.test.mjs"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "cheerio": "^1.1.2"
+  },
+  "devDependencies": {
+    "@fontsource/eb-garamond": "^5.3.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "@vitejs/plugin-react": "5.0.4",
+    "border-beam": "^1.3.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "vite": "6.4.2"
+  },
+  "build": {
+    "appId": "com.brizo.browser",
+    "productName": "Brizo",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "files": [
+      "dist/client/**/*",
+      "electron/**/*",
+      "shared/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Brizo"
+    },
+    "linux": {
+      "icon": "build/icons",
+      "category": "Office",
+      "target": [
+        "AppImage"
+      ]
+    }
+  }
+}
