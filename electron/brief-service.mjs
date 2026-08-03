@@ -146,6 +146,10 @@ const HORIZON_CURATED_FEEDS = [
   { url: "https://krebsonsecurity.com/feed/", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
   { url: "https://www.nature.com/nature.rss", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
   { url: "https://api.quantamagazine.org/feed/", sections: ["technology", "arts-culture"], region: "国际", sourceAdapter: "horizon-preset" },
+  { url: "https://feeds.feedburner.com/TechCrunch/", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
+  { url: "https://www.theverge.com/rss/index.xml", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
+  { url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", sections: ["international"], region: "国际", sourceAdapter: "horizon-preset" },
+  { url: "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
 ];
 
 const RSSHUB_ROUTES = [
@@ -160,6 +164,13 @@ const RSSHUB_ROUTES = [
   { path: "/jiemian/lists/65", sections: ["technology"], region: "国内" },
   { path: "/jiemian/lists/800", sections: ["business-finance"], region: "国内" },
   { path: "/huxiu/moment", sections: ["technology", "business-finance"], region: "国内" },
+  { path: "/wallstreetcn/news/global", sections: ["business-finance"], region: "国内" },
+  { path: "/cls/telegraph", sections: ["business-finance"], region: "国内" },
+  { path: "/zaobao/realtime/china", sections: ["domestic", "international"], region: "国际" },
+  { path: "/zaobao/realtime/world", sections: ["international"], region: "国际" },
+  { path: "/bbc/chinese", sections: ["international"], region: "国际" },
+  { path: "/ithome/ranking/24h", sections: ["technology"], region: "国内" },
+  { path: "/jiqizhixin", sections: ["technology"], region: "国内" },
 ];
 
 export function buildSupplementalFeeds(env = process.env) {
