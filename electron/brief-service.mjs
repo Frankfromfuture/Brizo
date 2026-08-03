@@ -111,6 +111,8 @@ const LOCAL_TOPIC_TAXONOMY = [
 ];
 
 const AUTHORITY_FEEDS = [
+  { url: "https://www.ftchinese.com/rss/feed", sections: ["business-finance", "international", "technology", "domestic"], region: "国际" },
+  { url: "https://feedx.net/rss/ft.xml", sections: ["business-finance", "international", "technology", "domestic"], region: "国际" },
   { url: "https://feeds.bbci.co.uk/news/technology/rss.xml", sections: ["technology"], region: "国际" },
   { url: "https://feeds.bbci.co.uk/news/business/rss.xml", sections: ["business-finance"], region: "国际" },
   { url: "https://feeds.bbci.co.uk/news/world/rss.xml", sections: ["international"], region: "国际" },
@@ -140,6 +142,8 @@ const AUTHORITY_FEEDS = [
 // Curated direct RSS sources published in Horizon's MIT-licensed example and preset configs.
 // Brizo consumes the original feeds directly and runs them through its own allowlist and editorial pipeline.
 const HORIZON_CURATED_FEEDS = [
+  { url: "https://www.ftchinese.com/rss/feed", sections: ["business-finance", "international", "technology"], region: "国际", sourceAdapter: "horizon-preset" },
+  { url: "https://feedx.net/rss/ft.xml", sections: ["business-finance", "international", "technology"], region: "国际", sourceAdapter: "horizon-preset" },
   { url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664", sections: ["business-finance"], region: "国际", sourceAdapter: "horizon-preset" },
   { url: "https://developer.nvidia.com/blog/tag/cuda/feed/", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
   { url: "https://lwn.net/headlines/rss", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
@@ -153,6 +157,14 @@ const HORIZON_CURATED_FEEDS = [
 ];
 
 const RSSHUB_ROUTES = [
+  { path: "/ft/chinese", sections: ["business-finance", "international", "technology", "domestic"], region: "国际" },
+  { path: "/ft/chinese/news", sections: ["international"], region: "国际" },
+  { path: "/ft/chinese/opinion", sections: ["business-finance", "international"], region: "国际" },
+  { path: "/ft/chinese/business", sections: ["business-finance"], region: "国际" },
+  { path: "/ft/chinese/tech", sections: ["technology"], region: "国际" },
+  { path: "/ft/chinese/china", sections: ["domestic", "international"], region: "国际" },
+  { path: "/ft/chinese/finance", sections: ["business-finance"], region: "国际" },
+  { path: "/ft/chinese/hot", sections: ["business-finance", "technology", "international"], region: "国际" },
   { path: "/reuters/world", sections: ["international"], region: "国际" },
   { path: "/reuters/world/china", sections: ["international", "domestic"], region: "国际" },
   { path: "/reuters/business", sections: ["business-finance"], region: "国际" },
