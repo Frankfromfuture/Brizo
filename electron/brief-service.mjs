@@ -1422,14 +1422,30 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
     if (!Array.isArray(story.sources) || story.sources.length < 1) {
       return { status: "error", message: "这条新闻目前没有可核验的真实来源，无法生成正文。" };
     }
-    const primary = story.sources[0];
-    const sourceBody = safeText(primary.bodyExcerpt || primary.snippet || primary.title, 6_000);
+    let primary = story.sources[0];
+    let sourceBody = safeText(primary.bodyExcerpt || primary.snippet || primary.title, 6_000);
+    if (sourceBody.length < 300 && primary.url) {
+      try {
+        const enriched = await fetchEnrichedResult(primary);
+        if (enriched.bodyExcerpt && enriched.bodyExcerpt.length > sourceBody.length) {
+          primary = { ...primary, bodyExcerpt: enriched.bodyExcerpt };
+          sourceBody = safeText(enriched.bodyExcerpt, 6_000);
+        }
+      } catch {
+        // Fallback to original source body if page fetch fails.
+      }
+    }
     const splitBody = (value) => {
+      const rawBlocks = String(value || "")
+        .split(/\n\s*\n|\n/)
+        .map((s) => safeText(s, 2_000))
+        .filter((text) => text.length >= 20);
+      if (rawBlocks.length >= 2) return rawBlocks;
       const sentences = String(value || "").split(/(?<=[。！？.!?])\s*/u).map((item) => safeText(item, 900)).filter(Boolean);
       const paragraphs = [];
       let current = "";
       for (const sentence of sentences) {
-        if (current && current.length + sentence.length > 420) {
+        if (current && current.length + sentence.length > 150) {
           paragraphs.push(current);
           current = sentence;
         } else {
