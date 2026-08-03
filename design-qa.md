@@ -49,3 +49,41 @@ No actionable P0, P1, or P2 mismatches remain. The persistent Brizo logo header 
 - P3: when more root folders are imported, confirm that the current 35 px row rhythm remains comfortable across a very long tree.
 
 final result: passed
+
+---
+
+# Brizo Brief design QA
+
+Status: passed
+
+Source of truth: `/Users/frankfan/.codex/generated_images/019fc2f3-79a9-7970-8f3f-1327055e6365/exec-c9b31157-9db8-40ca-a1f9-1d7e531e764e.png`
+
+Final implementation capture: `/Users/frankfan/Desktop/Project/Brizo/qa/brief-front-final.png`
+
+Side-by-side comparison: `/Users/frankfan/Desktop/Project/Brizo/qa/brief-comparison-final.png`
+
+## QA result
+
+- P0: none.
+- P1: none.
+- P2: none unresolved.
+- The fixed Brief entry, serif masthead, gold hairline system, three-column front-page hierarchy, Now rail, restrained page index, topic edit action, and three-column next-page preview all match the selected weighted-gazette direction.
+- Front-page summaries were lengthened and the lower preview gained three headlines per page to match the source density. The main preview image was changed to a real maritime logistics photograph closer to the source subject.
+- The implementation intentionally retains Brizo's durable collapsed-sidebar startup state and the required visible blank new tab; the reference was captured with the bookmark sidebar expanded and no ordinary tab visible.
+
+## States and interaction checked
+
+- Fixed Brief tab appears immediately after `+`, is not draggable or closable, and does not change the normal tab count.
+- Page controls and PageDown snap across all four full-height pages.
+- A page-4 story opens the report overlay; closing it restores page 4.
+- Topic editor exposes 置顶、自动、减少、屏蔽 and reset controls.
+- Desktop front page, 768 px fallback, and 390 px narrow layout were inspected; horizontal overflow is contained and content remains vertically readable.
+- Loading, honest error/no-model, stale-edition notice, reduced-motion, report loading/error, and preview labeling are implemented.
+
+## Verification
+
+- `npm run test:brief`: passed (9 tests).
+- `npm run build`: passed.
+- `npm run test:sites`: passed (4 tests).
+- `npm run desktop:smoke`: passed, including Brief fixed-tab, four-page, and report-position assertions.
+- `npm run desktop:browser-smoke`: passed, including the Brief preload bridge methods.

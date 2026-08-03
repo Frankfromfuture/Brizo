@@ -5,12 +5,14 @@ import {
   dialog,
   ipcMain,
   nativeImage,
+  powerMonitor,
   safeStorage,
   screen,
   session,
   shell,
   WebContentsView,
 } from "electron";
+import { createBriefService } from "./brief-service.mjs";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
@@ -121,6 +123,9 @@ let browserErrorPageActive = false;
 let browserSessionHandlersInstalled = false;
 let downloadRecords = [];
 let suggestionRegionPromise = Promise.resolve("GLOBAL");
+const searchSuggestionCache = new Map();
+let searchSuggestionCooldownUntil = 0;
+const SEARCH_SUGGESTION_CACHE_TTL = 5 * 60 * 1000;
 let downloadRecordsPromise;
 let downloadsWindow;
 let downloadsWindowClosedAt = 0;
@@ -170,6 +175,18 @@ app.setName("Brizo");
 app.commandLine.appendSwitch("enable-smooth-scrolling");
 app.commandLine.appendSwitch("enable-gpu-rasterization");
 app.commandLine.appendSwitch("enable-zero-copy");
+
+const briefService = createBriefService({
+  callEditorialModel: (payload) => searchWithQwenEditorialModel(payload),
+  callModel: (payload) => searchWithBoundModel(payload),
+  notify: (edition) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("bean-browser:brief-edition-updated", edition);
+    }
+  },
+  search: (query, options) => searchWebQuery(query, options),
+  userDataPath: app.getPath("userData"),
+});
 
 let articlePdfModulePromise;
 let browserToolsModulePromise;
@@ -961,7 +978,7 @@ async function writeBrowserErrorPage(failure) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file:; style-src 'unsafe-inline'">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
         <title>${escapeHtml(code)} · Brizo</title>
         <style>
           * { box-sizing: border-box; }
@@ -1744,6 +1761,12 @@ function createBrowserView(window, ownerTabId = "__default__") {
           && errorState.documentUrl === failedUrl
           && browserView.__brizoDisplayUrl === failedUrl
           && !errorState.url.startsWith("file:");
+        result.errorPageLogoLoaded = await browserView.webContents.executeJavaScript(`
+          (() => {
+            const logo = document.querySelector("main img");
+            return Boolean(logo && logo.complete && logo.naturalWidth > 0);
+          })()
+        `);
         const passed =
           result.title === "Example Domain" &&
           result.heading === "Example Domain" &&
@@ -1774,6 +1797,7 @@ function createBrowserView(window, ownerTabId = "__default__") {
           Object.values(result.downloadMenuActions).every(Boolean) &&
           result.multiTabStateRetained &&
           result.multiTabViewCount === 2 &&
+          result.errorPageLogoLoaded &&
           result.errorPageKeepsRequestedUrl &&
           result.reportedBackgroundColor === result.backgroundColor &&
           result.url.startsWith("https://example.org/");
@@ -1935,6 +1959,19 @@ function chooseFastModel(models, providerName = "") {
   return sortFastModels(models, providerName)[0] || "";
 }
 
+function readAssistantMessage(body) {
+  const content = body?.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .map((item) => typeof item === "string" ? item : item?.text || "")
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+  return "";
+}
+
 function normalizeModelApiUrl(input) {
   const value = String(input || "").trim().replace(/\/$/, "");
   if (!value) return "";
@@ -2046,7 +2083,8 @@ async function searchWithBoundModel(payload) {
     attachmentNames.length ? `用户附加的文件名：${attachmentNames.join("、")}。不要声称读取了文件内容。` : "",
   ].filter(Boolean).join("\n");
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45_000);
+  const requestTimeoutMs = Math.min(90_000, Math.max(5_000, Number(payload?.timeoutMs) || 45_000));
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
     const response = await fetch(`${provider.baseUrl}/chat/completions`, {
       method: "POST",
@@ -2070,11 +2108,11 @@ async function searchWithBoundModel(payload) {
     });
     if (!response.ok) throw new Error(`模型接口返回 HTTP ${response.status}`);
     const body = await response.json();
-    const message = body?.choices?.[0]?.message?.content;
-    if (typeof message !== "string" || !message.trim()) throw new Error("模型没有返回文字内容");
+    const message = readAssistantMessage(body);
+    if (!message) throw new Error("模型没有返回文字内容");
     return {
       status: "success",
-      message: message.trim(),
+      message,
       sources: [],
       providerLabel: `${provider.name || "自定义 API"} · 直接回答`,
       modelLabel: model,
@@ -2092,6 +2130,134 @@ async function searchWithBoundModel(payload) {
     };
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function searchWithQwenEditorialModel(payload) {
+  const store = await readModelGuardStore();
+  const candidates = store.providers
+    .filter((provider) => provider.id !== store.defaultId)
+    .map(withKnownProviderDefaults)
+    .map((provider) => ({
+      model: chooseFastModel(
+        (Array.isArray(provider.models) ? provider.models : []).filter((model) => /qwen/i.test(model)),
+        provider.name,
+      ),
+      provider,
+    }))
+    .filter(({ model, provider }) =>
+      model
+      && /qwen|通义|dashscope/i.test(`${provider?.name || ""} ${provider?.baseUrl || ""}`)
+      && provider?.baseUrl
+      && decryptModelKey(provider),
+    );
+  const selected = candidates[0];
+  if (!selected) {
+    return { status: "error", message: "未配置可用于 Brief 中文编辑的 Qwen 文本模型。" };
+  }
+  return searchWithBoundModel({ ...payload, model: selected.model });
+}
+
+async function askCurrentPageWithBoundModel(payload) {
+  if (!browserView || browserView.webContents.isDestroyed()) {
+    return { status: "error", message: "当前没有可以提问的网页。" };
+  }
+  const question = typeof payload?.question === "string"
+    ? payload.question.trim().slice(0, 4_000)
+    : "";
+  if (!question) return { status: "error", message: "请输入关于当前网页的问题。" };
+
+  const store = await readModelGuardStore();
+  const storedProvider = store.providers.find((provider) => provider.id === store.defaultId)
+    || store.providers[0];
+  const provider = withKnownProviderDefaults(storedProvider);
+  const apiKey = decryptModelKey(storedProvider);
+  if (!provider?.baseUrl || !apiKey) {
+    return { status: "error", message: "请先在“大模型护航”中绑定并选择默认 API。" };
+  }
+  const model = chooseFastModel(provider.models || [], provider.name);
+  if (!model) {
+    return {
+      status: "error",
+      message: "默认 API 中没有可用的文本模型。",
+      providerLabel: provider.name || "默认 API",
+    };
+  }
+
+  try {
+    const page = await browserView.webContents.executeJavaScript(`
+      (() => {
+        const fullText = String(document.body?.innerText || "")
+          .replace(/[ \\t]+/g, " ")
+          .replace(/\\n{3,}/g, "\\n\\n")
+          .trim();
+        return {
+          text: fullText.slice(0, 120000),
+          textTruncated: fullText.length > 120000,
+          title: document.title || "",
+          url: location.href,
+        };
+      })()
+    `);
+    const pageContext = [
+      `用户问题：${question}`,
+      `网页标题：${page.title || "未命名网页"}`,
+      `网页地址：${page.url || browserDisplayUrl}`,
+      `网页文字${page.textTruncated ? "（内容过长，已截取前 120000 个字符）" : ""}：\n${page.text || "页面没有可读取的文字。"}`,
+    ].filter(Boolean).join("\n\n");
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90_000);
+    try {
+      const response = await fetch(`${provider.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: "system",
+              content: "你是 Brizo 的当前页面阅读助手。只根据提供的网页文字回答。默认使用简洁中文，不要声称看到了图片、图表或访问了未提供的外部信息。",
+            },
+            {
+              role: "user",
+              content: pageContext,
+            },
+          ],
+          stream: false,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`模型接口返回 HTTP ${response.status}`);
+      const body = await response.json();
+      const message = readAssistantMessage(body);
+      if (!message) throw new Error("模型没有返回文字内容");
+      return {
+        message,
+        mode: "page",
+        modelLabel: model,
+        pageTitle: page.title || "当前网页",
+        pageUrl: page.url || browserDisplayUrl,
+        providerLabel: `${provider.name || "默认 API"} · 页面问答`,
+        status: "success",
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (error) {
+    console.error("[ask-current-page]", error instanceof Error ? error.message : String(error));
+    return {
+      status: "error",
+      message: error?.name === "AbortError"
+        ? "页面分析超时，请稍后再试。"
+        : `无法分析当前网页：${error.message}`,
+      providerLabel: provider.name || "默认 API",
+      modelLabel: model,
+    };
   }
 }
 
@@ -2113,7 +2279,7 @@ async function searchDuckDuckGoHtml(query) {
     "--silent",
     "--show-error",
     "--max-time",
-    "12",
+    "6",
     "-A",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
     "--data-urlencode",
@@ -2122,7 +2288,7 @@ async function searchDuckDuckGoHtml(query) {
   ], {
     encoding: "utf8",
     maxBuffer: 4 * 1024 * 1024,
-    timeout: 15_000,
+    timeout: 8_000,
   });
   const { load } = await loadCheerioModule();
   const $ = load(stdout);
@@ -2156,6 +2322,7 @@ async function searchBingRss(query) {
       Accept: "application/rss+xml,application/xml,text/xml",
       "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126 Safari/537.36",
     },
+    signal: AbortSignal.timeout(6_000),
   });
   if (!response.ok) throw new Error(`Bing 返回 HTTP ${response.status}`);
   const { load } = await loadCheerioModule();
@@ -2170,17 +2337,35 @@ async function searchBingRss(query) {
   return results.slice(0, 10);
 }
 
-async function searchWebQuery(query) {
-  const settled = await Promise.allSettled([
+const webSearchResultCache = new Map();
+const WEB_SEARCH_CACHE_TTL_MS = 10 * 60_000;
+
+async function searchWebQuery(query, { force = false } = {}) {
+  const cacheKey = String(query || "").replace(/\s+/g, " ").trim().toLowerCase();
+  const cached = webSearchResultCache.get(cacheKey);
+  if (!force && cached?.results && cached.expiresAt > Date.now()) return cached.results;
+  if (!force && cached?.promise) return cached.promise;
+  const promise = Promise.allSettled([
     searchDuckDuckGoHtml(query),
     searchBingRss(query),
-  ]);
-  const results = settled.flatMap((item) => item.status === "fulfilled" ? item.value : []);
-  if (!results.length) {
-    const reason = settled.find((item) => item.status === "rejected")?.reason;
-    throw reason || new Error("搜索引擎没有返回结果");
-  }
-  return results;
+  ]).then((settled) => {
+    const results = settled.flatMap((item) => item.status === "fulfilled" ? item.value : []);
+    if (!results.length) {
+      const reason = settled.find((item) => item.status === "rejected")?.reason;
+      throw reason || new Error("搜索引擎没有返回结果");
+    }
+    webSearchResultCache.set(cacheKey, {
+      expiresAt: Date.now() + WEB_SEARCH_CACHE_TTL_MS,
+      results,
+    });
+    if (webSearchResultCache.size > 160) webSearchResultCache.delete(webSearchResultCache.keys().next().value);
+    return results;
+  }).catch((error) => {
+    webSearchResultCache.delete(cacheKey);
+    throw error;
+  });
+  webSearchResultCache.set(cacheKey, { promise });
+  return promise;
 }
 
 function tokenizeForSearchScore(text) {
@@ -2327,6 +2512,10 @@ async function detectUserLocale() {
 async function fetchSearchSuggestions(input) {
   const query = String(input || "").trim().slice(0, 160);
   if (query.length < 2) return [];
+  const cacheKey = query.toLocaleLowerCase();
+  const cached = searchSuggestionCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.suggestions;
+  if (searchSuggestionCooldownUntil > Date.now()) return [];
   try {
     if (await suggestionRegionPromise === "CN") {
       const baiduUrl = new URL("https://suggestion.baidu.com/su");
@@ -2335,25 +2524,40 @@ async function fetchSearchSuggestions(input) {
       const response = await fetch(baiduUrl, { signal: AbortSignal.timeout(3500) });
       if (!response.ok) return [];
       const payload = JSON.parse(new TextDecoder("gbk").decode(await response.arrayBuffer()));
-      return Array.isArray(payload?.[1])
+      const suggestions = Array.isArray(payload?.[1])
         ? payload[1].filter((item) => typeof item === "string" && item.trim()).slice(0, 8)
         : [];
+      searchSuggestionCache.set(cacheKey, {
+        suggestions,
+        expiresAt: Date.now() + SEARCH_SUGGESTION_CACHE_TTL,
+      });
+      return suggestions;
     }
-    const url = new URL("https://suggestqueries.google.com/complete/search");
-    url.searchParams.set("client", "chrome");
-    url.searchParams.set("hl", "zh-CN");
-    url.searchParams.set("ie", "utf-8");
-    url.searchParams.set("oe", "utf-8");
-    url.searchParams.set("q", query);
+    const { language = "zh-CN" } = await userLocalePromise;
+    const url = new URL("https://api.bing.com/osjson.aspx");
+    url.searchParams.set("query", query);
+    url.searchParams.set("language", language);
     const response = await fetch(url, {
       headers: { "Accept": "application/json" },
       signal: AbortSignal.timeout(3500),
     });
+    if (response.status === 429) {
+      searchSuggestionCooldownUntil = Date.now() + 30 * 60 * 1000;
+      return [];
+    }
     if (!response.ok) return [];
     const payload = await response.json();
-    return Array.isArray(payload?.[1])
+    const suggestions = Array.isArray(payload?.[1])
       ? payload[1].filter((item) => typeof item === "string" && item.trim()).slice(0, 8)
       : [];
+    searchSuggestionCache.set(cacheKey, {
+      suggestions,
+      expiresAt: Date.now() + SEARCH_SUGGESTION_CACHE_TTL,
+    });
+    if (searchSuggestionCache.size > 200) {
+      searchSuggestionCache.delete(searchSuggestionCache.keys().next().value);
+    }
+    return suggestions;
   } catch {
     return [];
   }
@@ -2472,6 +2676,31 @@ function registerBrowserIpc() {
       return { status: "error", message: "搜索请求未获授权。" };
     }
     return await searchWithVane(payload);
+  });
+  ipcMain.handle("bean-browser:brief-sync-signals", async (event, payload) => {
+    if (!isTrustedSender(event)) return { status: "error", message: "简报画像同步未获授权。" };
+    const result = await briefService.syncSignals(payload);
+    briefService.maybeGenerateCurrent().catch(() => {});
+    return result;
+  });
+  ipcMain.handle("bean-browser:brief-get-edition", async (event, payload) => {
+    if (!isTrustedSender(event)) return { status: "error", message: "简报请求未获授权。" };
+    if (payload?.background) return await briefService.refreshEditionInBackground(payload);
+    return await briefService.getEdition(payload);
+  });
+  ipcMain.handle("bean-browser:brief-get-report", async (event, payload) => {
+    if (!isTrustedSender(event)) return { status: "error", message: "专报请求未获授权。" };
+    return await briefService.getReport(payload || {});
+  });
+  ipcMain.handle("bean-browser:brief-save-preferences", async (event, payload) => {
+    if (!isTrustedSender(event)) return { mutedTopicIds: [], pinnedTopicIds: [], reducedTopicIds: [] };
+    return await briefService.savePreferences(payload || {});
+  });
+  ipcMain.handle("bean-browser:ask-current-page", async (event, payload) => {
+    if (!isTrustedSender(event)) {
+      return { status: "error", message: "页面提问请求未获授权。" };
+    }
+    return await askCurrentPageWithBoundModel(payload);
   });
   ipcMain.handle("bean-browser:suggest-queries", async (event, input) =>
     isTrustedSender(event) ? await fetchSearchSuggestions(input) : [],
@@ -2677,6 +2906,7 @@ function createWindow() {
   };
   positionMacWindowButtons();
   window.on("resize", positionMacWindowButtons);
+  window.on("focus", () => { briefService.maybeGenerateCurrent().catch(() => {}); });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, url) => {
     if (!url.startsWith("file://")) event.preventDefault();
@@ -2801,6 +3031,17 @@ function createWindow() {
               ".bookmark-explorer-controls, .bookmark-mode-menu, .smart-bookmarks-placeholder",
             ),
             tabCount: document.querySelectorAll(".top-tab").length,
+            draggablePageTabs: [...document.querySelectorAll(".top-tab")]
+              .every((tab) => tab.draggable),
+            tabListDragRegion: getComputedStyle(
+              document.querySelector(".top-tab-list"),
+            ).webkitAppRegion === "drag",
+            tabNoDragRegion: getComputedStyle(
+              document.querySelector(".top-tab"),
+            ).webkitAppRegion === "no-drag",
+            toolbarDragRegion: getComputedStyle(
+              document.querySelector(".browser-toolbar"),
+            ).webkitAppRegion === "drag",
             legacyTopTabControlsRemoved: !document.querySelector(
               '.top-tabs-bar [aria-label="Search web and saved sources"], .tab-count-button',
             ),
@@ -2887,6 +3128,28 @@ function createWindow() {
           })()
         `);
 
+        result.pageAskTool = await window.webContents.executeJavaScript(`
+          (() => {
+            const trigger = document.querySelector('[aria-label="询问当前页面"]');
+            const disabledOnNewTab = Boolean(trigger?.disabled);
+            const fixture = document.createElement('div');
+            fixture.className = 'settings-dialog-content';
+            fixture.style.cssText = 'position:fixed;left:-10000px;top:0;width:520px';
+            fixture.innerHTML = '<form class="page-ask-form">'
+              + '<article class="page-ask-answer"><div class="new-tab-answer-bullet"><span>•</span><p><strong>要点：</strong>'
+              + '这是一段用于验证页面回答不会横向溢出的超长中文内容'.repeat(80)
+              + '</p></div></article>'
+              + '<div class="settings-dialog-actions"><button>关闭</button><button>Ask Brizo</button></div>'
+              + '</form>';
+            document.body.appendChild(fixture);
+            const form = fixture.querySelector('.page-ask-form');
+            const fits = form.scrollWidth <= form.clientWidth + 1
+              && fixture.scrollWidth <= fixture.clientWidth + 1;
+            fixture.remove();
+            return { available: Boolean(trigger), disabledOnNewTab, fits };
+          })()
+        `);
+
         result.macWindowButtonsRightAligned = process.platform !== "darwin" || (() => {
           const position = window.getWindowButtonPosition();
           return Boolean(
@@ -2928,6 +3191,46 @@ function createWindow() {
             };
           })()
         `);
+        result.brief = await window.webContents.executeJavaScript(`
+          (async () => {
+            const plus = document.querySelector('.new-tab-button');
+            const brief = document.querySelector('.brief-utility-tab');
+            const tabCountBefore = document.querySelectorAll('.top-tab').length;
+            const fixedAfterPlus = brief?.previousElementSibling === plus;
+            brief?.click();
+            await new Promise((resolve) => setTimeout(resolve, 90));
+            const stream = document.querySelector('.brief-stream');
+            if (stream) stream.scrollTop = 320;
+            await new Promise((resolve) => setTimeout(resolve, 80));
+            const scrollBeforeReport = stream?.scrollTop || 0;
+            document.querySelector('.brief-stream-story button')?.click();
+            await new Promise((resolve) => setTimeout(resolve, 80));
+            const reportOpened = Boolean(document.querySelector('.brief-report-layer'));
+            document.querySelector('.brief-report-layer > header button')?.click();
+            await new Promise((resolve) => setTimeout(resolve, 40));
+            const categoryLabels = [...document.querySelectorAll('.brief-stream-sidebar button')].map((button) => button.textContent.trim());
+            const scrollAfterReport = stream?.scrollTop || 0;
+            document.querySelector('.top-tab-select')?.click();
+            await new Promise((resolve) => setTimeout(resolve, 40));
+            return {
+              categoryLabels,
+              fixedAfterPlus,
+              fixedTabCount: document.querySelectorAll('.brief-utility-tab').length,
+              hasClose: Boolean(brief?.querySelector('.top-tab-close')),
+              hasInfiniteSentinel: Boolean(document.querySelector('.brief-stream-loader')),
+              hasMarketWidgets: Boolean(document.querySelector('.brief-market-widget, .brief-weather-widget')),
+              isDraggable: brief?.draggable || false,
+              leadHasExcerpt: (document.querySelector('.brief-stream-story-lead p')?.textContent?.trim().length || 0) > 20,
+              reportOpened,
+              scrollAfterReport,
+              scrollBeforeReport,
+              scrollRestored: Math.abs(scrollAfterReport - scrollBeforeReport) <= 2,
+              streamExists: Boolean(stream),
+              restoredNormalTab: Boolean(document.querySelector('.top-tab.active')),
+              tabCountBefore,
+            };
+          })()
+        `);
         const passed =
           result.title === "Brizo" &&
           result.uiFontFamily.includes("Brizo EB Garamond") &&
@@ -2956,6 +3259,13 @@ function createWindow() {
           result.startup.newTabVisible &&
           result.startup.tabCount === 1 &&
           result.tabCount === 2 &&
+          result.draggablePageTabs &&
+          result.tabListDragRegion &&
+          result.tabNoDragRegion &&
+          result.toolbarDragRegion &&
+          result.pageAskTool.available &&
+          result.pageAskTool.disabledOnNewTab &&
+          result.pageAskTool.fits &&
           result.legacyTopTabControlsRemoved &&
           result.macWindowButtonsRightAligned &&
           result.newTabDefault.addressPlaceholder === "搜索或输入网址" &&
@@ -2970,6 +3280,19 @@ function createWindow() {
           result.newTabDefault.surfaceHeight === 132 &&
           result.newTabDefault.surfaceWidth === 760 &&
           result.newTabDefault.tabCount === 3 &&
+          result.brief.fixedAfterPlus &&
+          result.brief.fixedTabCount === 1 &&
+          !result.brief.hasClose &&
+          !result.brief.isDraggable &&
+          result.brief.streamExists &&
+          result.brief.hasInfiniteSentinel &&
+          result.brief.leadHasExcerpt &&
+          !result.brief.hasMarketWidgets &&
+          ["科学与技术", "商业", "艺术与文化", "体育", "娱乐"].every((label) => result.brief.categoryLabels.includes(label)) &&
+          result.brief.reportOpened &&
+          result.brief.scrollRestored &&
+          result.brief.restoredNormalTab &&
+          result.brief.tabCountBefore === 3 &&
           !result.addressValue.includes("://") &&
           !result.addressValue.startsWith("www.");
 
@@ -3019,17 +3342,22 @@ function createWindow() {
             "closeTabView",
             "exportArticlePdf",
             "getAppInfo",
+            "getBriefEdition",
+            "getBriefReport",
             "importBookmarks",
             "deleteModelProvider",
             "importBookmarksFromHtml",
             "listBookmarkSources",
             "listModelProviders",
             "openIncognito",
+            "onBriefEditionUpdated",
             "print",
             "preconnect",
             "saveModelProvider",
+            "saveBriefPreferences",
             "searchVane",
-            "setDefaultModelProvider"
+            "setDefaultModelProvider",
+            "syncBriefSignals"
           ];
           const sources = await api?.listBookmarkSources?.();
           const appInfo = await api?.getAppInfo?.();
@@ -3091,9 +3419,12 @@ app.whenReady().then(() => {
     app.dock.setIcon(appIcon);
   }
   registerBrowserIpc();
+  briefService.startScheduler();
+  powerMonitor.on("resume", () => { briefService.maybeGenerateCurrent().catch(() => {}); });
   createWindow();
 });
 
 app.on("window-all-closed", () => {
+  briefService.stopScheduler();
   app.quit();
 });

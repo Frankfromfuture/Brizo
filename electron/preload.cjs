@@ -2,6 +2,12 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("beanBrowser", {
   back: () => ipcRenderer.invoke("bean-browser:back"),
+  askCurrentPage: (payload) => ipcRenderer.invoke("bean-browser:ask-current-page", payload),
+  getBriefEdition: (payload) => ipcRenderer.invoke("bean-browser:brief-get-edition", payload),
+  getBriefReport: (payload) => ipcRenderer.invoke("bean-browser:brief-get-report", payload),
+  saveBriefPreferences: (payload) =>
+    ipcRenderer.invoke("bean-browser:brief-save-preferences", payload),
+  syncBriefSignals: (payload) => ipcRenderer.invoke("bean-browser:brief-sync-signals", payload),
   captureScreenshot: (mode) => ipcRenderer.invoke("bean-browser:screenshot", mode),
   capturePreview: () => ipcRenderer.invoke("bean-browser:capture-preview"),
   closeTabView: (tabId) => ipcRenderer.invoke("bean-browser:close-tab-view", tabId),
@@ -44,6 +50,11 @@ contextBridge.exposeInMainWorld("beanBrowser", {
     const listener = (_event, selectedText) => callback(selectedText);
     ipcRenderer.on("bean-browser:ask-selection", listener);
     return () => ipcRenderer.removeListener("bean-browser:ask-selection", listener);
+  },
+  onBriefEditionUpdated: (callback) => {
+    const listener = (_event, edition) => callback(edition);
+    ipcRenderer.on("bean-browser:brief-edition-updated", listener);
+    return () => ipcRenderer.removeListener("bean-browser:brief-edition-updated", listener);
   },
   exportArticlePdf: () => ipcRenderer.invoke("bean-browser:export-article-pdf"),
   openIncognito: () => ipcRenderer.invoke("bean-browser:open-incognito"),

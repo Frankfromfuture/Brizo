@@ -16,6 +16,7 @@ import {
   Brain,
   Browsers,
   Camera,
+  ChatCircleDots,
   CaretDown,
   CaretRight,
   Check,
@@ -40,6 +41,7 @@ import {
   LockKey,
   MagnifyingGlass,
   MoonStars,
+  NewspaperClipping,
   Paperclip,
   PencilSimple,
   Plus,
@@ -65,6 +67,7 @@ import {
   normalizeImportedBookmarkFolder,
 } from "../shared/bookmark-folders.mjs";
 import { shouldUseLightForeground } from "../shared/page-color.mjs";
+import { BriefPage, createBriefPreviewEdition } from "./BriefPage.jsx";
 
 const NEW_TAB_CHROME_COLOR = "rgb(252, 250, 250)";
 const BOOKMARK_FOLDER_HOVER_DELAY_MS = 90;
@@ -236,6 +239,8 @@ const browserSuggestionRegionPromise = window.beanBrowser
       .then((response) => response.ok ? response.json() : null)
       .then((payload) => payload?.country === "CN" ? "CN" : "GLOBAL")
       .catch(() => "GLOBAL");
+const browserSuggestionCache = new Map();
+const BROWSER_SUGGESTION_CACHE_TTL = 5 * 60 * 1000;
 
 function requestJsonpSuggestions({ callbackParam, endpoint, params, scriptCharset }) {
   return new Promise((resolve) => {
@@ -258,25 +263,36 @@ function requestJsonpSuggestions({ callbackParam, endpoint, params, scriptCharse
 }
 
 async function requestBrowserSuggestions(input) {
+  const cacheKey = String(input || "").trim().toLocaleLowerCase();
+  const cached = browserSuggestionCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.suggestions;
+  let suggestions;
   if (await browserSuggestionRegionPromise === "CN") {
-    return requestJsonpSuggestions({
+    suggestions = await requestJsonpSuggestions({
       callbackParam: "cb",
       endpoint: "https://suggestion.baidu.com/su",
       params: { wd: input },
       scriptCharset: "gbk",
     });
+  } else {
+    suggestions = await requestJsonpSuggestions({
+      callbackParam: "JsonCallback",
+      endpoint: "https://api.bing.com/osjson.aspx",
+      params: {
+        JsonType: "callback",
+        language: "zh-CN",
+        query: input,
+      },
+    });
   }
-  return requestJsonpSuggestions({
-    callbackParam: "callback",
-    endpoint: "https://suggestqueries.google.com/complete/search",
-    params: {
-      client: "chrome",
-      hl: "zh-CN",
-      ie: "utf-8",
-      oe: "utf-8",
-      q: input,
-    },
+  browserSuggestionCache.set(cacheKey, {
+    suggestions,
+    expiresAt: Date.now() + BROWSER_SUGGESTION_CACHE_TTL,
   });
+  if (browserSuggestionCache.size > 200) {
+    browserSuggestionCache.delete(browserSuggestionCache.keys().next().value);
+  }
+  return suggestions;
 }
 
 function newTabSuggestionsFor(rawInput, bookmarks, tabs, history, onlineSuggestions) {
@@ -532,7 +548,7 @@ function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialP
         ? await window.beanBrowser.suggestQueries(query)
         : await requestBrowserSuggestions(query);
       if (!cancelled && Array.isArray(suggestions)) setOnlineSuggestions(suggestions);
-    }, 200);
+    }, 450);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
@@ -873,7 +889,7 @@ function SiteIcon({ id = 1, faviconUrl = "" }) {
   );
 }
 
-function TopTabOutline({ activeTabId }) {
+function TopTabOutline({ activeTabId, tabOrderKey }) {
   const svgRef = useRef(null);
   const [geometry, setGeometry] = useState(null);
 
@@ -884,7 +900,7 @@ function TopTabOutline({ activeTabId }) {
     if (!svg || !strip || !tabList) return undefined;
 
     const updateGeometry = () => {
-      const active = strip.querySelector(".top-tab.active");
+      const active = strip.querySelector(".top-tab.active, .brief-utility-tab.active");
       if (!active) return;
 
       const stripRect = strip.getBoundingClientRect();
@@ -940,7 +956,7 @@ function TopTabOutline({ activeTabId }) {
     const observer = new ResizeObserver(updateGeometry);
     observer.observe(strip);
     observer.observe(tabList);
-    const active = strip.querySelector(".top-tab.active");
+    const active = strip.querySelector(".top-tab.active, .brief-utility-tab.active");
     if (active) observer.observe(active);
     tabList.addEventListener("scroll", updateGeometry, { passive: true });
     window.addEventListener("resize", updateGeometry);
@@ -950,7 +966,7 @@ function TopTabOutline({ activeTabId }) {
       tabList.removeEventListener("scroll", updateGeometry);
       window.removeEventListener("resize", updateGeometry);
     };
-  }, [activeTabId]);
+  }, [activeTabId, tabOrderKey]);
 
   return (
     <svg
@@ -974,7 +990,7 @@ function TopTabOutline({ activeTabId }) {
 function BookmarkFavicon({ bookmark }) {
   const directFavicon = getDefaultBookmarkFaviconUrl(bookmark.url);
   const domainServiceFavicon = bookmark.url
-    ? `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(bookmark.url)}&sz=64`
+    ? `https://www.bing.com/favicon.ico?target_url=${encodeURIComponent(bookmark.url)}&size=64`
     : "";
   const candidates = [...new Set([
     bookmark.faviconUrl,
@@ -1354,7 +1370,9 @@ export function App() {
   const desktopMode = Boolean(browserApi);
   const initialAddress = "";
   const [activeTab, setActiveTab] = useState(START_TAB.id);
+  const [activeSurface, setActiveSurface] = useState("tab");
   const [tabs, setTabs] = useState(() => [START_TAB]);
+  const [draggedTabId, setDraggedTabId] = useState("");
   const [query, setQuery] = useState("");
   const [addressText, setAddressText] = useState(() => formatAddressForDisplay(initialAddress));
   const [searchHistory, setSearchHistory] = useState(() => {
@@ -1384,6 +1402,10 @@ export function App() {
   const [addressFocused, setAddressFocused] = useState(false);
   const [addressOnlineSuggestions, setAddressOnlineSuggestions] = useState([]);
   const [aiOpen, setAiOpen] = useState(false);
+  const [pageAskOpen, setPageAskOpen] = useState(false);
+  const [pageAskQuestion, setPageAskQuestion] = useState("帮我快速总结这页要点");
+  const [pageAskResult, setPageAskResult] = useState(null);
+  const [pageAskLoading, setPageAskLoading] = useState(false);
   const [downloads, setDownloads] = useState([]);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -1409,6 +1431,21 @@ export function App() {
   const [modelProviderSaving, setModelProviderSaving] = useState(false);
   const [modelProviderError, setModelProviderError] = useState("");
   const [modelGuardMenuOpen, setModelGuardMenuOpen] = useState(false);
+  const [briefEdition, setBriefEdition] = useState(() => desktopMode ? null : createBriefPreviewEdition());
+  const [briefLoading, setBriefLoading] = useState(false);
+  const [briefRefreshing, setBriefRefreshing] = useState(false);
+  const [briefPreferences, setBriefPreferences] = useState(() => {
+    try {
+      return {
+        mutedTopicIds: [],
+        pinnedTopicIds: [],
+        reducedTopicIds: [],
+        ...JSON.parse(localStorage.getItem("bean:brief-preferences") || "{}"),
+      };
+    } catch {
+      return { mutedTopicIds: [], pinnedTopicIds: [], reducedTopicIds: [] };
+    }
+  });
   const [bookmarkLibrary, setBookmarkLibrary] = useState(() => {
     try {
       const saved = JSON.parse(window.localStorage.getItem("bean:bookmark-library") || "[]");
@@ -1480,14 +1517,18 @@ export function App() {
     () => tabs.find((article) => article.id === activeTab) ?? tabs[0],
     [activeTab, tabs],
   );
-  const newTabOpen = Boolean(currentArticle?.isNewTab);
+  const briefOpen = activeSurface === "brief";
+  const newTabOpen = !briefOpen && Boolean(currentArticle?.isNewTab);
   const navigationOwnsActiveTab = navigationState.ownerTabId === currentArticle?.id;
-  const pageBackgroundColor = newTabOpen
+  const pageBackgroundColor = briefOpen
+    ? "#ffffff"
+    : newTabOpen
     ? NEW_TAB_CHROME_COLOR
     : navigationOwnsActiveTab
       ? navigationState.pageBackgroundColor || "#ffffff"
       : "#ffffff";
-  const pageUsesLightForeground = !newTabOpen
+  const pageUsesLightForeground = !briefOpen
+    && !newTabOpen
     && navigationOwnsActiveTab
     && shouldUseLightForeground(pageBackgroundColor);
   const filteredBookmarkLibrary = bookmarkLibrary;
@@ -1517,7 +1558,7 @@ export function App() {
         ? await window.beanBrowser.suggestQueries(query)
         : await requestBrowserSuggestions(query);
       if (!cancelled && Array.isArray(suggestions)) setAddressOnlineSuggestions(suggestions);
-    }, 200);
+    }, 450);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
@@ -1560,6 +1601,75 @@ export function App() {
     localStorage.setItem("bean:app-preferences", JSON.stringify(appPreferences));
     document.documentElement.lang = appPreferences.language;
   }, [appPreferences]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("bean:brief-preferences", JSON.stringify(briefPreferences));
+    } catch {
+      // Keep the Brief usable when local storage is unavailable.
+    }
+  }, [briefPreferences]);
+
+  useEffect(() => {
+    if (!browserApi?.syncBriefSignals) return undefined;
+    const timer = window.setTimeout(() => {
+      const domainFromUrl = (url) => {
+        try { return new URL(url).hostname.replace(/^www\./i, ""); } catch { return ""; }
+      };
+      browserApi.syncBriefSignals({
+        bookmarks: bookmarkLibrary.slice(0, 300).map((bookmark) => ({
+          createdAt: bookmark.createdAt,
+          domain: domainFromUrl(bookmark.url),
+          folder: bookmark.folder,
+          title: bookmark.title,
+          updatedAt: bookmark.updatedAt,
+        })),
+        history: browserHistory.slice(0, 300).map((item) => ({
+          domain: domainFromUrl(item.url),
+          title: item.title,
+          updatedAt: item.updatedAt,
+          visits: item.visits,
+        })),
+        searches: searchHistory.slice(0, 300).map((item) => ({
+          count: item.count,
+          query: item.query,
+          updatedAt: item.updatedAt,
+        })),
+      });
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [bookmarkLibrary, browserApi, browserHistory, searchHistory]);
+
+  useEffect(() => {
+    if (!briefOpen) return undefined;
+    if (!browserApi?.getBriefEdition) {
+      setBriefEdition((current) => current || createBriefPreviewEdition());
+      return undefined;
+    }
+    let cancelled = false;
+    setBriefLoading(true);
+    setBriefRefreshing(true);
+    browserApi.getBriefEdition({ at: Date.now(), background: true, force: true }).then((edition) => {
+      if (!cancelled && edition) setBriefEdition(edition);
+    }).finally(() => {
+      if (!cancelled) {
+        setBriefLoading(false);
+        if (!briefEdition) setBriefRefreshing(false);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [briefOpen, browserApi]);
+
+  useEffect(() => {
+    if (!browserApi?.onBriefEditionUpdated) return undefined;
+    return browserApi.onBriefEditionUpdated((edition) => {
+      if (edition) {
+        setBriefEdition(edition);
+        setBriefLoading(false);
+        setBriefRefreshing(false);
+      }
+    });
+  }, [browserApi]);
 
   useEffect(() => {
     if (appPreferences.downloadLocation) {
@@ -1611,7 +1721,7 @@ export function App() {
     const applyState = (state) => {
       if (!state) return;
       setNavigationState(state);
-      if (state.url && !newTabOpen && !addressEditing.current) {
+      if (state.url && !briefOpen && !newTabOpen && !addressEditing.current) {
         addressValue.current = state.url;
         setAddressText(formatAddressForDisplay(state.url));
       }
@@ -1630,7 +1740,7 @@ export function App() {
       removeStateListener?.();
       removeActivationListener?.();
     };
-  }, [browserApi, newTabOpen]);
+  }, [briefOpen, browserApi, newTabOpen]);
 
   useEffect(() => {
     if (!browserApi?.listDownloads || browserApi?.toggleDownloads) return undefined;
@@ -1672,6 +1782,7 @@ export function App() {
   useEffect(() => {
     if (
       !desktopMode ||
+      briefOpen ||
       newTabOpen ||
       navigationState.isLoading ||
       !navigationState.url ||
@@ -1707,6 +1818,7 @@ export function App() {
       ),
     );
   }, [
+    briefOpen,
     desktopMode,
     newTabOpen,
     navigationState.isLoading,
@@ -1745,10 +1857,10 @@ export function App() {
       observer.disconnect();
       window.removeEventListener("resize", publishBounds);
     };
-  }, [browserApi, newTabOpen, sidebarOpen]);
+  }, [briefOpen, browserApi, newTabOpen, sidebarOpen]);
 
   useEffect(() => {
-    if (!browserApi?.capturePreview || newTabOpen || !bookmarkCascadeOpen) {
+    if (!browserApi?.capturePreview || briefOpen || newTabOpen || !bookmarkCascadeOpen) {
       setBrowserPreview("");
       return undefined;
     }
@@ -1757,23 +1869,24 @@ export function App() {
       if (!cancelled && typeof preview === "string") setBrowserPreview(preview);
     });
     return () => { cancelled = true; };
-  }, [bookmarkCascadeOpen, browserApi, newTabOpen]);
+  }, [bookmarkCascadeOpen, briefOpen, browserApi, newTabOpen]);
 
   useEffect(() => {
     browserApi?.setVisible(
-      !newTabOpen && !navigationState.error && !(bookmarkCascadeOpen && browserPreview) && !aiOpen && !settingsMenuOpen && !settingsPanel && addressSuggestions.length === 0,
+      !briefOpen && !newTabOpen && !navigationState.error && !(bookmarkCascadeOpen && browserPreview) && !aiOpen && !pageAskOpen && !settingsMenuOpen && !settingsPanel && addressSuggestions.length === 0,
     );
-  }, [addressSuggestions.length, aiOpen, bookmarkCascadeOpen, browserApi, browserPreview, navigationState.error, newTabOpen, settingsMenuOpen, settingsPanel]);
+  }, [addressSuggestions.length, aiOpen, bookmarkCascadeOpen, briefOpen, browserApi, browserPreview, navigationState.error, newTabOpen, pageAskOpen, settingsMenuOpen, settingsPanel]);
 
   useEffect(() => {
     const closeOnEscape = (event) => {
       if (event.key !== "Escape") return;
       setSettingsMenuOpen(false);
       setSettingsPanel("");
+      if (!pageAskLoading) setPageAskOpen(false);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, []);
+  }, [pageAskLoading]);
 
   useEffect(() => {
     const scrollTargets = document.querySelectorAll(
@@ -1935,6 +2048,7 @@ export function App() {
   const downloadGroups = useMemo(() => groupDownloads(downloads), [downloads]);
 
   const selectArticle = (article) => {
+    setActiveSurface("tab");
     setActiveTab(article.id);
     addressEditing.current = false;
     addressValue.current = article.isNewTab ? "" : article.url;
@@ -1944,6 +2058,28 @@ export function App() {
     } else if (!browserApi && !article.isNewTab) {
       showToast(`Opened ${article.domain}`);
     }
+  };
+
+  const openUrlInNewTab = (rawUrl, title = "网页") => {
+    const url = String(rawUrl || "").trim();
+    if (!url) return;
+    let domain = url;
+    try { domain = new URL(url).hostname.replace(/^www\./i, ""); } catch { /* Keep the URL label. */ }
+    const nextTab = {
+      domain,
+      id: `brief-source-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      shortTitle: title || domain,
+      title: title || domain,
+      url,
+    };
+    setTabs((currentTabs) => [...currentTabs, nextTab]);
+    setActiveSurface("tab");
+    setActiveTab(nextTab.id);
+    addressEditing.current = false;
+    addressValue.current = url;
+    setAddressText(formatAddressForDisplay(url));
+    if (browserApi) browserApi.navigate(url, nextTab.id);
+    else window.open(url, "_blank", "noopener,noreferrer");
   };
 
   const leaveNewTabMode = (destination) => {
@@ -1968,6 +2104,11 @@ export function App() {
   const navigateFromAddress = (rawAddress) => {
     const nextAddress = rawAddress.trim();
     if (!nextAddress) return;
+    if (briefOpen) {
+      setAddressFocused(false);
+      openUrlInNewTab(nextAddress, nextAddress);
+      return;
+    }
     addressValue.current = nextAddress;
     setAddressFocused(false);
     addressEditing.current = false;
@@ -1998,6 +2139,7 @@ export function App() {
     addressValue.current = "";
     setAddressText("");
     setTabs((currentTabs) => [nextTab, ...currentTabs]);
+    setActiveSurface("tab");
     setActiveTab(nextTab.id);
   };
 
@@ -2135,6 +2277,33 @@ export function App() {
       showToast("Could not create PDF");
     } finally {
       setPdfExporting(false);
+    }
+  };
+
+  const openPageAsk = () => {
+    setPageAskQuestion("帮我快速总结这页要点");
+    setPageAskResult(null);
+    setPageAskOpen(true);
+  };
+
+  const submitPageAsk = async (event) => {
+    event.preventDefault();
+    const question = pageAskQuestion.trim();
+    if (!question || pageAskLoading) return;
+    setPageAskLoading(true);
+    setPageAskResult(null);
+    try {
+      const result = browserApi?.askCurrentPage
+        ? await browserApi.askCurrentPage({ question })
+        : {
+            status: "error",
+            message: "当前网页预览不能读取外部页面，请在 Brizo 桌面版中使用页面问答。",
+          };
+      setPageAskResult(result);
+    } catch {
+      setPageAskResult({ status: "error", message: "当前页面分析失败，请稍后再试。" });
+    } finally {
+      setPageAskLoading(false);
     }
   };
 
@@ -2529,7 +2698,24 @@ export function App() {
     if (tabId !== activeTab) return;
 
     const nextArticle = nextTabs[Math.min(closingIndex, nextTabs.length - 1)];
+    if (briefOpen) {
+      setActiveTab(nextArticle.id);
+      return;
+    }
     selectArticle(nextArticle);
+  };
+
+  const moveTabBefore = (draggedId, targetId) => {
+    if (!draggedId || !targetId || draggedId === targetId) return;
+    setTabs((currentTabs) => {
+      const draggedIndex = currentTabs.findIndex((tab) => tab.id === draggedId);
+      const targetIndex = currentTabs.findIndex((tab) => tab.id === targetId);
+      if (draggedIndex < 0 || targetIndex < 0) return currentTabs;
+      const nextTabs = [...currentTabs];
+      const [draggedTab] = nextTabs.splice(draggedIndex, 1);
+      nextTabs.splice(targetIndex, 0, draggedTab);
+      return nextTabs;
+    });
   };
 
   const openNewTab = () => {
@@ -2544,6 +2730,38 @@ export function App() {
     };
     setTabs((currentTabs) => [nextTab, ...currentTabs]);
     selectArticle(nextTab);
+  };
+
+  const openBrief = () => {
+    setActiveSurface("brief");
+    setAddressFocused(false);
+    addressEditing.current = false;
+    addressValue.current = "";
+    setAddressText("");
+    setSettingsMenuOpen(false);
+    setSettingsPanel("");
+  };
+
+  const refreshBrief = async () => {
+    if (!browserApi?.getBriefEdition) {
+      setBriefEdition(createBriefPreviewEdition());
+      showToast("界面预览已刷新");
+      return;
+    }
+    setBriefRefreshing(true);
+    try {
+      const edition = await browserApi.getBriefEdition({ at: Date.now(), background: true, force: true });
+      if (edition) setBriefEdition(edition);
+      if (!edition?.refreshPending) setBriefRefreshing(false);
+    } catch {
+      setBriefRefreshing(false);
+    }
+  };
+
+  const saveBriefPreferences = async (nextPreferences) => {
+    setBriefPreferences(nextPreferences);
+    await browserApi?.saveBriefPreferences?.(nextPreferences);
+    showToast("关注主题设置将在下一期生效");
   };
 
   useEffect(() => {
@@ -2564,6 +2782,7 @@ export function App() {
         url,
       };
       setTabs((currentTabs) => [...currentTabs, nextTab]);
+      setActiveSurface("tab");
       setActiveTab(nextTab.id);
       addressEditing.current = false;
       addressValue.current = url;
@@ -2588,6 +2807,7 @@ export function App() {
         useTodayGreeting: false,
       };
       setTabs((currentTabs) => [nextTab, ...currentTabs]);
+      setActiveSurface("tab");
       setActiveTab(nextTab.id);
       addressEditing.current = false;
       addressValue.current = "";
@@ -2753,18 +2973,44 @@ export function App() {
           <IconButton label="New tab" className="new-tab-button" onClick={openNewTab}>
             <Plus size={17} />
           </IconButton>
+          <button
+            className={`brief-utility-tab${briefOpen ? " active" : ""}`}
+            type="button"
+            role="tab"
+            aria-selected={briefOpen}
+            title="Brizo Brief"
+            onClick={openBrief}
+          >
+            <span><NewspaperClipping size={14} />Brief</span>
+          </button>
           <div className="top-tab-list" role="tablist" aria-label="Open pages">
             {tabs.map((article) => (
               <div
                 key={article.id}
-                className={activeTab === article.id ? "top-tab active" : "top-tab"}
+                className={`top-tab${!briefOpen && activeTab === article.id ? " active" : ""}${draggedTabId === article.id ? " is-dragging" : ""}`}
+                draggable
                 role="presentation"
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("application/x-brizo-tab-id", article.id);
+                  setDraggedTabId(article.id);
+                }}
+                onDragEnter={() => moveTabBefore(draggedTabId, article.id)}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setDraggedTabId("");
+                }}
+                onDragEnd={() => setDraggedTabId("")}
               >
                 <button
                   type="button"
                   className="top-tab-select"
                   role="tab"
-                  aria-selected={activeTab === article.id}
+                  aria-selected={!briefOpen && activeTab === article.id}
                   title={article.title}
                   onClick={() => selectArticle(article)}
                 >
@@ -2789,7 +3035,10 @@ export function App() {
               </div>
             ))}
           </div>
-          <TopTabOutline activeTabId={activeTab} />
+          <TopTabOutline
+            activeTabId={briefOpen ? "__brief__" : activeTab}
+            tabOrderKey={`__brief__|${tabs.map((tab) => tab.id).join("|")}`}
+          />
         </div>
 
         <header
@@ -2800,21 +3049,21 @@ export function App() {
             <div className="browser-nav">
               <IconButton
                 label="Back"
-                disabled={newTabOpen || (desktopMode && !navigationState.canGoBack)}
+                disabled={briefOpen || newTabOpen || (desktopMode && !navigationState.canGoBack)}
                 onClick={() => desktopMode ? browserApi.back() : showToast("Back")}
               >
                 <ArrowLeft size={20} />
               </IconButton>
               <IconButton
                 label="Forward"
-                disabled={newTabOpen || (desktopMode && !navigationState.canGoForward)}
+                disabled={briefOpen || newTabOpen || (desktopMode && !navigationState.canGoForward)}
                 onClick={() => desktopMode ? browserApi.forward() : showToast("Forward")}
               >
                 <ArrowRight size={20} />
               </IconButton>
               <IconButton
                 label="Reload"
-                disabled={newTabOpen}
+                disabled={briefOpen || newTabOpen}
                 onClick={() => desktopMode ? browserApi.reload() : showToast("Page refreshed")}
               >
                 <ArrowsClockwise size={20} />
@@ -2822,7 +3071,7 @@ export function App() {
             </div>
 
             <form className="address-bar" onSubmit={submitAddress}>
-              {newTabOpen
+              {briefOpen || newTabOpen
                 ? <MagnifyingGlass className="address-search-icon" size={15} />
                 : <span className={`secure-dot ${navigationState.isLoading ? "is-loading" : ""}`} />}
               <input
@@ -2852,7 +3101,7 @@ export function App() {
                   setAddressText(formatAddressForDisplay(addressValue.current));
                 }}
                 aria-label="Address"
-                placeholder={newTabOpen ? "搜索或输入网址" : ""}
+                placeholder={briefOpen || newTabOpen ? "搜索或输入网址" : ""}
               />
               {addressSuggestions.length > 0 && (
                 <button
@@ -2889,9 +3138,27 @@ export function App() {
 
             <div className="browser-actions">
               <IconButton
+                label="询问当前页面"
+                className={pageAskOpen ? "is-active" : ""}
+                disabled={
+                  briefOpen ||
+                  newTabOpen ||
+                  pageAskLoading ||
+                  (desktopMode && (
+                    navigationState.isLoading ||
+                    Boolean(navigationState.error) ||
+                    !navigationState.url
+                  ))
+                }
+                onClick={openPageAsk}
+              >
+                <ChatCircleDots size={20} />
+              </IconButton>
+              <IconButton
                 label={pdfExporting ? "Creating clean article PDF" : "Export clean article PDF"}
                 className={pdfExporting ? "pdf-export-button is-exporting" : "pdf-export-button"}
                 disabled={
+                  briefOpen ||
                   newTabOpen ||
                   pdfExporting ||
                   (desktopMode && (
@@ -2907,7 +3174,7 @@ export function App() {
               <IconButton
                 label={saved ? "Remove bookmark" : "Save bookmark"}
                 className={saved ? "is-active" : ""}
-                disabled={newTabOpen}
+                disabled={briefOpen || newTabOpen}
                 onClick={() => {
                   setSaved((value) => !value);
                   showToast(saved ? "Removed from saved sources" : "Saved to Research");
@@ -3116,6 +3383,27 @@ export function App() {
           </div>
         </header>
 
+        <div
+          className={`web-content-host brief-host${briefOpen ? " is-active" : ""}`}
+          aria-hidden={!briefOpen}
+        >
+          <BriefPage
+            active={briefOpen}
+            edition={briefEdition}
+            loading={briefLoading}
+            onGetReport={(payload) => browserApi?.getBriefReport?.(payload)}
+            onOpenModelGuard={() => {
+              setActiveSurface("tab");
+              openSettingsPanel("model-guard");
+            }}
+            onOpenSource={(url) => openUrlInNewTab(url, "Brief 来源")}
+            onRefresh={refreshBrief}
+            onSavePreferences={saveBriefPreferences}
+            preferences={briefPreferences}
+            refreshing={briefRefreshing}
+          />
+        </div>
+
         {tabs.filter((tab) => tab.isNewTab).map((tab) => (
           <div
             className={`web-content-host new-tab-host new-tab-session ${newTabOpen && activeTab === tab.id ? "is-active" : ""}`}
@@ -3138,7 +3426,7 @@ export function App() {
           </div>
         ))}
 
-        {!newTabOpen && (desktopMode ? (
+        {!briefOpen && !newTabOpen && (desktopMode ? (
           <div
             className="web-content-host"
             ref={webContentHost}
@@ -3260,6 +3548,74 @@ export function App() {
               )) : <div className="settings-secondary-empty"><ClockCounterClockwise size={22} /><span>浏览过的网页会显示在这里</span></div>}
             </div>
           </div>
+        </SettingsDialog>
+      )}
+
+      {pageAskOpen && (
+        <SettingsDialog
+          title="询问当前页面"
+          onClose={() => {
+            if (!pageAskLoading) setPageAskOpen(false);
+          }}
+        >
+          <form className="page-ask-form" onSubmit={submitPageAsk}>
+            <BorderBeam
+              className="new-tab-beam page-ask-beam"
+              size="md"
+              colorVariant="colorful"
+              theme="light"
+              strength={0.7}
+              borderRadius={10}
+            >
+              <div className="new-tab-command-surface page-ask-command-surface">
+                <div className="new-tab-prompt-row">
+                  <textarea
+                    autoFocus
+                    aria-label="询问当前页面的问题"
+                    rows={2}
+                    value={pageAskQuestion}
+                    onChange={(event) => setPageAskQuestion(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        submitPageAsk(event);
+                      }
+                    }}
+                  />
+                </div>
+                <div className="new-tab-command-actions page-ask-command-actions">
+                  <div className="new-tab-action-group new-tab-submit-group">
+                    <button
+                      className="new-tab-submit-button"
+                      type="submit"
+                      aria-label="询问 Brizo"
+                      disabled={pageAskLoading || !pageAskQuestion.trim()}
+                    >
+                      <span className="new-tab-submit-label" aria-hidden="true">Ask Brizo</span>
+                      {pageAskLoading
+                        ? <ArrowsClockwise className="is-spinning" size={19} />
+                        : <ArrowUp size={21} />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </BorderBeam>
+            {pageAskLoading && (
+              <div className="page-ask-loading" role="status">
+                <ArrowsClockwise className="is-spinning" size={17} />
+                <span>正在读取网页文字并组织回答…</span>
+              </div>
+            )}
+            {pageAskResult && (
+              <article className={`page-ask-answer${pageAskResult.status === "error" ? " is-error" : ""}`}>
+                <span className="answer-label"><Sparkle size={15} /> Brizo Scout AI</span>
+                <SearchAnswer message={pageAskResult.message} sources={[]} />
+              </article>
+            )}
+            <div className="settings-dialog-actions">
+              <button type="button" disabled={pageAskLoading} onClick={() => setPageAskOpen(false)}>关闭</button>
+            </div>
+          </form>
         </SettingsDialog>
       )}
 

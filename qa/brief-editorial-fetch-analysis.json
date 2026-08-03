@@ -1,0 +1,439 @@
+{
+  "mode": "empty-user-signals (service still uses DEFAULT_TOPICS + EDITORIAL_SECTIONS)",
+  "status": "success",
+  "label": "OVERNIGHT UPDATE",
+  "id": "2026-08-03:overnight",
+  "staleReason": null,
+  "contentNotice": null,
+  "message": null,
+  "modelCalls": 0,
+  "searchQueryCount": 22,
+  "searchQueries": [
+    "AI 与科技产业 昨晚以来 跨时区 最新 国内 新闻",
+    "AI 与科技产业 昨晚以来 跨时区 最新 国际 news",
+    "商业与全球市场 昨晚以来 跨时区 最新 国内 新闻",
+    "商业与全球市场 昨晚以来 跨时区 最新 国际 news",
+    "中国社会与政策 昨晚以来 跨时区 最新 国内 新闻",
+    "中国社会与政策 昨晚以来 跨时区 最新 国际 news",
+    "国际事务 昨晚以来 跨时区 最新 国内 新闻",
+    "国际事务 昨晚以来 跨时区 最新 国际 news",
+    "科学、气候与文化 昨晚以来 跨时区 最新 国内 新闻",
+    "科学、气候与文化 昨晚以来 跨时区 最新 国际 news",
+    "全球前沿科技 人工智能 芯片 技术突破 昨晚以来 跨时区 最新 国内 新闻",
+    "全球前沿科技 人工智能 芯片 技术突破 昨晚以来 跨时区 最新 国际 news",
+    "全球商业 金融 市场 公司 最新重要新闻 昨晚以来 跨时区 最新 国内 新闻",
+    "全球商业 金融 市场 公司 最新重要新闻 昨晚以来 跨时区 最新 国际 news",
+    "国际重大新闻 全球热点 前沿动态 昨晚以来 跨时区 最新 国内 新闻",
+    "国际重大新闻 全球热点 前沿动态 昨晚以来 跨时区 最新 国际 news",
+    "中国 国内 重大新闻 政策 社会 昨晚以来 跨时区 最新 国内 新闻",
+    "中国 国内 重大新闻 政策 社会 昨晚以来 跨时区 最新 国际 news",
+    "全球艺术 文化 设计 文学 电影 最新 昨晚以来 跨时区 最新 国内 新闻",
+    "全球艺术 文化 设计 文学 电影 最新 昨晚以来 跨时区 最新 国际 news",
+    "全球体育 娱乐 流行文化 最新热点 昨晚以来 跨时区 最新 国内 新闻",
+    "全球体育 娱乐 流行文化 最新热点 昨晚以来 跨时区 最新 国际 news"
+  ],
+  "metrics": {
+    "enrichedUrlCount": 91,
+    "enrichmentMs": 10236,
+    "searchMs": 1398,
+    "topicInferenceMs": 0,
+    "totalMs": 11675,
+    "searchFailureCount": 0
+  },
+  "elapsedMs": 11680,
+  "topicProfile": [
+    {
+      "id": "technology",
+      "label": "AI 与科技产业",
+      "weight": 0.34
+    },
+    {
+      "id": "markets",
+      "label": "商业与全球市场",
+      "weight": 0.26
+    },
+    {
+      "id": "china",
+      "label": "中国社会与政策",
+      "weight": 0.18
+    },
+    {
+      "id": "world",
+      "label": "国际事务",
+      "weight": 0.12
+    },
+    {
+      "id": "science",
+      "label": "科学、气候与文化",
+      "weight": 0.1
+    }
+  ],
+  "pageLayout": [
+    "P1 头条 front",
+    "P2 科技与技术 / 商业与金融",
+    "P3 国际重要新闻 / 国内重要新闻",
+    "P4 艺术与文化 / 体育与娱乐"
+  ],
+  "totals": {
+    "front": 8,
+    "editorial": 18,
+    "all": 26,
+    "withImage": 26,
+    "domestic": 6,
+    "international": 20
+  },
+  "pages": [
+    {
+      "page": 1,
+      "kind": "front / 头条",
+      "stories": [
+        {
+          "headline": "【2026年最新】AIの種類を一覧比較｜特徴や得意分野、使い分けのポイントも解説",
+          "region": "国际",
+          "topicLabel": "AI 与科技产业",
+          "domain": "agaroot.jp",
+          "hasImage": true,
+          "sourceCount": 5,
+          "summary": "多種多様なAIサービスの中から、目的に合ったツールを適切に選ぶための比較・活用法を徹底解説。テキスト・画像・。[1]【2026年最新】AIの種類を一覧で解説！ 生成AIの活用法からおすすめツールまで AIの導入を検討する中で。[2]",
+          "score": 0.622,
+          "url": "https://www.agaroot.jp/datascience/column/ai-types-list"
+        },
+        {
+          "headline": "Science Portal - 科学技術の最新情報サイト「サイエンスポータル」",
+          "region": "国际",
+          "topicLabel": "科学、气候与文化",
+          "domain": "scienceportal.jst.go.jp",
+          "hasImage": true,
+          "sourceCount": 4,
+          "summary": "科学技術の最新情報を提供する総合Webサイトです。 情報、生物、地球、医療などの科学ニュース、各分野の専門家。[1]数学、物理、化学など、基礎的な科学研究に関する記事の一覧です。 【人生100年社会 支える科学 2】免疫の司。[2]",
+          "score": 0.569,
+          "url": "https://scienceportal.jst.go.jp"
+        },
+        {
+          "headline": "最新AI资讯_每日实时更新AI行业新闻、热点、快讯-太平洋科技AI频道",
+          "region": "国内",
+          "topicLabel": "AI 与科技产业",
+          "domain": "pconline.com.cn",
+          "hasImage": true,
+          "sourceCount": 5,
+          "summary": "太平洋科技AI频道提供24小时不间断的最新AI资讯、快讯，实时更新全球人工智能最新行业动态新闻报道，覆盖大模。[1]每日AI资讯是您获取2025年人工智能领域最新动态的首选。我们每日更新全球及国内AI行业资讯，涵盖AI大模型。[2]",
+          "score": 0.562,
+          "url": "https://www.pconline.com.cn/ai/daily-news"
+        },
+        {
+          "headline": "Google 新闻 - 中国 - 最新新闻",
+          "region": "国际",
+          "topicLabel": "科学、气候与文化",
+          "domain": "news.google.com",
+          "hasImage": true,
+          "sourceCount": 5,
+          "summary": "Google 新闻提供中国最新新闻，涵盖各类主题和地区，帮助用户随时获取最新资讯。[1]迈向磁性杂质中近藤关联的精确量子多体处理、氟化钾催化Appel反应实现醇的氟化、等离子体表面工程用于高效稳定。[2]",
+          "score": 0.513,
+          "url": "https://news.google.com/topics/CAAqJggKIiBDQkFTRWdvSkwyMHZNR1F3TlhjekVnVjZhQzFEVGlnQVAB?hl=zh-CN&ceid=CN%3Azh-Hans"
+        },
+        {
+          "headline": "Keysight - Wikipedia",
+          "region": "国内",
+          "topicLabel": "商业与全球市场",
+          "domain": "en.wikipedia.org",
+          "hasImage": true,
+          "sourceCount": 5,
+          "summary": "Keysight Technologies, Inc. is a global company headqu。[1]An S&P 500 company, Keysight delivers market-leading d。[2]",
+          "score": 0.497,
+          "url": "https://en.wikipedia.org/wiki/Keysight"
+        },
+        {
+          "headline": "中華人民共和国 - Wikipedia",
+          "region": "国内",
+          "topicLabel": "中国社会与政策",
+          "domain": "ja.wikipedia.org",
+          "hasImage": true,
+          "sourceCount": 5,
+          "summary": "1971年 10月の アルバニア決議 以降、中華人民共和国が「中国」の議席および関連する地位を獲得し、「中国。[1]中国の伝統的な芸術形式には、国楽、 相声 、 戯曲 、書道、 中国画 、文学、 陶磁器芸術 、彫刻などがあり。[2]",
+          "score": 0.497,
+          "url": "https://ja.wikipedia.org/wiki/%E4%B8%AD%E8%8F%AF%E4%BA%BA%E6%B0%91%E5%85%B1%E5%92%8C%E5%9B%BD"
+        },
+        {
+          "headline": "纽约时报中文网 国际纵览",
+          "region": "国际",
+          "topicLabel": "国际事务",
+          "domain": "cn.nytimes.com",
+          "hasImage": true,
+          "sourceCount": 3,
+          "summary": "纽约时报中文网 国际纵览 (cn.NYTimes.com)是纽约时报公司旗下的首个中文媒介产品，旨在向中国读。[1]",
+          "score": 0.495,
+          "url": "https://cn.nytimes.com"
+        },
+        {
+          "headline": "Daum",
+          "region": "国内",
+          "topicLabel": "商业与全球市场",
+          "domain": "daum.net",
+          "hasImage": true,
+          "sourceCount": 5,
+          "summary": "이용자 선택권을 강화한 뉴스, 세상의 모든 정보를 연결하는 검색. Daum에서 나의 관심 콘텐츠를。[1]Daum 메일은 깔끔한 디자인과 편리한 기능을 제공하며, 카카오메일과 연동하여 다양한 메일 서비스。[2]",
+          "score": 0.479,
+          "url": "https://www.daum.net"
+        }
+      ]
+    },
+    {
+      "page": 2,
+      "kind": "topics",
+      "sections": [
+        {
+          "label": "科技与技术",
+          "targetSlots": 3,
+          "count": 3,
+          "stories": [
+            {
+              "headline": "Home - Smart Home Solutions in Sri Lanka | SmartHomeLK",
+              "region": "国际",
+              "topicLabel": "科技与技术",
+              "domain": "smarthomelk.com",
+              "hasImage": true,
+              "sourceCount": 5,
+              "summary": "Discover top smart home solutions in Sri Lanka with Sm。[1]Shop the latest smart home devices in Sri Lanka at Sal。[2]",
+              "score": 0.473,
+              "url": "https://smarthomelk.com"
+            },
+            {
+              "headline": "Smart Home Security Systems 2026: Complete Guide (Google, Alexa, Apple) | Security.org",
+              "region": "国际",
+              "topicLabel": "科技与技术",
+              "domain": "security.org",
+              "hasImage": true,
+              "sourceCount": 5,
+              "summary": "Unlike standard systems, smart home security combines。[1]Looking for an alarm system to make you feel more secu。[2]",
+              "score": 0.471,
+              "url": "https://www.security.org/home-security-systems/best/smart-home"
+            },
+            {
+              "headline": "近期科技新闻大盘点：AI、芯片、互联网巨头最新动态-腾讯云开发者社区-腾讯云",
+              "region": "国际",
+              "topicLabel": "科技与技术",
+              "domain": "cloud.tencent.com",
+              "hasImage": true,
+              "sourceCount": 5,
+              "summary": "OpenAI发布Sora视频生成AI，英伟达市值突破2万亿美元，TikTok面临欧美监管压力，特斯拉FSD技。[1]太平洋科技AI频道提供24小时不间断的最新AI资讯、快讯，实时更新全球人工智能最新行业动态新闻报道，覆盖大模。[2]",
+              "score": 0.348,
+              "url": "https://cloud.tencent.com/developer/article/2621070"
+            }
+          ]
+        },
+        {
+          "label": "商业与金融",
+          "targetSlots": 3,
+          "count": 3,
+          "stories": [
+            {
+              "headline": "Google Chrome - The Fast & Secure Web Browser Built to be Yours",
+              "region": "国际",
+              "topicLabel": "商业与金融",
+              "domain": "google.com",
+              "hasImage": true,
+              "sourceCount": 5,
+              "summary": "Chrome is the official web browser from Google, built。[1]Get more done with the new Google Chrome. A more simpl。[2]",
+              "score": 0.443,
+              "url": "https://www.google.com/chrome"
+            },
+            {
+              "headline": "Download and install Google Chrome",
+              "region": "国际",
+              "topicLabel": "商业与金融",
+              "domain": "support.google.com",
+              "hasImage": true,
+              "sourceCount": 5,
+              "summary": "You can download and install the Chrome web browser at。[1]To go to the Chrome Web Store, just visit https://chro。[2]",
+              "score": 0.441,
+              "url": "https://support.google.com/chrome/answer/95346?hl=en&co=GENIE.Platform%3DDesktop"
+            },
+            {
+              "headline": "Get started with Google Maps",
+              "region": "国际",
+              "topicLabel": "商业与金融",
+              "domain": "support.google.com",
+              "hasImage": true,
+              "sourceCount": 5,
+              "summary": "Get started with Google Maps This article will help yo。[1]On your computer, open Google Maps. Click Directions .。[2]",
+              "score": 0.417,
+              "url": "https://support.google.com/maps/answer/144349?hl=en&co=GENIE.Platform%3DAndroid"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page": 3,
+      "kind": "topics",
+      "sections": [
+        {
+          "label": "国际重要新闻",
+          "targetSlots": 4,
+          "count": 4,
+          "stories": [
+            {
+              "headline": "国际新闻_环球网",
+              "region": "国际",
+              "topicLabel": "国际重要新闻",
+              "domain": "world.huanqiu.com",
+              "hasImage": true,
+              "sourceCount": 5,
+              "summary": "私企火箭入轨，印度商业航天迎\"SpaceX时刻\"？。[1]跨越国界的黑山塔拉大桥 央视新闻 2026-08-02 \"国家情报局\"出笼，日本扩军备武再添新证 新华社 2。[2]",
+              "score": 0.497,
+              "url": "https://world.huanqiu.com"
+            },
+            {
+              "headline": "Amazon | 本, ファッション, 家電から食品まで | アマゾン",
+              "region": "国际",
+              "topicLabel": "国际重要新闻",
+              "domain": "amazon.co.jp",
+              "hasImage": true,
+              "sourceCount": 5,
+              "summary": "アマゾン ウェブ サービス（AWS） クラウドコンピューティング サービス Amazonアウトレット 訳あり。[1]Amazon出品用アカウントにログインするか、登録して出品用アカウントを作成ください。[2]",
+              "score": 0.485,
+              "url": "https://www.amazon.co.jp"
+            },
+            {
+              "headline": "广州市奇艺音响设备有限公司 - 企查查",
+              "region": "国际",
+              "topicLabel": "国际重要新闻",
+              "domain": "qcc.com",
+              "hasImage": true,
+              "sourceCount": 4,
+              "summary": "作为一家专业从事音响设备制造的企业，其主营业务包括音响设备制造、音响设备安装服务以及影视录放设备制造。 公司。[1]广州市奇艺音响设备有限公司是一家小微企业，该公司成立于2013年06月09日，位于广州市花都区花山镇两龙北街。[2]",
+              "score": 0.471,
+              "url": "https://www.qcc.com/firm/7c61b8a711a005a8742c97683caf37db.html"
+            },
+            {
+              "headline": "Google 新闻 - 全球 - 最新新闻",
+              "region": "国际",
+              "topicLabel": "国际重要新闻",
+              "domain": "news.google.com",
+              "hasImage": true,
+              "sourceCount": 5,
+              "summary": "Google新闻提供全球范围内的最新新闻报道和实时资讯，涵盖各地热门话题和事件。[1]Google 新闻提供最新新闻和信息，涵盖全球热门话题和事件。[2]",
+              "score": 0.366,
+              "url": "https://news.google.com/topics/CAAqLQgKIidDQkFTRndvSUwyMHZNRGx1YlY4U0IzcG9MVWhoYm5NYUFrTk9LQUFQAQ?hl=zh-CN&ceid=CN%3Azh-Hans"
+            }
+          ]
+        },
+        {
+          "label": "国内重要新闻",
+          "targetSlots": 2,
+          "count": 2,
+          "stories": [
+            {
+              "headline": "中国・習近平政権 関連ニュース：時事ドットコム",
+              "region": "国内",
+              "topicLabel": "国内重要新闻",
+              "domain": "jiji.com",
+              "hasImage": true,
+              "sourceCount": 5,
+              "summary": "【北京時事】中国共産党は30日、習近平総書記（国家主席）主宰の中央政治局会議を開き、重要会議である「第20期。[1]REUTERS/Maxim Shemetov 中国中部の都市、武漢市に住み、営業職として働くウィニー・ツェン。[2]",
+              "score": 0.398,
+              "url": "https://www.jiji.com/jc/v7?id=Xi_Jinping"
+            },
+            {
+              "headline": "中國 - 维基百科，自由的百科全书",
+              "region": "国内",
+              "topicLabel": "国内重要新闻",
+              "domain": "zh.wikipedia.org",
+              "hasImage": true,
+              "sourceCount": 3,
+              "summary": "中国最早成型于 新石器时期 与 青铜时期 之间的 过渡期，由发起自黄河中游流域 黄土高原 地区的 炎黄 部落。[1]2020年中国签署《区域全面经济伙伴关系协定》，这是世界上最大自由貿易經濟體系 [548]。 中国是世界第一。[2]",
+              "score": 0.366,
+              "url": "https://zh.wikipedia.org/wiki/%E4%B8%AD%E5%9C%8B"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "page": 4,
+      "kind": "topics",
+      "sections": [
+        {
+          "label": "艺术与文化",
+          "targetSlots": 3,
+          "count": 3,
+          "stories": [
+            {
+              "headline": "네이버",
+              "region": "国际",
+              "topicLabel": "艺术与文化",
+              "domain": "naver.com",
+              "hasImage": true,
+              "sourceCount": 4,
+              "summary": "네이버 메인에서 다양한 정보와 유용한 컨텐츠를 만나 보세요。[1]최신버전 네이버앱을 설치한 후 사용해주세요 네이버앱 설치하기 모바일웹으로 열기。[2]",
+              "score": 0.497,
+              "url": "https://www.naver.com"
+            },
+            {
+              "headline": "Ministry of Customs",
+              "region": "国际",
+              "topicLabel": "艺术与文化",
+              "domain": "customs.gov.ws",
+              "hasImage": true,
+              "sourceCount": 5,
+              "summary": "To sustain a progressive development through excellenc。[1]A proud moment for the Ministry of Revenue as we offic。[2]",
+              "score": 0.483,
+              "url": "https://customs.gov.ws"
+            },
+            {
+              "headline": "네이버",
+              "region": "国际",
+              "topicLabel": "艺术与文化",
+              "domain": "naver.co.kr",
+              "hasImage": true,
+              "sourceCount": 3,
+              "summary": "방문 중인 사이트에서 설명을 제공하지 않습니다.。[1]太平洋科技AI频道提供24小时不间断的最新AI资讯、快讯，实时更新全球人工智能最新行业动态新闻报道，覆盖大模。[2]",
+              "score": 0.306,
+              "url": "https://www.naver.co.kr/index.html"
+            }
+          ]
+        },
+        {
+          "label": "体育与娱乐",
+          "targetSlots": 3,
+          "count": 3,
+          "stories": [
+            {
+              "headline": "网易新闻",
+              "region": "国际",
+              "topicLabel": "体育与娱乐",
+              "domain": "news.163.com",
+              "hasImage": true,
+              "sourceCount": 3,
+              "summary": "新闻 体育 NBA 娱乐 音乐 游戏 财经 股票 汽车 科技 手机 智能 家电 时尚 直播 文化 旅游 房产。[1]太平洋科技AI频道提供24小时不间断的最新AI资讯、快讯，实时更新全球人工智能最新行业动态新闻报道，覆盖大模。[2]",
+              "score": 0.352,
+              "url": "https://news.163.com"
+            },
+            {
+              "headline": "TPM 2.0 和 Secure Boot 如何开启，为安装 Windows 11 做好准备",
+              "region": "国际",
+              "topicLabel": "体育与娱乐",
+              "domain": "sysgeek.cn",
+              "hasImage": true,
+              "sourceCount": 3,
+              "summary": "为了提升系统安全性，Windows 11 引入了多项关键防护机制，来抵御复杂攻击、恶意软件和勒索软件的威胁。[1]安全启动 是一项安全功能，可帮助防止在 Windows 电脑启动时加载恶意软件。 它的工作原理是仅允许受信任。[2]",
+              "score": 0.35,
+              "url": "https://www.sysgeek.cn/enable-tpm-and-secure-boot-for-windows-11"
+            },
+            {
+              "headline": "好新闻，无止境 - 新京报",
+              "region": "国际",
+              "topicLabel": "体育与娱乐",
+              "domain": "bjnews.com.cn",
+              "hasImage": true,
+              "sourceCount": 3,
+              "summary": "新京报以文字、图片、视频等全媒体形式，为用户提供全天候热点新闻，涵盖突发新闻、时事、财经、娱乐、体育，以及评。[1]太平洋科技AI频道提供24小时不间断的最新AI资讯、快讯，实时更新全球人工智能最新行业动态新闻报道，覆盖大模。[2]",
+              "score": 0.344,
+              "url": "https://www.bjnews.com.cn/sports"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
