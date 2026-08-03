@@ -57,24 +57,9 @@ function makePreviewStory({ headline, id, index, region, summary, topicId, topic
 
 const PREVIEW_TOPIC_CONTENT = [
   {
-    id: "business-finance",
-    label: "商业与金融",
-    weight: 0.28,
-    headlines: [
-      "FT独家：全球半导体与算力供应链迎来新一轮区域化整合",
-      "美联储与欧洲央行降息预期重构全球资本流动格局",
-      "跨境电商与数字服务成为亚洲市场出口增长新引擎",
-    ],
-    summaries: [
-      "根据 FT中文网 获得的最新行业数据，受多国补贴政策与地缘考量影响，全球半导体制造与高能耗 AI 数据中心正在加快区域化布局。企业开始更重视电力供给稳定性与供应链冗余。",
-      "全球主要央行最新政策信号显示，利率走势的分化正引导国际资本重新流向新兴市场科技资产与债券市场。投资者正在密切评估企业盈利修复的实际节奏。",
-      "亚洲主要经济体最新的贸易数据显示，云端软件、跨境电商与数字服务正在逐步替代传统制造业出口，成为推动区域经济回升的核心驱动力。",
-    ],
-  },
-  {
     id: "technology",
     label: "科学与技术",
-    weight: 0.26,
+    weight: 0.17,
     headlines: [
       "FT深度：大模型推理成本年内下降50%，智能体AI加速落地",
       "量子计算与经典超级计算机混合架构在科研领域取得新突破",
@@ -87,9 +72,24 @@ const PREVIEW_TOPIC_CONTENT = [
     ],
   },
   {
+    id: "business-finance",
+    label: "商业与金融",
+    weight: 0.16,
+    headlines: [
+      "FT独家：全球半导体与算力供应链迎来新一轮区域化整合",
+      "美联储与欧洲央行降息预期重构全球资本流动格局",
+      "跨境电商与数字服务成为亚洲市场出口增长新引擎",
+    ],
+    summaries: [
+      "根据 FT中文网 获得的最新行业数据，受多国补贴政策与地缘考量影响，全球半导体制造与高能耗 AI 数据中心正在加快区域化布局。企业开始更重视电力供给稳定性与供应链冗余。",
+      "全球主要央行最新政策信号显示，利率走势的分化正引导国际资本重新流向新兴市场科技资产与债券市场。投资者正在密切评估企业盈利修复的实际节奏。",
+      "亚洲主要经济体最新的贸易数据显示，云端软件、跨境电商与数字服务正在逐步替代传统制造业出口，成为推动区域经济回升的核心驱动力。",
+    ],
+  },
+  {
     id: "international",
     label: "国际重要新闻",
-    weight: 0.22,
+    weight: 0.24,
     headlines: [
       "多边气候与能源峰会达成新框架：承诺加大绿色算力投资",
       "全球贸易规则重新谈判，聚焦数据跨境流动与人工智能治理",
@@ -103,7 +103,7 @@ const PREVIEW_TOPIC_CONTENT = [
   },
   {
     id: "domestic",
-    label: "中国与亚太",
+    label: "国内重要新闻",
     weight: 0.14,
     headlines: [
       "中国先进制造业支持政策加码：聚焦长板技术与产业集群",
@@ -114,6 +114,32 @@ const PREVIEW_TOPIC_CONTENT = [
       "地方政府出台一系列政策，向初创科技团队开放高性能算力资源与公共数据集，助力中小企业低成本进行技术创新。",
     ],
   },
+  {
+    id: "arts-culture",
+    label: "艺术与文化",
+    weight: 0.15,
+    headlines: [
+      "FT文化观察：数字沉浸艺术与传统博物馆重塑全球公共文化空间",
+      "跨国出版与影视制作展现新的全球化叙事与多元文化表达",
+    ],
+    summaries: [
+      "全球顶级博物馆与艺术机构联合推出数字化展览，通过生成式技术还原历史艺术遗产，吸引新一代泛年轻人入场。",
+      "国际电影节与出版行业最新趋势表明，非英语原版影视作品与文学翻译在国际流媒体平台上播放量持续创出历史新高。",
+    ],
+  },
+  {
+    id: "sports-entertainment",
+    label: "体育与娱乐",
+    weight: 0.14,
+    headlines: [
+      "全球体育科技投资提速：数据分析与智能转播重塑观赛体验",
+      "流媒体平台版权竞争进入新阶段，聚焦顶级赛事直播与优质原创",
+    ],
+    summaries: [
+      "体育科技资本正加速流向实时数据分析、球员健康预测以及多视角 AI 转播系统，提升全球观众的互动体验。",
+      "各大娱乐流媒体巨头调整内容发行策略，通过独家体育赛事直播吸引高粘性订阅者，推动订阅模式多元化。",
+    ],
+  },
 ];
 
 export function createBriefPreviewEdition() {
@@ -121,9 +147,9 @@ export function createBriefPreviewEdition() {
     topic.headlines.map((headline, index) => makePreviewStory({
       headline,
       id: `${topic.id}-${index}`,
-      index: topicIndex * 4 + index,
+      index: topicIndex * 6 + index,
       region: topic.id === "domestic" ? "国内" : "国际",
-      summary: topic.summaries[index] || "根据 FT中文网 深度报道，全球市场与科技产业正经历深层次调整，企业在效率、合规与长期创新之间寻找平衡。",
+      summary: topic.summaries[index] || "根据 FT中文网 深度报道，全球市场与科技产业正经历深层次调整。",
       topicId: topic.id,
       topicLabel: topic.label,
     })),
@@ -134,7 +160,7 @@ export function createBriefPreviewEdition() {
       id: "front-lead",
       index: 0,
       region: "国际",
-      summary: "根据 FT中文网 获得的最新行业数据，受多国补贴政策与地缘考量影响，全球半导体制造与高能耗 AI 数据中心正在加快区域化布局。企业开始更重视电力供给稳定性与供应链冗余。企业在效率与韧性之间重新计算长期成本，并更重视能源、港口与数字基础设施的稳定性。",
+      summary: "根据 FT中文网 获得的最新行业数据，受多国补贴政策与地缘考量影响，全球半导体制造与高能耗 AI 数据中心正在加快区域化布局。企业开始更重视电力供给稳定性与供应链冗余。",
       topicId: "business-finance",
       topicLabel: "商业与金融",
     }),
@@ -145,12 +171,12 @@ export function createBriefPreviewEdition() {
       region: "国内",
       summary: "国家最新发布的产业指南强调，将重点扶持高精尖制造、新能源及核心零部件领域，鼓励企业加大研发投入并深化产业链协同，建立长期竞争优势。",
       topicId: "domestic",
-      topicLabel: "中国与亚太",
+      topicLabel: "国内重要新闻",
     }),
     makePreviewStory({
       headline: "FT深度：大模型推理成本年内下降50%，智能体AI加速落地",
-      id: "front-tech",
-      index: 4,
+      id: "front-world",
+      index: 8,
       region: "国际",
       summary: "FT技术专栏分析指出，随着神经网络专用芯片架构升级与量化算法突破，AI 推理成本较去年同期大幅降低。越来越多的企业开始部署能够独立规划与执行工作流的 Agentic AI。",
       topicId: "technology",
@@ -158,33 +184,28 @@ export function createBriefPreviewEdition() {
     }),
     ...stories.slice(1, 6),
   ];
-  const pages = [
-    {
-      page: 1,
-      pageLabel: "第一版 · 头条",
-      sections: [{ id: "front", label: "头条新闻", page: 1, stories: frontStories }],
-    },
-    ...EDITORIAL_SECTIONS.map((section) => ({
-      page: section.page,
-      pageLabel: `第${section.page}版 · ${section.label}`,
-      sections: [{
-        id: section.id,
-        label: section.label,
-        page: section.page,
-        stories: stories.filter((story) => story.topicId === section.id || (section.id === "business-finance" && story.topicId === "domestic")),
-      }],
-    })),
-  ];
+  const previewSlots = [3, 3, 4, 2, 3, 3];
+  const sections = PREVIEW_TOPIC_CONTENT.map((topic, index) => ({
+    id: topic.id,
+    label: topic.label,
+    stories: stories.filter((story) => story.topicId === topic.id).slice(0, previewSlots[index]),
+    weight: topic.weight,
+  }));
   return {
-    editionKey: "preview",
-    generationMetrics: { durationMs: 420, rssCandidateCount: 24, searchCandidateCount: 0 },
-    id: "edition-preview",
-    pages,
-    publishedAt: new Date().toISOString(),
-    status: "success",
-    topics: PREVIEW_TOPIC_CONTENT.map(({ id, label, weight }) => ({ id, label, weight })),
-    updatedAt: new Date().toISOString(),
+    id: "preview-evening",
+    kind: "evening",
+    label: "THE EVENING POST",
+    pages: [
+      { id: "front", kind: "front", stories: frontStories.slice(0, 8) },
+      { id: "editorial-2", kind: "topics", sections: sections.slice(0, 2) },
+      { id: "editorial-3", kind: "topics", sections: sections.slice(2, 4) },
+      { id: "editorial-4", kind: "topics", sections: sections.slice(4, 6) },
+    ],
     preview: true,
+    publishedAt: new Date(new Date().setHours(18, 0, 0, 0)).toISOString(),
+    status: "success",
+    topics: PREVIEW_TOPIC_CONTENT.map(({ headlines: _headlines, summaries: _summaries, ...topic }) => topic),
+    updatedAt: new Date().toISOString(),
   };
 }
 

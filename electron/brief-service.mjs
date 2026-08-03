@@ -924,27 +924,33 @@ async function translateStoriesForPublication(stories, callModel, fallbackModel)
     "返回严格 JSON：{\"stories\":[{\"id\":\"输入短编号\",\"headline\":\"中文直译标题\",\"excerpt\":\"中文直译正文摘录\"}]}，不要输出 markdown。",
   ].join("\n");
   const translateBatch = async (batch, translate) => {
-    const keyed = batch.map((story, index) => ({ key: `s${index + 1}`, story }));
-    const response = await translate({
-      systemPrompt,
-      query: JSON.stringify(keyed.map(({ key, story }) => ({
-        id: key,
-        excerpt: safeText(story.sources?.[0]?.bodyExcerpt || story.sources?.[0]?.snippet || story.summary, 180),
-        title: safeText(story.sources?.[0]?.title || story.headline, 180),
-      }))),
-      timeoutMs: 45_000,
-    });
-    const parsed = response?.status === "success" ? parseModelJson(response.message) : null;
-    if (!parsed) {
-      console.warn("[brief-translation]", safeText(response?.message || "翻译接口没有返回可解析的 JSON", 240));
+    if (!translate) return [];
+    try {
+      const keyed = batch.map((story, index) => ({ key: `s${index + 1}`, story }));
+      const response = await translate({
+        systemPrompt,
+        query: JSON.stringify(keyed.map(({ key, story }) => ({
+          id: key,
+          excerpt: safeText(story.sources?.[0]?.bodyExcerpt || story.sources?.[0]?.snippet || story.summary, 180),
+          title: safeText(story.sources?.[0]?.title || story.headline, 180),
+        }))),
+        timeoutMs: 15_000,
+      });
+      const parsed = response?.status === "success" ? parseModelJson(response.message) : null;
+      if (!parsed) {
+        console.warn("[brief-translation]", safeText(response?.message || "翻译接口没有返回可解析的 JSON", 240));
+      }
+      const returned = new Map((Array.isArray(parsed?.stories) ? parsed.stories : []).map((item) => [item?.id, item]));
+      const pairs = keyed.flatMap(({ key, story }) => {
+        const item = returned.get(key);
+        if (!item || !containsChinese(item.headline) || !containsChinese(item.excerpt)) return [];
+        return [[story.url || story.id, item]];
+      });
+      return pairs;
+    } catch (err) {
+      console.warn("[brief-translation] Model call error:", err?.message || String(err));
+      return [];
     }
-    const returned = new Map((Array.isArray(parsed?.stories) ? parsed.stories : []).map((item) => [item?.id, item]));
-    const pairs = keyed.flatMap(({ key, story }) => {
-      const item = returned.get(key);
-      if (!item || !containsChinese(item.headline) || !containsChinese(item.excerpt)) return [];
-      return [[story.url || story.id, item]];
-    });
-    return pairs;
   };
   const translated = new Map(foreignStories.length ? await translateBatch(foreignStories, callModel) : []);
   const missingAfterPrimary = foreignStories.filter((story) => !translated.has(story.url || story.id));
@@ -953,10 +959,15 @@ async function translateStoriesForPublication(stories, callModel, fallbackModel)
   }
   for (const story of foreignStories) {
     const translation = translated.get(story.url || story.id);
-    if (!translation) continue;
-    story.headline = safeText(translation.headline, 220);
-    story.summary = `${safeText(translation.excerpt, 1_000).replace(/\s*\[\d+\]\s*$/g, "")} [1]`;
-    story.translationState = "translated";
+    if (translation) {
+      story.headline = safeText(translation.headline, 220);
+      story.summary = `${safeText(translation.excerpt, 1_000).replace(/\s*\[\d+\]\s*$/g, "")} [1]`;
+      story.translationState = "translated";
+    } else {
+      story.headline = safeText(story.sources?.[0]?.title || story.headline, 220);
+      story.summary = `${safeText(story.sources?.[0]?.bodyExcerpt || story.summary, 1_000).replace(/\s*\[\d+\]\s*$/g, "")} [1]`;
+      story.translationState = "source-untranslated";
+    }
     publishedIds.add(story.url || story.id);
   }
   return {
@@ -968,16 +979,27 @@ async function translateStoriesForPublication(stories, callModel, fallbackModel)
   };
 }
 
+const DEFAULT_SECTION_IMAGES = [
+  "https://images.unsplash.com/photo-1578575437130-527eed3abbec?auto=format&fit=crop&w=1400&q=82",
+  "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80",
+  "https://images.unsplash.com/photo-1521295121783-8a321d551ad2?auto=format&fit=crop&w=800&q=80",
+  "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=800&q=80",
+  "https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=800&q=80",
+];
+
 function buildStoriesForTopic({ results, topic, allResults, now }) {
   const prepared = results.map((result, index) => {
-    const primary = result.primary;
+    const primary = {
+      ...result.primary,
+      imageUrl: result.primary.imageUrl || DEFAULT_SECTION_IMAGES[index % DEFAULT_SECTION_IMAGES.length],
+    };
     return {
       id: `story-${index + 1}`,
       primary,
       region: result.region,
       sources: sourcesForCluster([{ ...primary }, ...result.cluster.slice(1)], allResults, 5),
     };
-  }).filter((item) => item.primary.imageUrl);
+  });
   return prepared.map((item, index) => {
     const summary = createExtractiveSummary(item.sources) || fallbackSummary(item.primary);
     return {
@@ -1278,7 +1300,7 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
         .filter((candidate) => candidate.id === section.id)
         .flatMap((candidate) => candidate.stories || []));
       for (const story of previousStories) {
-        if (!story.imageUrl || !story.url || usedUrls.has(story.url)) continue;
+        if (!story.url || usedUrls.has(story.url)) continue;
         if (!isAllowedBriefSource(story.url, domainFor(story.url))) continue;
         usedUrls.add(story.url);
         section.stories.push({ ...story, carriedOver: true });
