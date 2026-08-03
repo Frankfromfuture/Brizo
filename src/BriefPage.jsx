@@ -21,9 +21,9 @@ const PREVIEW_IMAGES = [
 ];
 
 const PREVIEW_SOURCE_SETS = [
-  ["Reuters", "https://www.reuters.com/"],
-  ["新华社", "https://www.news.cn/"],
+  ["FT中文网", "https://www.ftchinese.com/"],
   ["Financial Times", "https://www.ft.com/"],
+  ["Reuters", "https://www.reuters.com/"],
   ["Nature", "https://www.nature.com/"],
   ["BBC News", "https://www.bbc.com/news"],
 ];
@@ -32,7 +32,7 @@ function previewSources(seed = 0) {
   return PREVIEW_SOURCE_SETS.slice(seed % 2, seed % 2 + 3).map(([title, url], index) => ({
     domain: new URL(url).hostname.replace(/^www\./, ""),
     id: `preview-source-${seed}-${index}`,
-    snippet: "用于展示引用排版的界面预览来源，桌面版会替换为真实检索结果。",
+    snippet: "FT中文网独家深度观察与全球市场分析；桌面版会实时获取全量新闻源并精准提炼正文摘要。",
     title,
     url,
   }));
@@ -57,63 +57,61 @@ function makePreviewStory({ headline, id, index, region, summary, topicId, topic
 
 const PREVIEW_TOPIC_CONTENT = [
   {
-    id: "technology",
-    label: "科学与技术",
-    weight: 0.17,
+    id: "business-finance",
+    label: "商业与金融",
+    weight: 0.28,
     headlines: [
-      "新一轮智能基础设施建设进入规模化阶段",
-      "芯片制造协作网络出现新的区域化布局",
-      "企业软件开始从助手转向可执行工作流",
+      "FT独家：全球半导体与算力供应链迎来新一轮区域化整合",
+      "美联储与欧洲央行降息预期重构全球资本流动格局",
+      "跨境电商与数字服务成为亚洲市场出口增长新引擎",
+    ],
+    summaries: [
+      "根据 FT中文网 获得的最新行业数据，受多国补贴政策与地缘考量影响，全球半导体制造与高能耗 AI 数据中心正在加快区域化布局。企业开始更重视电力供给稳定性与供应链冗余。",
+      "全球主要央行最新政策信号显示，利率走势的分化正引导国际资本重新流向新兴市场科技资产与债券市场。投资者正在密切评估企业盈利修复的实际节奏。",
+      "亚洲主要经济体最新的贸易数据显示，云端软件、跨境电商与数字服务正在逐步替代传统制造业出口，成为推动区域经济回升的核心驱动力。",
     ],
   },
   {
-    id: "business-finance",
-    label: "商业与金融",
-    weight: 0.16,
+    id: "technology",
+    label: "科学与技术",
+    weight: 0.26,
     headlines: [
-      "全球供应链重构加快，企业重新平衡效率与韧性",
-      "主要市场关注利率路径与企业盈利修复节奏",
-      "跨境投资开始重新评估制造业与数字服务机会",
+      "FT深度：大模型推理成本年内下降50%，智能体AI加速落地",
+      "量子计算与经典超级计算机混合架构在科研领域取得新突破",
+      "开源大模型生态蓬勃发展，挑战传统封闭商业模型垄断",
+    ],
+    summaries: [
+      "FT技术专栏分析指出，随着神经网络专用芯片架构升级与量化算法突破，AI 推理成本较去年同期大幅降低。越来越多的企业开始部署能够独立规划与执行工作流的 Agentic AI。",
+      "国际顶级实验室联合发布报告，展示了量子加速器在药物分子筛选与复杂材料模拟中的实际成果，标志着混合计算正走向实用化阶段。",
+      "最新的全球开发者调查表明，高水平开源模型的性能提升正在缩小与顶级商业模型的差距，越来越多的企业选择部署自建安全模型。",
     ],
   },
   {
     id: "international",
     label: "国际重要新闻",
-    weight: 0.24,
+    weight: 0.22,
     headlines: [
-      "跨区域合作议题重新聚焦贸易、能源与数字规则",
-      "多边机构讨论新一阶段经济与人道协调方案",
-      "主要经济体在产业政策与开放之间寻找平衡",
-      "全球前沿议题加速进入公共政策讨论",
+      "多边气候与能源峰会达成新框架：承诺加大绿色算力投资",
+      "全球贸易规则重新谈判，聚焦数据跨境流动与人工智能治理",
+      "欧洲科技法案生效，对人工智能透明度与合成内容提出强制要求",
+    ],
+    summaries: [
+      "全球能源与环境峰会上，各国代表就绿色数据中心建设与清洁能源转型达成一致，计划在未来三年内追加数千亿美元基础设施投资。",
+      "跨国贸易谈判代表在最新一轮会议中将数据安全与 AI 道德规范纳入核心条款，标志着全球数字经济治理正在进入新阶段。",
+      "欧盟 AI 法案相关透明度条款正式施行，要求所有合成内容与智能体系统必须明确标识非人类身份，引发行业广泛关注与合规调整。",
     ],
   },
   {
     id: "domestic",
-    label: "国内重要新闻",
+    label: "中国与亚太",
     weight: 0.14,
     headlines: [
-      "先进制造业支持政策聚焦创新投入与长期能力",
-      "多地完善公共服务供给与青年就业支持措施",
+      "中国先进制造业支持政策加码：聚焦长板技术与产业集群",
+      "多地推出青年科技人才培育计划与公共数字基础设施共享平台",
     ],
-  },
-  {
-    id: "arts-culture",
-    label: "艺术与文化",
-    weight: 0.15,
-    headlines: [
-      "国际艺术展览以技术和公共空间回应时代议题",
-      "电影与出版市场出现新的跨文化表达",
-      "设计机构重新讨论人工智能时代的创作边界",
-    ],
-  },
-  {
-    id: "sports-entertainment",
-    label: "体育与娱乐",
-    weight: 0.14,
-    headlines: [
-      "全球重要赛事进入关键阶段",
-      "流行文化平台加快争夺国际受众",
-      "娱乐产业重新评估内容制作与发行模式",
+    summaries: [
+      "国家最新发布的产业指南强调，将重点扶持高精尖制造、新能源及核心零部件领域，鼓励企业加大研发投入并深化产业链协同。",
+      "地方政府出台一系列政策，向初创科技团队开放高性能算力资源与公共数据集，助力中小企业低成本进行技术创新。",
     ],
   },
 ];
@@ -123,65 +121,70 @@ export function createBriefPreviewEdition() {
     topic.headlines.map((headline, index) => makePreviewStory({
       headline,
       id: `${topic.id}-${index}`,
-      index: topicIndex * 6 + index,
+      index: topicIndex * 4 + index,
       region: topic.id === "domestic" ? "国内" : "国际",
-      summary: "界面预览采用简洁摘要；桌面版会从真实来源提炼关键事实，并保留时间与出处。",
+      summary: topic.summaries[index] || "根据 FT中文网 深度报道，全球市场与科技产业正经历深层次调整，企业在效率、合规与长期创新之间寻找平衡。",
       topicId: topic.id,
       topicLabel: topic.label,
     })),
   );
   const frontStories = [
     makePreviewStory({
-      headline: "全球供应链重构加速，关键产业区域化趋势增强",
+      headline: "FT独家：全球半导体与算力供应链迎来新一轮区域化整合",
       id: "front-lead",
       index: 0,
       region: "国际",
-      summary: "多重因素正推动企业重新安排生产、物流与能源采购。新的布局不只追求成本，也强调供应连续性、关键零部件冗余和跨区域协作能力。企业开始在效率与韧性之间重新计算长期成本，并更重视能源、港口与数字基础设施的稳定性。此处为界面预览文字，桌面版将依据真实来源生成带编号引用的综合摘要。",
+      summary: "根据 FT中文网 获得的最新行业数据，受多国补贴政策与地缘考量影响，全球半导体制造与高能耗 AI 数据中心正在加快区域化布局。企业开始更重视电力供给稳定性与供应链冗余。企业在效率与韧性之间重新计算长期成本，并更重视能源、港口与数字基础设施的稳定性。",
       topicId: "business-finance",
       topicLabel: "商业与金融",
     }),
     makePreviewStory({
-      headline: "先进制造业发展方案聚焦长期创新能力",
+      headline: "中国先进制造业支持政策加码：聚焦长板技术与产业集群",
       id: "front-china",
       index: 6,
       region: "国内",
-      summary: "政策重点从单点投入转向研发、人才、标准和供应链协同，帮助企业建立更稳定的长期能力。多地方案同时强调成果转化与中小企业配套，桌面版会以真实报道和公开信息交叉整理。",
+      summary: "国家最新发布的产业指南强调，将重点扶持高精尖制造、新能源及核心零部件领域，鼓励企业加大研发投入并深化产业链协同，建立长期竞争优势。",
       topicId: "domestic",
-      topicLabel: "国内重要新闻",
+      topicLabel: "中国与亚太",
     }),
     makePreviewStory({
-      headline: "主要市场重新评估增长、就业与利率预期",
-      id: "front-world",
-      index: 8,
+      headline: "FT深度：大模型推理成本年内下降50%，智能体AI加速落地",
+      id: "front-tech",
+      index: 4,
       region: "国际",
-      summary: "新的经济数据让投资者重新审视增长韧性和政策节奏，市场关注点逐渐转向行业分化、就业质量与企业现金流。政策预期仍有弹性，但后续路径需要更多连续数据确认。此处仅展示版式。",
-      topicId: "business-finance",
-      topicLabel: "商业与金融",
+      summary: "FT技术专栏分析指出，随着神经网络专用芯片架构升级与量化算法突破，AI 推理成本较去年同期大幅降低。越来越多的企业开始部署能够独立规划与执行工作流的 Agentic AI。",
+      topicId: "technology",
+      topicLabel: "科学与技术",
     }),
     ...stories.slice(1, 6),
   ];
-  const previewSlots = [3, 3, 4, 2, 3, 3];
-  const sections = PREVIEW_TOPIC_CONTENT.map((topic, index) => ({
-    id: topic.id,
-    label: topic.label,
-    stories: stories.filter((story) => story.topicId === topic.id).slice(0, previewSlots[index]),
-    weight: topic.weight,
-  }));
+  const pages = [
+    {
+      page: 1,
+      pageLabel: "第一版 · 头条",
+      sections: [{ id: "front", label: "头条新闻", page: 1, stories: frontStories }],
+    },
+    ...EDITORIAL_SECTIONS.map((section) => ({
+      page: section.page,
+      pageLabel: `第${section.page}版 · ${section.label}`,
+      sections: [{
+        id: section.id,
+        label: section.label,
+        page: section.page,
+        stories: stories.filter((story) => story.topicId === section.id || (section.id === "business-finance" && story.topicId === "domestic")),
+      }],
+    })),
+  ];
   return {
-    id: "preview-evening",
-    kind: "evening",
-    label: "THE EVENING POST",
-    pages: [
-      { id: "front", kind: "front", stories: frontStories.slice(0, 8) },
-      { id: "editorial-2", kind: "topics", sections: sections.slice(0, 2) },
-      { id: "editorial-3", kind: "topics", sections: sections.slice(2, 4) },
-      { id: "editorial-4", kind: "topics", sections: sections.slice(4, 6) },
-    ],
-    preview: true,
-    publishedAt: new Date(new Date().setHours(18, 0, 0, 0)).toISOString(),
+    editionKey: "preview",
+    generationMetrics: { durationMs: 420, rssCandidateCount: 24, searchCandidateCount: 0 },
+    id: "edition-preview",
+    pages,
+    publishedAt: new Date().toISOString(),
     status: "success",
-    topics: PREVIEW_TOPIC_CONTENT.map(({ headlines: _headlines, ...topic }) => topic),
+    topics: PREVIEW_TOPIC_CONTENT.map(({ id, label, weight }) => ({ id, label, weight })),
     updatedAt: new Date().toISOString(),
+    preview: true,
   };
 }
 
