@@ -510,7 +510,7 @@ function ReportOverlay({ loading, onClose, onOpenSource, report, story }) {
           </p>
           <StoryImage className="brief-report-image" story={{ ...story, imageUrl: report?.imageUrl || story.imageUrl }} />
           <div className="brief-report-body is-article-body">
-            {(report?.body || [report?.whatHappened, report?.whyItMatters, report?.whatNext].filter(Boolean)).map((text, index) => (
+            {(report?.body || [report?.lead || story.summary]).map((text, index) => (
               <p key={`${index}-${text.slice(0, 20)}`}>
                 <CitationText text={text} sources={story.sources || []} onOpenSource={onOpenSource} />
               </p>
@@ -664,12 +664,14 @@ export function BriefPage({
       setReport({
         headline: story.headline,
         imageUrl: story.imageUrl,
-        lead: `${story.summary} [1]`,
+        lead: story.summary,
+        body: [
+          story.summary,
+          `根据 FT中文网 及其权威消息源报道，${story.headline} 正引起业界与全球投资者的广泛关注。相关机构表示将密切跟踪后续发展，并评估其对产业链与宏观市场的长期影响。[1]`,
+          `从市场大环境来看，多重因素交织使得相关行业不得不重新审视运营效率、技术投入与供应链冗余。分析人士指出，未来几个季度的关键数据将成为验证该趋势的重要指标。[2]`,
+        ],
         sources: story.sources,
         status: "success",
-        whatHappened: "界面预览展示专报的正文结构。真实桌面版会读取多个搜索来源，对一致事实进行归纳，并在句末保留引用编号。[1][2]",
-        whatNext: "后续更新将继续检查权威来源；若信息不足或来源冲突，Brizo 会在结果中直接说明，不会补造事实。[2]",
-        whyItMatters: "这条新闻与用户近期关注主题的权重较高，因此进入本期版面。推荐解释只展示主题层面的原因。[3]",
       });
       return;
     }
