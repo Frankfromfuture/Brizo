@@ -3,14 +3,17 @@ import {
   ArrowLeft,
   ArrowsClockwise,
   Check,
+  Clock,
+  DotsThree,
   GearSix,
+  Heart,
   LinkSimple,
   Minus,
   PushPin,
   ShieldCheck,
   X,
 } from "@phosphor-icons/react";
-import brizoLogoUrl from "../logo.png";
+import brizoLogoUrl from "../hermes logo.svg";
 
 const PREVIEW_IMAGES = [
   "https://images.unsplash.com/photo-1578575437130-527eed3abbec?auto=format&fit=crop&w=1400&q=82",
@@ -21,21 +24,26 @@ const PREVIEW_IMAGES = [
 ];
 
 const PREVIEW_SOURCE_SETS = [
-  ["FT中文网", "https://www.ftchinese.com/"],
-  ["Financial Times", "https://www.ft.com/"],
+  ["新华社", "https://www.news.cn/"],
+  ["央视新闻", "https://news.cctv.com/"],
+  ["界面新闻", "https://www.jiemian.com/"],
+  ["澎湃新闻", "https://www.thepaper.cn/"],
+  ["财新", "https://www.caixin.com/"],
   ["Reuters", "https://www.reuters.com/"],
-  ["Nature", "https://www.nature.com/"],
+  ["AP News", "https://apnews.com/"],
   ["BBC News", "https://www.bbc.com/news"],
+  ["Nature", "https://www.nature.com/"],
 ];
 
 function previewSources(seed = 0) {
-  return PREVIEW_SOURCE_SETS.slice(seed % 2, seed % 2 + 3).map(([title, url], index) => ({
+  return Array.from({ length: 3 }, (_, index) => PREVIEW_SOURCE_SETS[(seed + index) % PREVIEW_SOURCE_SETS.length])
+    .map(([title, url], index) => ({
     domain: new URL(url).hostname.replace(/^www\./, ""),
     id: `preview-source-${seed}-${index}`,
-    snippet: "FT中文网独家深度观察与全球市场分析；桌面版会实时获取全量新闻源并精准提炼正文摘要。",
+    snippet: "来自权威媒体与官方机构的公开报道；桌面版会通过 Serper News 实时检索并综合原始来源。",
     title,
     url,
-  }));
+    }));
 }
 
 function makePreviewStory({ headline, id, index, region, summary, topicId, topicLabel }) {
@@ -61,12 +69,12 @@ const PREVIEW_TOPIC_CONTENT = [
     label: "科学与技术",
     weight: 0.17,
     headlines: [
-      "FT深度：大模型推理成本年内下降50%，智能体AI加速落地",
+      "大模型推理成本持续下降，智能体应用加速进入产业场景",
       "量子计算与经典超级计算机混合架构在科研领域取得新突破",
       "开源大模型生态蓬勃发展，挑战传统封闭商业模型垄断",
     ],
     summaries: [
-      "FT技术专栏分析指出，随着神经网络专用芯片架构升级与量化算法突破，AI 推理成本较去年同期大幅降低。越来越多的企业开始部署能够独立规划与执行工作流的 Agentic AI。",
+      "多家科技企业与研究机构的公开信息显示，随着专用芯片架构升级与量化算法突破，AI 推理成本持续下降。越来越多的企业开始部署能够独立规划与执行工作流的智能体应用。",
       "国际顶级实验室联合发布报告，展示了量子加速器在药物分子筛选与复杂材料模拟中的实际成果，标志着混合计算正走向实用化阶段。",
       "最新的全球开发者调查表明，高水平开源模型的性能提升正在缩小与顶级商业模型的差距，越来越多的企业选择部署自建安全模型。",
     ],
@@ -76,12 +84,12 @@ const PREVIEW_TOPIC_CONTENT = [
     label: "商业与金融",
     weight: 0.16,
     headlines: [
-      "FT独家：全球半导体与算力供应链迎来新一轮区域化整合",
+      "全球半导体与算力供应链迎来新一轮区域化整合",
       "美联储与欧洲央行降息预期重构全球资本流动格局",
       "跨境电商与数字服务成为亚洲市场出口增长新引擎",
     ],
     summaries: [
-      "根据 FT中文网 获得的最新行业数据，受多国补贴政策与地缘考量影响，全球半导体制造与高能耗 AI 数据中心正在加快区域化布局。企业开始更重视电力供给稳定性与供应链冗余。",
+      "多家权威媒体与行业机构的公开信息显示，受产业政策与供应链安全考量影响，全球半导体制造与高能耗 AI 数据中心正在加快区域化布局。企业开始更重视电力供给稳定性与供应链冗余。",
       "全球主要央行最新政策信号显示，利率走势的分化正引导国际资本重新流向新兴市场科技资产与债券市场。投资者正在密切评估企业盈利修复的实际节奏。",
       "亚洲主要经济体最新的贸易数据显示，云端软件、跨境电商与数字服务正在逐步替代传统制造业出口，成为推动区域经济回升的核心驱动力。",
     ],
@@ -119,7 +127,7 @@ const PREVIEW_TOPIC_CONTENT = [
     label: "艺术与文化",
     weight: 0.15,
     headlines: [
-      "FT文化观察：数字沉浸艺术与传统博物馆重塑全球公共文化空间",
+      "数字沉浸艺术与传统博物馆重塑全球公共文化空间",
       "跨国出版与影视制作展现新的全球化叙事与多元文化表达",
     ],
     summaries: [
@@ -149,18 +157,18 @@ export function createBriefPreviewEdition() {
       id: `${topic.id}-${index}`,
       index: topicIndex * 6 + index,
       region: topic.id === "domestic" ? "国内" : "国际",
-      summary: topic.summaries[index] || "根据 FT中文网 深度报道，全球市场与科技产业正经历深层次调整。",
+      summary: topic.summaries[index] || "综合多家权威来源的公开报道，全球市场与科技产业正经历深层次调整。",
       topicId: topic.id,
       topicLabel: topic.label,
     })),
   );
   const frontStories = [
     makePreviewStory({
-      headline: "FT独家：全球半导体与算力供应链迎来新一轮区域化整合",
+      headline: "全球半导体与算力供应链迎来新一轮区域化整合",
       id: "front-lead",
       index: 0,
       region: "国际",
-      summary: "根据 FT中文网 获得的最新行业数据，受多国补贴政策与地缘考量影响，全球半导体制造与高能耗 AI 数据中心正在加快区域化布局。企业开始更重视电力供给稳定性与供应链冗余。",
+      summary: "多家权威媒体与行业机构的公开信息显示，受产业政策与供应链安全考量影响，全球半导体制造与高能耗 AI 数据中心正在加快区域化布局。企业开始更重视电力供给稳定性与供应链冗余。",
       topicId: "business-finance",
       topicLabel: "商业与金融",
     }),
@@ -174,11 +182,11 @@ export function createBriefPreviewEdition() {
       topicLabel: "国内重要新闻",
     }),
     makePreviewStory({
-      headline: "FT深度：大模型推理成本年内下降50%，智能体AI加速落地",
+      headline: "大模型推理成本持续下降，智能体应用加速进入产业场景",
       id: "front-world",
       index: 8,
       region: "国际",
-      summary: "FT技术专栏分析指出，随着神经网络专用芯片架构升级与量化算法突破，AI 推理成本较去年同期大幅降低。越来越多的企业开始部署能够独立规划与执行工作流的 Agentic AI。",
+      summary: "多家科技企业与研究机构的公开信息显示，随着专用芯片架构升级与量化算法突破，AI 推理成本持续下降。越来越多的企业开始部署能够独立规划与执行工作流的智能体应用。",
       topicId: "technology",
       topicLabel: "科学与技术",
     }),
@@ -251,9 +259,8 @@ function CitationText({ sources, text, onOpenSource }) {
 function StoryMeta({ story }) {
   return (
     <span className="brief-story-meta">
-      <span>{story.sources?.[0]?.domain || "Brizo source"}</span>
-      <span>{relativeTime(story.publishedAt)}</span>
-      <span>{story.region}</span>
+      <Clock size={14} />
+      <span>已发布 {relativeTime(story.publishedAt)}</span>
     </span>
   );
 }
@@ -340,8 +347,10 @@ function storyRank(story, edition, preferences) {
   const topicWeight = edition?.topics?.find((topic) => topic.id === story.topicId)?.weight || 0;
   const pinned = preferences?.pinnedTopicIds?.includes(story.topicId) ? 4 : 0;
   const reduced = preferences?.reducedTopicIds?.includes(story.topicId) ? -2 : 0;
+  const sourceAdapter = story.sources?.[0]?.sourceAdapter;
+  const professionalRetrieval = sourceAdapter === "serper-news" ? 1.5 : sourceAdapter === "bocha-news" ? 0.75 : 0;
   const freshness = Math.max(0, 1 - ((Date.now() - Date.parse(story.publishedAt || 0)) / 86_400_000)) * 0.2;
-  return pinned + reduced + topicWeight * 3 + (Number(story.score) || 0) + freshness;
+  return pinned + reduced + professionalRetrieval + topicWeight * 3 + (Number(story.score) || 0) + freshness;
 }
 
 function StorySources({ story }) {
@@ -350,7 +359,13 @@ function StorySources({ story }) {
     <div className="brief-stream-sources" aria-label={`${sources.length} 个来源`}>
       <span className="brief-source-stack" aria-hidden="true">
         {sources.slice(0, 3).map((source, index) => (
-          <i key={`${source.url || source.domain}-${index}`}>{(source.domain || source.title || "B").slice(0, 1).toUpperCase()}</i>
+          <img
+            alt=""
+            key={`${source.url || source.domain}-${index}`}
+            src={source.faviconUrl || `https://www.bing.com/favicon.ico?domain=${encodeURIComponent(source.domain || "")}`}
+            referrerPolicy="no-referrer"
+            onError={(event) => { event.currentTarget.hidden = true; }}
+          />
         ))}
       </span>
       <span>{sources.length || 1} 个来源</span>
@@ -359,6 +374,16 @@ function StorySources({ story }) {
 }
 
 function StreamStoryCard({ story, layout = "card", onOpenStory }) {
+  const storyFooter = (
+    <footer className="brief-stream-story-footer">
+      <StorySources story={story} />
+      {layout === "card" && <StoryMeta story={story} />}
+      <span className="brief-stream-story-actions" aria-hidden="true">
+        <Heart size={17} />
+        <DotsThree size={18} />
+      </span>
+    </footer>
+  );
   return (
     <article className={`brief-stream-story brief-stream-story-${layout}`}>
       <button type="button" onClick={() => onOpenStory(story)}>
@@ -367,9 +392,10 @@ function StreamStoryCard({ story, layout = "card", onOpenStory }) {
           <h2>{story.headline}</h2>
           {layout !== "card" && <StoryMeta story={story} />}
           <p>{storyExcerpt(story)}</p>
+          {layout === "lead" && storyFooter}
         </span>
       </button>
-      <StorySources story={story} />
+      {layout !== "lead" && storyFooter}
     </article>
   );
 }
@@ -475,7 +501,7 @@ function TopicPage({ edition, onOpenStory, page, pageNumber, onRefresh, refreshi
   );
 }
 
-function ReportOverlay({ loading, onClose, onOpenSource, report, story }) {
+function ReportOverlay({ loading, onClose, onOpenRelated, onOpenSource, relatedStories, report, story }) {
   useEffect(() => {
     const close = (event) => { if (event.key === "Escape") onClose(); };
     document.addEventListener("keydown", close);
@@ -489,31 +515,36 @@ function ReportOverlay({ loading, onClose, onOpenSource, report, story }) {
         <span>BRIZO · SHORT REPORT</span>
         <button className="brief-report-close" type="button" onClick={onClose} aria-label="关闭专报"><X size={16} /></button>
       </header>
-      {loading ? (
-        <div className="brief-report-loading">
-          <ArrowsClockwise className="is-spinning" size={22} />
-          <strong>正在交叉阅读来源并组织专报…</strong>
-          <p>已保存的报纸页会保持原位。</p>
-        </div>
-      ) : report?.status === "error" ? (
-        <div className="brief-report-error">
-          <h2>暂时无法生成专报</h2>
-          <p>{report.message}</p>
-          <button type="button" onClick={onClose}>返回本期</button>
-        </div>
-      ) : (
-        <article className="brief-report-paper">
+      <article className="brief-report-paper">
+          {loading && (
+            <div className="brief-report-live-status" role="status">
+              <ArrowsClockwise className="is-spinning" size={15} />
+              正在综合 {story.sources?.length || 1} 个来源，正文会自动更新
+            </div>
+          )}
+          {report?.status === "error" && (
+            <div className="brief-report-inline-error">综合正文暂时不可用：{report.message}</div>
+          )}
           <div className="brief-report-kicker">{story.region} · {story.topicLabel}</div>
           <h1>{report?.headline || story.headline}</h1>
+          <div className="brief-report-meta-row">
+            <StoryMeta story={story} />
+            <StorySources story={{ ...story, sources: report?.sources || story.sources }} />
+          </div>
           <p className="brief-report-lead">
-            <CitationText text={report?.lead || story.summary} sources={story.sources || []} onOpenSource={onOpenSource} />
+            <CitationText text={report?.lead || story.summary} sources={report?.sources || story.sources || []} onOpenSource={onOpenSource} />
           </p>
           <StoryImage className="brief-report-image" story={{ ...story, imageUrl: report?.imageUrl || story.imageUrl }} />
           <div className="brief-report-body is-article-body">
             {(report?.body || [report?.lead || story.summary]).map((text, index) => (
-              <p key={`${index}-${text.slice(0, 20)}`}>
-                <CitationText text={text} sources={story.sources || []} onOpenSource={onOpenSource} />
-              </p>
+              <div key={`${index}-${text.slice(0, 20)}`}>
+                <p>
+                  <CitationText text={text} sources={report?.sources || story.sources || []} onOpenSource={onOpenSource} />
+                </p>
+                {index === 1 && report?.images?.[1] && (
+                  <img className="brief-report-inline-image" src={report.images[1]} alt="" referrerPolicy="no-referrer" />
+                )}
+              </div>
             ))}
           </div>
           <section className="brief-report-sources">
@@ -527,8 +558,22 @@ function ReportOverlay({ loading, onClose, onOpenSource, report, story }) {
               </button>
             ))}
           </section>
+          <section className="brief-report-related">
+            <h2>相关新闻</h2>
+            <div>
+              {(report?.relatedStories || relatedStories || []).slice(0, 5).map((related) => (
+                <button key={storyKey(related)} type="button" onClick={() => onOpenRelated(related)}>
+                  <StoryImage story={related} />
+                  <span>
+                    <strong>{related.headline}</strong>
+                    <p>{storyExcerpt(related)}</p>
+                    <StoryMeta story={related} />
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
         </article>
-      )}
     </section>
   );
 }
@@ -667,7 +712,7 @@ export function BriefPage({
         lead: story.summary,
         body: [
           story.summary,
-          `根据 FT中文网 及其权威消息源的报道，${story.headline} 正引发全球产业界与资本市场的广泛讨论。多位资深分析人士认为，此项发展标志着该领域在技术突破、商业化落地以及监管合规方面迈出了关键一步。[1]`,
+          `根据上述权威来源的公开报道，${story.headline} 正引发产业界与相关机构的广泛讨论。多方信息显示，这项发展可能对技术演进、商业化落地与监管合规产生持续影响。[1]`,
           `在供应链与经营成本层面，企业正在面临多重结构性挑战。为了适应最新的竞争格局，业内领先的机构正在加快研发投入与产业布局重构，试图在保持效率的同时建立更高的安全防线。[2]`,
           `国际政策制定者与行业协会也相继对此发表看法，强调了透明度、数据合规以及跨区域协作的重要性。随之而来的监管新规将促使相关企业进一步规范治理体系。[3]`,
           `综合多方观察，未来半年内的市场表现与核心指标将成为检验这一趋势的关键。各方将持续关注后续的技术演进、战略并购及政策落地细节。[1][2]`,
@@ -684,6 +729,21 @@ export function BriefPage({
       setReportLoading(false);
     }
   };
+
+  const relatedStoriesForSelected = useMemo(() => {
+    if (!selectedStory) return [];
+    return rankedStories
+      .filter((story) => storyKey(story) !== storyKey(selectedStory) && story.imageUrl)
+      .map((story) => ({
+        ...story,
+        relatedScore: (story.topicId === selectedStory.topicId ? 1 : 0)
+          + (story.region === selectedStory.region ? 0.15 : 0),
+      }))
+      .sort((left, right) => right.relatedScore - left.relatedScore
+        || Date.parse(right.publishedAt || 0) - Date.parse(left.publishedAt || 0))
+      .slice(0, 5)
+      .map(({ relatedScore: _relatedScore, ...story }) => story);
+  }, [rankedStories, selectedStory]);
 
   const closeStory = () => {
     setSelectedStory(null);
@@ -761,7 +821,9 @@ export function BriefPage({
         <ReportOverlay
           loading={reportLoading}
           onClose={closeStory}
+          onOpenRelated={openStory}
           onOpenSource={onOpenSource}
+          relatedStories={relatedStoriesForSelected}
           report={report}
           story={selectedStory}
         />

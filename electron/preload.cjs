@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   syncBriefSignals: (payload) => ipcRenderer.invoke("bean-browser:brief-sync-signals", payload),
   captureScreenshot: (mode) => ipcRenderer.invoke("bean-browser:screenshot", mode),
   capturePreview: () => ipcRenderer.invoke("bean-browser:capture-preview"),
+  copyText: (text) => ipcRenderer.invoke("bean-browser:copy-text", text),
   closeTabView: (tabId) => ipcRenderer.invoke("bean-browser:close-tab-view", tabId),
   chooseDownloadDirectory: () => ipcRenderer.invoke("bean-browser:choose-download-directory"),
   forward: () => ipcRenderer.invoke("bean-browser:forward"),
@@ -22,6 +23,8 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   listDownloads: () => ipcRenderer.invoke("bean-browser:list-downloads"),
   listBookmarkSources: () =>
     ipcRenderer.invoke("bean-browser:list-bookmark-sources"),
+  resolveBookmarkFavicons: (bookmarks) =>
+    ipcRenderer.invoke("bean-browser:resolve-bookmark-favicons", bookmarks),
   listModelProviders: () => ipcRenderer.invoke("bean-browser:list-model-providers"),
   navigate: (input, tabId) => ipcRenderer.invoke("bean-browser:navigate", input, tabId),
   navigateImage: (input, tabId) =>
@@ -56,12 +59,20 @@ contextBridge.exposeInMainWorld("beanBrowser", {
     ipcRenderer.on("bean-browser:brief-edition-updated", listener);
     return () => ipcRenderer.removeListener("bean-browser:brief-edition-updated", listener);
   },
+  onSearchStream: (callback) => {
+    const listener = (_event, message) => callback(message);
+    ipcRenderer.on("bean-browser:search-stream", listener);
+    return () => ipcRenderer.removeListener("bean-browser:search-stream", listener);
+  },
   exportArticlePdf: () => ipcRenderer.invoke("bean-browser:export-article-pdf"),
+  exportSearchPdf: (payload) => ipcRenderer.invoke("bean-browser:export-search-pdf", payload),
   openIncognito: () => ipcRenderer.invoke("bean-browser:open-incognito"),
   print: () => ipcRenderer.invoke("bean-browser:print"),
   preconnect: (input) => ipcRenderer.invoke("bean-browser:preconnect", input),
   reload: () => ipcRenderer.invoke("bean-browser:reload"),
   saveModelProvider: (payload) => ipcRenderer.invoke("bean-browser:save-model-provider", payload),
+  startSearch: (payload) => ipcRenderer.invoke("bean-browser:start-search", payload),
+  cancelSearch: (searchId) => ipcRenderer.invoke("bean-browser:cancel-search", searchId),
   searchVane: (payload) => ipcRenderer.invoke("bean-browser:search-vane", payload),
   suggestQueries: (input) => ipcRenderer.invoke("bean-browser:suggest-queries", input),
   setDefaultModelProvider: (id) => ipcRenderer.invoke("bean-browser:set-default-model-provider", id),

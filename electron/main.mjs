@@ -10,18 +10,33 @@ import {
   screen,
   session,
   shell,
+  View,
   WebContentsView,
 } from "electron";
 import { createBriefService } from "./brief-service.mjs";
+import { createAnswerEngine } from "./search/answer-engine.mjs";
+import { createBochaClient } from "./search/bocha-client.mjs";
+import { createLegacyClient } from "./search/legacy-client.mjs";
+import { createLlmClient } from "./search/llm-client.mjs";
+import { makeResult } from "./search/normalize.mjs";
+import { createScrapeCache } from "./search/scrape-cache.mjs";
+import { createSearchService } from "./search/search-service.mjs";
+import { createSerperClient } from "./search/serper-client.mjs";
+import { isZhihuSource, languageForInput, matchesRequestedLanguage } from "../shared/search-text.mjs";
+import {
+  chooseFastModel,
+  createModelGuard,
+  normalizeModelApiUrl,
+  readAssistantMessage,
+  sortFastModels,
+  withKnownProviderDefaults,
+} from "./secret-store.mjs";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { promisify } from "node:util";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const execFileAsync = promisify(execFile);
 const rendererEntry = path.join(projectRoot, "dist", "client", "index.html");
 const preloadEntry = path.join(projectRoot, "electron", "preload.cjs");
 const browserPagePreloadEntry = path.join(projectRoot, "electron", "browser-page-preload.cjs");
@@ -31,18 +46,19 @@ const appIconPath = app.isPackaged
   ? path.join(process.resourcesPath, "icon.png")
   : path.join(projectRoot, "build", "icon.png");
 
-function findBundledRendererAsset(stem) {
+function findBundledRendererAsset(stem, extension = "png") {
   const assetsPath = path.join(projectRoot, "dist", "client", "assets");
   const escapedStem = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const assetPattern = new RegExp(`^${escapedStem}-[^.]+\\.png$`, "i");
+  const escapedExtension = extension.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const assetPattern = new RegExp(`^${escapedStem}-[^.]+\\.${escapedExtension}$`, "i");
   const filename = readdirSync(assetsPath).find((name) => assetPattern.test(name));
   if (!filename) throw new Error(`Bundled renderer asset was not found: ${stem}`);
   return path.join(assetsPath, filename);
 }
 
 const loadingLogoPath = app.isPackaged
-  ? findBundledRendererAsset("logo")
-  : path.join(projectRoot, "logo.png");
+  ? findBundledRendererAsset("hermes logo", "svg")
+  : path.join(projectRoot, "hermes logo.svg");
 const browserErrorBackgroundPath = app.isPackaged
   ? findBundledRendererAsset("404")
   : path.join(projectRoot, "404.png");
@@ -50,8 +66,15 @@ const shellSmokeTest = process.argv.includes("--smoke-test");
 const browserSmokeTest = process.argv.includes("--browser-smoke");
 const pdfSmokeTest = process.argv.includes("--pdf-smoke");
 const startupBenchmark = process.argv.includes("--startup-benchmark");
+const searchSmokeTest = process.argv.includes("--search-smoke");
+const configureSearchKeys = process.argv.includes("--configure-search-keys");
 const processStartedAt = Date.now();
-const headlessTest = shellSmokeTest || browserSmokeTest || pdfSmokeTest || startupBenchmark;
+const headlessTest = shellSmokeTest
+  || browserSmokeTest
+  || pdfSmokeTest
+  || startupBenchmark
+  || searchSmokeTest
+  || configureSearchKeys;
 const pdfSmokeUrl = process.env.BEAN_PDF_SMOKE_URL?.trim() || "";
 const pdfSmokeExpectedTitle = process.env.BEAN_PDF_EXPECTED_TITLE?.trim() || "";
 const pdfSmokeImage = `data:image/svg+xml,${encodeURIComponent(`
@@ -106,6 +129,9 @@ let mainWindow;
 let browserView;
 const browserViews = new Map();
 const browserTabSleepDelayMs = 10 * 60 * 1000;
+const browserContentBorderRadius = 12;
+const browserFrameInset = 2;
+const browserCornerMaskSize = browserContentBorderRadius + browserFrameInset;
 let browserBounds = { x: 0, y: 72, width: 800, height: 600 };
 let browserVisible = true;
 let browserError = "";
@@ -122,7 +148,6 @@ let exampleLoadingPageUrlPromise;
 let browserErrorPageActive = false;
 let browserSessionHandlersInstalled = false;
 let downloadRecords = [];
-let suggestionRegionPromise = Promise.resolve("GLOBAL");
 const searchSuggestionCache = new Map();
 let searchSuggestionCooldownUntil = 0;
 const SEARCH_SUGGESTION_CACHE_TTL = 5 * 60 * 1000;
@@ -137,6 +162,15 @@ const downloadThumbnailCacheLimit = 96;
 const incognitoContexts = new Map();
 const scrollbarCssKeys = new Map();
 const modelGuardPath = () => path.join(app.getPath("userData"), "model-guard.json");
+const modelGuard = createModelGuard({ storePath: modelGuardPath, safeStorage, env: process.env });
+const readModelGuardStore = modelGuard.readStore;
+const writeModelGuardStore = modelGuard.writeStore;
+const decryptModelKey = modelGuard.decryptKey;
+const sanitizeModelProviders = modelGuard.sanitizeProviders;
+const activeSearchControllers = new Map();
+const llmClient = createLlmClient({ resolveProvider: resolveBoundModelProvider });
+const briefSerperClient = createSerperClient({ getApiKey: () => modelGuard.readServiceKey("serper") });
+let scoutSearchService;
 const downloadStorePath = () => path.join(app.getPath("userData"), "downloads.json");
 const pageScrollbarCss = `
   * {
@@ -184,13 +218,21 @@ const briefService = createBriefService({
       mainWindow.webContents.send("bean-browser:brief-edition-updated", edition);
     }
   },
-  search: (query, options) => searchWebQuery(query, options),
+  search: {
+    serper: async (query, options = {}) => {
+      const response = await briefSerperClient.vertical("news", query, {
+        gl: options.gl || "cn",
+        hl: options.hl || "zh-cn",
+        num: options.count || 12,
+      });
+      return response.items || [];
+    },
+  },
   userDataPath: app.getPath("userData"),
 });
 
 let articlePdfModulePromise;
 let browserToolsModulePromise;
-let cheerioModulePromise;
 
 function loadArticlePdfModule() {
   articlePdfModulePromise ??= import("./article-pdf.mjs");
@@ -202,14 +244,40 @@ function loadBrowserToolsModule() {
   return browserToolsModulePromise;
 }
 
-function loadCheerioModule() {
-  cheerioModulePromise ??= import("cheerio");
-  return cheerioModulePromise;
-}
-
 function failTest(message) {
   console.error(`[desktop-test] ${message}`);
   app.exit(1);
+}
+
+function readOneJsonLineFromStdin(timeoutMs = 60_000) {
+  return new Promise((resolve, reject) => {
+    let buffer = "";
+    const wasRaw = Boolean(process.stdin.isRaw);
+    process.stdin.setRawMode?.(true);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      process.stdin.off("data", onData);
+      if (!wasRaw) process.stdin.setRawMode?.(false);
+    };
+    const onData = (chunk) => {
+      buffer += String(chunk || "");
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      cleanup();
+      try {
+        resolve(JSON.parse(buffer.slice(0, newline)));
+      } catch {
+        reject(new Error("输入格式无效。"));
+      }
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("等待凭据输入超时。"));
+    }, timeoutMs);
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", onData);
+    process.stdin.resume();
+  });
 }
 
 function normalizeBrowserInput(input) {
@@ -313,31 +381,32 @@ function createWebContextMenuPageUrl(items, ariaLabel) {
         <style>
           ${menuTypographyCss()}
           * { box-sizing: border-box; }
-          html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+          html, body { width: max-content; min-width: 0; height: 100%; margin: 0; overflow: hidden; background: transparent; }
           body {
             color: #283029;
             font-family: "Brizo Menu Latin", "Source Han Serif SC VF", "Source Han Serif SC", "思源宋体 VF", "思源宋体", serif;
             -webkit-font-smoothing: antialiased;
           }
           main {
+            width: max-content;
             height: 100%;
             padding: 5px;
             border: 0;
-            border-radius: 10px;
+            border-radius: 5px;
             background: #fdfefc;
             transform-origin: top left;
             animation: image-menu-reveal 180ms cubic-bezier(.2, .82, .24, 1) both;
           }
-          a { height: 30px; padding: 0 10px; display: flex; align-items: center; border-radius: 6px; color: inherit; font-size: 13px; font-weight: 400; text-decoration: none; }
+          a { height: 30px; padding: 0 10px; display: flex; align-items: center; border-radius: 3px; color: inherit; font-size: 13px; font-weight: 400; text-decoration: none; white-space: nowrap; }
           a:hover, a:focus-visible { outline: none; background: #eef1ed; }
           .separator { height: 1px; margin: 4px 5px; display: block; background: #e4e7e3; }
           @keyframes image-menu-reveal {
             from {
-              clip-path: inset(0 100% 100% 0 round 10px);
+              clip-path: inset(0 100% 100% 0 round 5px);
               transform: scale(.82);
             }
             to {
-              clip-path: inset(0 0 0 0 round 10px);
+              clip-path: inset(0 0 0 0 round 5px);
               transform: scale(1);
             }
           }
@@ -353,7 +422,7 @@ function createWebContextMenuPageUrl(items, ariaLabel) {
 
 function showWebContextMenu({ actions, ariaLabel, items, params, window }) {
   webContextMenuWindow?.close();
-  const width = 222;
+  const initialWidth = 360;
   const separatorCount = items.filter((item) => item.separatorBefore).length;
   const height = items.length * 30 + separatorCount * 9 + 16;
   const parentBounds = window.getContentBounds();
@@ -364,9 +433,9 @@ function showWebContextMenu({ actions, ariaLabel, items, params, window }) {
   const workArea = screen.getDisplayNearestPoint(point).workArea;
   const popup = new BrowserWindow({
     parent: window,
-    width,
+    width: initialWidth,
     height,
-    x: Math.min(Math.max(point.x, workArea.x + 8), workArea.x + workArea.width - width - 8),
+    x: Math.min(Math.max(point.x, workArea.x + 8), workArea.x + workArea.width - initialWidth - 8),
     y: Math.min(Math.max(point.y, workArea.y + 8), workArea.y + workArea.height - height - 8),
     frame: false,
     hasShadow: false,
@@ -400,7 +469,19 @@ function showWebContextMenu({ actions, ariaLabel, items, params, window }) {
     if (webContextMenuWindow === popup) webContextMenuWindow = undefined;
   });
   popup.loadURL(createWebContextMenuPageUrl(items, ariaLabel))
-    .then(() => popup.show())
+    .then(async () => {
+      const measuredWidth = await popup.webContents.executeJavaScript(
+        'Math.ceil(document.querySelector("main")?.scrollWidth || document.body.scrollWidth || 0)',
+      );
+      const width = Math.min(360, Math.max(96, Number(measuredWidth) || 96));
+      popup.setBounds({
+        x: Math.min(Math.max(point.x, workArea.x + 8), workArea.x + workArea.width - width - 8),
+        y: Math.min(Math.max(point.y, workArea.y + 8), workArea.y + workArea.height - height - 8),
+        width,
+        height,
+      });
+      popup.show();
+    })
     .catch(() => popup.close());
 }
 
@@ -918,7 +999,7 @@ function isExampleLoadingUrl(url) {
 function getExampleLoadingPageUrl() {
   if (!exampleLoadingPageUrlPromise) {
     exampleLoadingPageUrlPromise = readFile(loadingLogoPath).then((logo) => {
-      const logoDataUrl = `data:image/png;base64,${logo.toString("base64")}`;
+      const logoDataUrl = `data:image/svg+xml;base64,${logo.toString("base64")}`;
       const html = `<!doctype html>
         <html lang="zh-CN">
           <head>
@@ -971,7 +1052,7 @@ async function writeBrowserErrorPage(failure) {
     readFile(loadingLogoPath),
     readFile(browserErrorBackgroundPath),
   ]);
-  const logoUrl = `data:image/png;base64,${logo.toString("base64")}`;
+  const logoUrl = `data:image/svg+xml;base64,${logo.toString("base64")}`;
   const backgroundUrl = `data:image/png;base64,${background.toString("base64")}`;
   const html = `<!doctype html>
     <html lang="zh-CN">
@@ -1020,8 +1101,18 @@ function clearBrowserNavigationTimeout(view = browserView) {
   if (view) view.__brizoNavigationTimeout = undefined;
 }
 
+function getLiveViewWebContents(view) {
+  try {
+    const webContents = view?.webContents;
+    return webContents && !webContents.isDestroyed() ? webContents : null;
+  } catch {
+    return null;
+  }
+}
+
 async function showBrowserErrorPage(details = {}) {
-  if (!browserView || browserView.webContents.isDestroyed() || browserErrorPageActive) return;
+  const activeWebContents = getLiveViewWebContents(browserView);
+  if (!activeWebContents || browserErrorPageActive) return;
   const errorView = browserView;
   browserErrorPageActive = true;
   errorView.__brizoErrorPageActive = true;
@@ -1038,8 +1129,9 @@ async function showBrowserErrorPage(details = {}) {
   publishBrowserState();
   try {
     const pagePath = await writeBrowserErrorPage(failure);
-    if (!errorView.__brizoErrorPageActive || errorView.webContents.isDestroyed()) return;
-    await errorView.webContents.loadFile(pagePath);
+    const errorWebContents = getLiveViewWebContents(errorView);
+    if (!errorView.__brizoErrorPageActive || !errorWebContents) return;
+    await errorWebContents.loadFile(pagePath);
     errorView.__brizoDisplayUrl = originalUrl;
     errorView.__brizoError = `${failure[0]} · ${failure[1]}`;
     errorView.__brizoBackgroundColor = "#ffffff";
@@ -1100,12 +1192,15 @@ async function installPageScrollbarBehavior(webContents) {
 }
 
 function getBrowserState() {
-  if (!browserView || browserView.webContents.isDestroyed()) {
+  const webContents = getLiveViewWebContents(browserView);
+  if (!webContents) {
     return {
       canGoBack: false,
       canGoForward: false,
       error: browserError,
+      isContentReady: false,
       isLoading: false,
+      navigationPreview: "",
       pageBackgroundColor,
       pageFaviconUrl,
       title: "",
@@ -1115,7 +1210,6 @@ function getBrowserState() {
     };
   }
 
-  const { webContents } = browserView;
   const { navigationHistory } = webContents;
   const displayUrl = isInternalBrowserErrorUrl(browserDisplayUrl)
     ? browserView.__brizoRequestedUrl || ""
@@ -1127,7 +1221,11 @@ function getBrowserState() {
     canGoBack: navigationHistory.canGoBack(),
     canGoForward: navigationHistory.canGoForward(),
     error: browserError,
-    isLoading: webContents.isLoading(),
+    isContentReady: Boolean(browserView.__brizoContentReady),
+    // UI progress tracks the incoming document becoming paint-ready, not every
+    // late analytics/image request a site may keep open indefinitely.
+    isLoading: Boolean(browserView.__brizoNavigationPending),
+    navigationPreview: browserView.__brizoNavigationPreview || "",
     pageBackgroundColor,
     pageFaviconUrl,
     title: webContents.getTitle(),
@@ -1149,10 +1247,10 @@ function publishBrowserActivation() {
 }
 
 async function updatePageBackgroundColor() {
-  if (!browserView || browserView.webContents.isDestroyed()) return;
+  const sampledWebContents = getLiveViewWebContents(browserView);
+  if (!sampledWebContents) return;
 
   const sampledView = browserView;
-  const sampledWebContents = sampledView.webContents;
   const sampledGeneration = browserNavigationGeneration;
   const sampledOwnerTabId = browserOwnerTabId;
   const sampledDocumentUrl = sampledWebContents.getURL();
@@ -1217,12 +1315,249 @@ async function updatePageBackgroundColor() {
 
 function setBrowserViewVisible(visible) {
   browserVisible = Boolean(visible);
-  for (const view of browserViews.values()) {
-    if (view.webContents.isDestroyed()) continue;
-    const isActive = view === browserView && browserVisible;
-    view.webContents.setBackgroundThrottling(!isActive);
-    view.setBounds(isActive ? browserBounds : { x: 0, y: 0, width: 0, height: 0 });
+  for (const [tabId, view] of browserViews) {
+    const webContents = getLiveViewWebContents(view);
+    if (!webContents) {
+      browserViews.delete(tabId);
+      if (browserView === view) {
+        browserView = undefined;
+        browserOwnerTabId = "";
+      }
+      continue;
+    }
+    const isSelected = view === browserView && browserVisible;
+    const isPaintReady = isSelected && Boolean(view.__brizoContentReady);
+    const isPreparingReplacement = view === browserView
+      && browserVisible
+      && Boolean(view.__brizoNavigationPending);
+    const frameView = view.__brizoFrameView;
+    const cornerMaskViews = view.__brizoCornerMaskViews || [];
+    const frameTopOverlap = Math.min(browserContentBorderRadius, browserBounds.y);
+    // The incoming native view keeps its real viewport while a separate native
+    // snapshot view covers it, so Chromium can continue composing full frames.
+    webContents.setBackgroundThrottling(!(isSelected || (browserVisible && view.__brizoNavigationPending)));
+    if (isPaintReady || isPreparingReplacement) {
+      frameView?.setBounds({
+        x: Math.max(0, browserBounds.x - browserFrameInset),
+        y: browserBounds.y - frameTopOverlap,
+        width: browserBounds.width + browserFrameInset * 2,
+        height: browserBounds.height + frameTopOverlap + browserFrameInset,
+      });
+      view.setBounds({
+        x: browserFrameInset,
+        y: frameTopOverlap,
+        width: browserBounds.width,
+        height: browserBounds.height,
+      });
+      const frameWidth = browserBounds.width + browserFrameInset * 2;
+      const cornerMaskY = frameTopOverlap + browserBounds.height - browserContentBorderRadius;
+      cornerMaskViews[0]?.setBounds({
+        x: 0,
+        y: cornerMaskY,
+        width: browserCornerMaskSize,
+        height: browserCornerMaskSize,
+      });
+      cornerMaskViews[1]?.setBounds({
+        x: Math.max(0, frameWidth - browserCornerMaskSize),
+        y: cornerMaskY,
+        width: browserCornerMaskSize,
+        height: browserCornerMaskSize,
+      });
+    } else {
+      frameView?.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+      view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+      for (const maskView of cornerMaskViews) {
+        maskView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+      }
+    }
+    const snapshotVisible = isPreparingReplacement
+      && Boolean(view.__brizoNavigationPreview)
+      && Boolean(view.__brizoSnapshotReady);
+    view.__brizoSnapshotView?.setBounds(snapshotVisible
+      ? {
+          x: browserFrameInset,
+          y: frameTopOverlap,
+          width: browserBounds.width,
+          height: browserBounds.height,
+        }
+      : { x: 0, y: 0, width: 0, height: 0 });
   }
+}
+
+function meaningfulPaintPreview(image) {
+  if (!image || image.isEmpty()) return "";
+  try {
+    const bitmap = image.resize({ width: 64, height: 64, quality: "good" }).toBitmap();
+    let paintedSamples = 0;
+    for (let offset = 0; offset + 3 < bitmap.length; offset += 4) {
+      const blue = bitmap[offset];
+      const green = bitmap[offset + 1];
+      const red = bitmap[offset + 2];
+      const alpha = bitmap[offset + 3];
+      if (alpha > 20 && (red < 245 || green < 245 || blue < 245)) paintedSamples += 1;
+      if (paintedSamples >= 2) return image.toDataURL();
+    }
+  } catch {
+    return "";
+  }
+  return "";
+}
+
+function createBrowserCornerMask(side) {
+  const maskView = new WebContentsView({
+    webPreferences: {
+      backgroundThrottling: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  const curve = side === "left"
+    ? "M .75 .75 L 0 .75 L 0 14 L 14 14 L 14 13.25 L 13.25 13.25 C 6.623 13.25 .75 7.377 .75 .75 Z"
+    : "M 13.25 .75 L 14 .75 L 14 14 L 0 14 L 0 13.25 L .75 13.25 C 7.377 13.25 13.25 7.377 13.25 .75 Z";
+  const html = `<!doctype html>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+    <style>html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent}svg{display:block;width:100%;height:100%}</style>
+    <svg viewBox="0 0 14 14" preserveAspectRatio="none" aria-hidden="true">
+      <path d="${curve}" fill="rgba(250,249,246,0.25)"/>
+    </svg>`;
+  maskView.setBackgroundColor("#00000000");
+  maskView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  maskView.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => {});
+  return maskView;
+}
+
+async function prepareBrowserSnapshotOverlay(view, preview) {
+  const overlayWebContents = getLiveViewWebContents(view?.__brizoSnapshotView);
+  if (!overlayWebContents || !preview) return false;
+  if (view.__brizoSnapshotPreview === preview && view.__brizoSnapshotReady) return true;
+  view.__brizoSnapshotPreview = preview;
+  view.__brizoSnapshotReady = false;
+  const html = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:"><style>html,body,img{margin:0;width:100%;height:100%;overflow:hidden}body{background:#fff}img{display:block;object-fit:fill}</style><img src="${preview}" alt="">`;
+  try {
+    await overlayWebContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    if (view.__brizoSnapshotPreview !== preview || overlayWebContents.isDestroyed()) return false;
+    view.__brizoSnapshotReady = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function captureMeaningfulPreview(webContents) {
+  if (!webContents || webContents.isDestroyed()) return "";
+  try {
+    return meaningfulPaintPreview(await webContents.capturePage());
+  } catch {
+    return "";
+  }
+}
+
+function revealBrowserViewAfterFirstFrame(view, navigationGeneration) {
+  const webContents = getLiveViewWebContents(view);
+  if (!webContents) return;
+  if (view.__brizoRevealGeneration === navigationGeneration) return;
+  view.__brizoRevealGeneration = navigationGeneration;
+  const waitForMeaningfulPaint = async () => {
+    const deadline = Date.now() + 4_000;
+    while (!webContents.isDestroyed() && Date.now() < deadline) {
+      const preview = await captureMeaningfulPreview(webContents);
+      if (preview) return preview;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+    }
+    return "";
+  };
+  // Verify actual incoming pixels instead of treating DOM readiness or a fixed
+  // delay as visual readiness. A timeout keeps the outgoing frame visible and
+  // routes to Brizo's error page rather than exposing an empty white canvas.
+  waitForMeaningfulPaint().then(async (paintPreview) => {
+    if (!paintPreview) return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        await mainWindow.webContents.executeJavaScript(`
+          new Promise((resolve) => requestAnimationFrame(resolve))
+        `);
+      } catch {
+        // The shell may be closing while a navigation settles.
+      }
+    }
+    if (
+      webContents.isDestroyed()
+      || view.__brizoNavigationGeneration !== navigationGeneration
+    ) return;
+    view.__brizoLastPaintPreview = paintPreview;
+    await prepareBrowserSnapshotOverlay(view, paintPreview);
+    if (
+      webContents.isDestroyed()
+      || view.__brizoNavigationGeneration !== navigationGeneration
+    ) return;
+    view.__brizoContentReady = true;
+    view.__brizoNavigationPending = false;
+    view.__brizoNavigationPreview = "";
+    if (browserView !== view) return;
+    setBrowserViewVisible(browserVisible);
+    publishBrowserState();
+  }).finally(() => {
+    if (
+      webContents.isDestroyed()
+      || view.__brizoNavigationGeneration !== navigationGeneration
+      || view.__brizoContentReady
+      || view.__brizoErrorPageActive
+    ) return;
+    if (browserView === view) {
+      void showBrowserErrorPage({
+        errorCode: -118,
+        url: view.__brizoRequestedUrl || view.__brizoDisplayUrl || webContents.getURL(),
+      });
+    } else {
+      view.__brizoError = "TIMEOUT · 页面长时间没有产生有效画面";
+    }
+  });
+}
+
+function beginBrowserNavigation(view, action) {
+  const webContents = getLiveViewWebContents(view);
+  if (!webContents) return false;
+  const requestGeneration = (view.__brizoNavigationRequestGeneration || 0) + 1;
+  view.__brizoNavigationRequestGeneration = requestGeneration;
+  view.__brizoNavigationPending = true;
+  if (browserView === view) publishBrowserState();
+
+  void (async () => {
+    let preview = view.__brizoNavigationPreview || view.__brizoLastPaintPreview || "";
+    if (view.__brizoContentReady && webContents.getURL()) {
+      preview = await captureMeaningfulPreview(webContents) || preview;
+    }
+    if (
+      webContents.isDestroyed()
+      || view.__brizoNavigationRequestGeneration !== requestGeneration
+    ) return;
+    view.__brizoNavigationPreview = preview;
+    if (preview) view.__brizoLastPaintPreview = preview;
+    view.__brizoContentReady = false;
+    if (browserView === view) publishBrowserState();
+    if (preview) await prepareBrowserSnapshotOverlay(view, preview);
+    if (preview && mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        // Let React paint the frozen outgoing frame underneath the still-visible
+        // native page before removing that native layer. This closes the single
+        // compositor-frame gap that would otherwise flash the host background.
+        await mainWindow.webContents.executeJavaScript(`
+          new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+        `);
+      } catch {
+        // Continue navigation if the shell is closing or temporarily unavailable.
+      }
+    }
+    if (
+      webContents.isDestroyed()
+      || view.__brizoNavigationRequestGeneration !== requestGeneration
+    ) return;
+    setBrowserViewVisible(browserVisible);
+    action();
+  })();
+  return true;
 }
 
 function activateBrowserView(view, ownerTabId) {
@@ -1241,9 +1576,10 @@ function activateBrowserView(view, ownerTabId) {
   for (const [tabId, backgroundView] of browserViews) {
     if (backgroundView === view || backgroundView.__brizoSleepTimer) continue;
     backgroundView.__brizoSleepTimer = setTimeout(() => {
-      if (browserView === backgroundView || backgroundView.webContents.isDestroyed()) return;
+      const backgroundWebContents = getLiveViewWebContents(backgroundView);
+      if (browserView === backgroundView || !backgroundWebContents) return;
       browserViews.delete(tabId);
-      backgroundView.webContents.close();
+      backgroundWebContents.close();
     }, browserTabSleepDelayMs);
   }
   publishBrowserState();
@@ -1252,10 +1588,12 @@ function activateBrowserView(view, ownerTabId) {
 function ensureBrowserView(ownerTabId) {
   const tabId = typeof ownerTabId === "string" && ownerTabId ? ownerTabId : "__default__";
   let view = browserViews.get(tabId);
-  if (!view || view.webContents.isDestroyed()) {
+  if (!getLiveViewWebContents(view)) {
+    browserViews.delete(tabId);
     view = createBrowserView(mainWindow, tabId);
     browserViews.set(tabId, view);
   }
+  view.__brizoOwnerTabId = tabId;
   activateBrowserView(view, tabId);
   return view;
 }
@@ -1298,26 +1636,27 @@ function navigateBrowserUrl(url, ownerTabId) {
   if (typeof ownerTabId === "string" && ownerTabId) browserOwnerTabId = ownerTabId;
   browserNavigationGeneration += 1;
   browserError = "";
-  pageBackgroundColor = "#ffffff";
   pageFaviconUrl = "";
   browserDisplayUrl = url;
   targetView.__brizoDisplayUrl = url;
   targetView.__brizoRequestedUrl = url;
   targetView.__brizoError = "";
   targetView.__brizoErrorPageActive = false;
-  publishBrowserState();
-  targetView.__brizoNavigationTimeout = setTimeout(() => {
-    if (targetView.webContents.isDestroyed() || targetView.__brizoErrorPageActive) return;
-    targetView.webContents.stop();
-    if (browserView === targetView) void showBrowserErrorPage({ errorCode: -118, url });
-    else targetView.__brizoError = "TIMEOUT · 连接超时";
-  }, 20_000);
-  loadBrowserUrl(targetView.webContents, url).catch(() => {
-    if (browserView === targetView && !targetView.__brizoErrorPageActive) {
-      void showBrowserErrorPage({ url });
-    }
+  return beginBrowserNavigation(targetView, () => {
+    const targetWebContents = getLiveViewWebContents(targetView);
+    if (!targetWebContents) return;
+    targetView.__brizoNavigationTimeout = setTimeout(() => {
+      if (targetWebContents.isDestroyed() || targetView.__brizoErrorPageActive) return;
+      targetWebContents.stop();
+      if (browserView === targetView) void showBrowserErrorPage({ errorCode: -118, url });
+      else targetView.__brizoError = "TIMEOUT · 连接超时";
+    }, 20_000);
+    loadBrowserUrl(targetWebContents, url).catch(() => {
+      if (browserView === targetView && !targetView.__brizoErrorPageActive) {
+        void showBrowserErrorPage({ url });
+      }
+    });
   });
-  return true;
 }
 
 function createIncognitoWindow(input, { show = !headlessTest } = {}) {
@@ -1367,14 +1706,15 @@ function createIncognitoWindow(input, { show = !headlessTest } = {}) {
     });
   };
   const publishState = () => {
-    if (window.isDestroyed() || view.webContents.isDestroyed()) return;
-    const { navigationHistory } = view.webContents;
+    const webContents = getLiveViewWebContents(view);
+    if (window.isDestroyed() || !webContents) return;
+    const { navigationHistory } = webContents;
     window.webContents.send("bean-incognito:state", {
       canGoBack: navigationHistory.canGoBack(),
       canGoForward: navigationHistory.canGoForward(),
-      isLoading: view.webContents.isLoading(),
-      title: view.webContents.getTitle(),
-      url: view.webContents.getURL(),
+      isLoading: webContents.isLoading(),
+      title: webContents.getTitle(),
+      url: webContents.getURL(),
     });
   };
   const navigate = (value) => {
@@ -1419,7 +1759,7 @@ function createIncognitoWindow(input, { show = !headlessTest } = {}) {
   });
   window.on("closed", () => {
     incognitoContexts.delete(shellWebContentsId);
-    if (!view.webContents.isDestroyed()) view.webContents.close();
+    getLiveViewWebContents(view)?.close();
   });
   window.webContents.once("did-finish-load", publishState);
   window.loadFile(incognitoEntry);
@@ -1429,6 +1769,7 @@ function createIncognitoWindow(input, { show = !headlessTest } = {}) {
 }
 
 function createBrowserView(window, ownerTabId = "__default__") {
+  const frameView = new View();
   const view = new WebContentsView({
     webPreferences: {
       contextIsolation: true,
@@ -1448,10 +1789,60 @@ function createBrowserView(window, ownerTabId = "__default__") {
   view.__brizoBackgroundColor = "#ffffff";
   view.__brizoFaviconUrl = "";
   view.__brizoErrorPageActive = false;
+  view.__brizoContentReady = false;
+  view.__brizoNavigationGeneration = 0;
+  view.__brizoNavigationPending = false;
+  view.__brizoNavigationPreview = "";
+  view.__brizoLastPaintPreview = "";
+  view.__brizoNavigationRequestGeneration = 0;
+  view.__brizoRevealGeneration = -1;
+  view.__brizoSnapshotPreview = "";
+  view.__brizoSnapshotReady = false;
+  view.__brizoOwnerTabId = ownerTabId;
   view.__brizoSleepTimer = undefined;
-  const viewWebContentsId = view.webContents.id;
-  view.webContents.once("destroyed", () => scrollbarCssKeys.delete(viewWebContentsId));
-  window.contentView.addChildView(view);
+  view.__brizoFrameView = frameView;
+  view.__brizoCornerMaskViews = [];
+  const createdWebContents = view.webContents;
+  const viewWebContentsId = createdWebContents.id;
+  createdWebContents.once("destroyed", () => {
+    scrollbarCssKeys.delete(viewWebContentsId);
+    for (const [tabId, candidate] of browserViews) {
+      if (candidate === view) browserViews.delete(tabId);
+    }
+    if (browserView === view) {
+      browserView = undefined;
+      browserOwnerTabId = "";
+      browserDisplayUrl = "";
+      browserError = "";
+      pageFaviconUrl = "";
+    }
+    const snapshotView = view.__brizoSnapshotView;
+    const snapshotWebContents = getLiveViewWebContents(snapshotView);
+    try { window.contentView.removeChildView(frameView); } catch {}
+    snapshotWebContents?.close();
+    for (const maskView of view.__brizoCornerMaskViews || []) {
+      getLiveViewWebContents(maskView)?.close();
+    }
+  });
+  frameView.setBackgroundColor("#00000000");
+  frameView.setBorderRadius(browserContentBorderRadius);
+  window.contentView.addChildView(frameView);
+  frameView.addChildView(view);
+  const snapshotView = new WebContentsView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      backgroundThrottling: false,
+    },
+  });
+  snapshotView.setBackgroundColor("#ffffff");
+  snapshotView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  frameView.addChildView(snapshotView);
+  view.__brizoSnapshotView = snapshotView;
+  const cornerMaskViews = [createBrowserCornerMask("left"), createBrowserCornerMask("right")];
+  for (const maskView of cornerMaskViews) frameView.addChildView(maskView);
+  view.__brizoCornerMaskViews = cornerMaskViews;
   view.setBackgroundColor("#ffffff");
   setBrowserViewVisible(browserVisible);
 
@@ -1461,7 +1852,7 @@ function createBrowserView(window, ownerTabId = "__default__") {
     browserSession.on("will-download", (_event, item) => trackDownload(item));
     const findRequestView = (webContentsId) =>
       [...browserViews.values()].find((candidate) =>
-        !candidate.webContents.isDestroyed() && candidate.webContents.id === webContentsId,
+        getLiveViewWebContents(candidate)?.id === webContentsId,
       );
     browserSession.webRequest.onCompleted(
       { urls: ["http://*/*", "https://*/*"] },
@@ -1516,15 +1907,33 @@ function createBrowserView(window, ownerTabId = "__default__") {
   });
   view.webContents.on("did-start-navigation", (_event, _url, isSameDocument, isMainFrame) => {
     if (!isMainFrame || isSameDocument) return;
+    view.__brizoNavigationGeneration += 1;
+    view.__brizoRevealGeneration = -1;
+    // Toolbar/history navigation has already installed a frozen outgoing frame.
+    // Site links, script reloads and redirects reuse the last verified painted
+    // frame so every main-frame transition follows the same no-white-screen path.
+    if (!view.__brizoNavigationPending) {
+      view.__brizoNavigationPending = true;
+      view.__brizoNavigationPreview = view.__brizoNavigationPreview
+        || view.__brizoLastPaintPreview
+        || "";
+      view.__brizoContentReady = false;
+      if (browserView === view) setBrowserViewVisible(browserVisible);
+    }
     if (browserView !== view) return;
     browserNavigationGeneration += 1;
     if (!browserErrorPageActive) browserError = "";
-    pageBackgroundColor = "#ffffff";
     pageFaviconUrl = "";
     publishBrowserState();
   });
+  view.webContents.on("dom-ready", () => {
+    revealBrowserViewAfterFirstFrame(view, view.__brizoNavigationGeneration);
+  });
   view.webContents.on("did-finish-load", () => {
     clearBrowserNavigationTimeout(view);
+    if (!view.__brizoContentReady) {
+      revealBrowserViewAfterFirstFrame(view, view.__brizoNavigationGeneration);
+    }
     installPageScrollbarBehavior(view.webContents).catch((error) => {
       console.error("[scrollbars]", error instanceof Error ? error.message : String(error));
     });
@@ -1594,7 +2003,7 @@ function createBrowserView(window, ownerTabId = "__default__") {
     },
   );
 
-  if (browserSmokeTest) {
+  if (browserSmokeTest && ownerTabId === "__smoke__") {
     const timeout = setTimeout(() => failTest("external page load timed out"), 20_000);
     view.webContents.once("did-finish-load", async () => {
       clearTimeout(timeout);
@@ -1737,11 +2146,23 @@ function createBrowserView(window, ownerTabId = "__default__") {
         };
         const retainedUrl = `data:text/html;charset=utf-8,${encodeURIComponent("<title>Retained A</title><main>state</main>")}`;
         const secondUrl = `data:text/html;charset=utf-8,${encodeURIComponent("<title>Retained B</title><main>other</main>")}`;
+        setBrowserViewVisible(true);
         navigateBrowserUrl(retainedUrl, "retention-a");
         const retainedView = browserViews.get("retention-a");
+        result.navigationWaitsForFirstFrame =
+          retainedView.__brizoNavigationPending === true
+          && retainedView.__brizoContentReady === false;
         if (retainedView.webContents.isLoading()) {
           await new Promise((resolve) => retainedView.webContents.once("did-finish-load", resolve));
         }
+        for (let attempt = 0; attempt < 25 && !retainedView.__brizoContentReady; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 40));
+        }
+        setBrowserViewVisible(true);
+        result.navigationViewRevealedAfterFirstFrame =
+          retainedView.__brizoContentReady === true
+          && retainedView.getBounds().width > 0
+          && retainedView.getBounds().height > 0;
         await retainedView.webContents.executeJavaScript("window.__brizoRetainedState = 47");
         navigateBrowserUrl(secondUrl, "retention-b");
         const secondView = browserViews.get("retention-b");
@@ -1753,6 +2174,28 @@ function createBrowserView(window, ownerTabId = "__default__") {
           await retainedView.webContents.executeJavaScript("window.__brizoRetainedState === 47");
         result.multiTabViewCount = ["retention-a", "retention-b"]
           .filter((tabId) => browserViews.has(tabId)).length;
+        const retainedPreview = await captureMeaningfulPreview(retainedView.webContents);
+        retainedView.__brizoLastPaintPreview = retainedPreview;
+        retainedView.__brizoNavigationPreview = retainedPreview;
+        retainedView.__brizoContentReady = false;
+        retainedView.__brizoNavigationPending = true;
+        beginBrowserNavigation(retainedView, () => {});
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        result.repeatedNavigationKeepsLastPaint = Boolean(retainedPreview)
+          && retainedView.__brizoNavigationPreview === retainedPreview;
+        setBrowserViewVisible(true);
+        const pendingBounds = retainedView.getBounds();
+        const snapshotBounds = retainedView.__brizoSnapshotView.getBounds();
+        result.pendingNavigationKeepsFullPaintBounds =
+          pendingBounds.width === browserBounds.width
+          && pendingBounds.height === browserBounds.height
+          && pendingBounds.x === browserFrameInset
+          && snapshotBounds.width === browserBounds.width
+          && snapshotBounds.height === browserBounds.height;
+        retainedView.__brizoNavigationPending = false;
+        retainedView.__brizoContentReady = true;
+        retainedView.__brizoNavigationPreview = "";
+        setBrowserViewVisible(true);
         const failedUrl = "https://does-not-resolve.invalid/test";
         await showBrowserErrorPage({ errorCode: -105, url: failedUrl });
         const errorState = getBrowserState();
@@ -1767,6 +2210,18 @@ function createBrowserView(window, ownerTabId = "__default__") {
             return Boolean(logo && logo.complete && logo.naturalWidth > 0);
           })()
         `);
+        const staleView = createBrowserView(mainWindow, "destroyed-view-fixture");
+        browserViews.set("destroyed-view-fixture", staleView);
+        const staleWebContents = staleView.webContents;
+        await new Promise((resolve) => {
+          staleWebContents.once("destroyed", resolve);
+          staleWebContents.close();
+        });
+        // Recreate the exact stale-Map condition that previously crashed when
+        // selecting a Scout search tab and publishing new browser bounds.
+        browserViews.set("destroyed-view-fixture", staleView);
+        setBrowserViewVisible(true);
+        result.destroyedViewPrunedSafely = !browserViews.has("destroyed-view-fixture");
         const passed =
           result.title === "Example Domain" &&
           result.heading === "Example Domain" &&
@@ -1795,10 +2250,15 @@ function createBrowserView(window, ownerTabId = "__default__") {
           result.selectionContextMenuLabels.join(",") ===
             "复制文字,向 Brizo 询问,翻译" &&
           Object.values(result.downloadMenuActions).every(Boolean) &&
+          result.navigationWaitsForFirstFrame &&
+          result.navigationViewRevealedAfterFirstFrame &&
+          result.repeatedNavigationKeepsLastPaint &&
+          result.pendingNavigationKeepsFullPaintBounds &&
           result.multiTabStateRetained &&
           result.multiTabViewCount === 2 &&
           result.errorPageLogoLoaded &&
           result.errorPageKeepsRequestedUrl &&
+          result.destroyedViewPrunedSafely &&
           result.reportedBackgroundColor === result.backgroundColor &&
           result.url.startsWith("https://example.org/");
         console.log(`[browser-smoke] ${JSON.stringify(result)}`);
@@ -1814,15 +2274,31 @@ function createBrowserView(window, ownerTabId = "__default__") {
     view.webContents.once("did-finish-load", async () => {
       clearTimeout(timeout);
       try {
-        const { extractReadableArticle, renderArticlePdf } = await loadArticlePdfModule();
+        const {
+          createSearchResultArticle,
+          extractReadableArticle,
+          renderArticlePdf,
+        } = await loadArticlePdfModule();
         const article = await extractReadableArticle(view.webContents);
         const pdf = await renderArticlePdf(article);
+        const searchArticle = createSearchResultArticle({
+          query: "深圳市的产业结构是什么",
+          answer: "深圳产业结构以第三产业为主[1]。\n\n## 核心特征\n- 先进制造业提供重要支撑。",
+          sources: [{
+            domain: "sz.gov.cn",
+            title: "深圳市国民经济和社会发展统计公报",
+            url: "https://www.sz.gov.cn/",
+          }],
+        });
+        const searchPdf = await renderArticlePdf(searchArticle);
         const outputDirectory = app.isPackaged
           ? path.join(app.getPath("temp"), "brizo-pdf-smoke")
           : path.join(projectRoot, "output", "pdf");
         const outputPath = path.join(outputDirectory, "bean-article-export-smoke.pdf");
+        const searchOutputPath = path.join(outputDirectory, "brizo-search-result-smoke.pdf");
         await mkdir(outputDirectory, { recursive: true });
         await writeFile(outputPath, pdf);
+        await writeFile(searchOutputPath, searchPdf);
 
         const fixturePassed = pdfSmokeUrl
           ? (!pdfSmokeExpectedTitle || article.title === pdfSmokeExpectedTitle)
@@ -1838,12 +2314,18 @@ function createBrowserView(window, ownerTabId = "__default__") {
         const passed =
           fixturePassed &&
           pdf.subarray(0, 4).toString() === "%PDF" &&
-          pdf.length > 5_000;
+          pdf.length > 5_000 &&
+          searchArticle.content.includes("深圳产业结构以第三产业为主") &&
+          searchArticle.content.includes("深圳市国民经济和社会发展统计公报") &&
+          searchPdf.subarray(0, 4).toString() === "%PDF" &&
+          searchPdf.length > 5_000;
 
         console.log(`[pdf-smoke] ${JSON.stringify({
           byline: article.byline,
           bytes: pdf.length,
           outputPath,
+          searchBytes: searchPdf.length,
+          searchOutputPath,
           title: article.title,
           titleSource: article.titleSource,
         })}`);
@@ -1863,124 +2345,6 @@ function createBrowserView(window, ownerTabId = "__default__") {
     });
   }
   return view;
-}
-
-async function readModelGuardStore() {
-  try {
-    const parsed = JSON.parse(await readFile(modelGuardPath(), "utf8"));
-    return {
-      defaultId: typeof parsed?.defaultId === "string" ? parsed.defaultId : "",
-      providers: Array.isArray(parsed?.providers) ? parsed.providers : [],
-    };
-  } catch {
-    return { defaultId: "", providers: [] };
-  }
-}
-
-async function writeModelGuardStore(store) {
-  await mkdir(path.dirname(modelGuardPath()), { recursive: true });
-  await writeFile(modelGuardPath(), JSON.stringify(store, null, 2), { mode: 0o600 });
-}
-
-function decryptModelKey(provider) {
-  if (!provider?.encryptedKey || !safeStorage.isEncryptionAvailable()) return "";
-  try {
-    return safeStorage.decryptString(Buffer.from(provider.encryptedKey, "base64"));
-  } catch {
-    return "";
-  }
-}
-
-function withKnownProviderDefaults(provider) {
-  const name = String(provider?.name || "").toLowerCase();
-  if (name.includes("deepseek") || name.includes("deep seek")) {
-    const models = Array.isArray(provider.models) && provider.models.length
-      ? provider.models
-      : ["deepseek-v4-flash"];
-    return {
-      ...provider,
-      baseUrl: provider.baseUrl || "https://api.deepseek.com",
-      models,
-      selectedModel: chooseFastModel(models, provider.name),
-    };
-  }
-  return provider;
-}
-
-function sanitizeModelProviders(store) {
-  return store.providers.map((storedProvider) => {
-    const provider = withKnownProviderDefaults(storedProvider);
-    return {
-      id: provider.id,
-      name: provider.name,
-      baseUrl: provider.baseUrl,
-      isDefault: provider.id === store.defaultId,
-      keyMask: provider.keyMask || "••••••••",
-      models: sortFastModels(Array.isArray(provider.models) ? provider.models : [], provider.name),
-      selectedModel: chooseFastModel(Array.isArray(provider.models) ? provider.models : [], provider.name) || "",
-    };
-  });
-}
-
-function modelSpeedScore(model, providerName = "") {
-  const name = String(model || "").toLowerCase();
-  const provider = String(providerName || "").toLowerCase();
-  let score = 0;
-  if (provider.includes("qwen") || provider.includes("tongyi") || provider.includes("通义")) {
-    score += name.startsWith("qwen") ? 220 : -120;
-  } else if (provider.includes("deepseek") || provider.includes("deep seek")) {
-    score += name.includes("deepseek") ? 220 : -120;
-  } else if (provider.includes("minimax")) {
-    score += name.includes("minimax") ? 220 : -120;
-  }
-  if (name.includes("flash")) score += 120;
-  if (name.includes("instant")) score += 105;
-  if (name.includes("turbo")) score += 95;
-  if (/(^|[/_.-])mini($|[/_.-])/.test(name)) score += 90;
-  if (name.includes("fast")) score += 85;
-  if (name.includes("chat")) score += 70;
-  if (name.includes("lite")) score += 65;
-  if (name.includes("haiku")) score += 60;
-  if (name.includes("small")) score += 45;
-  if (name.includes("reasoner") || name.includes("reasoning")) score -= 140;
-  if (name.includes("thinking") || name.includes("-r1") || name.endsWith("r1")) score -= 130;
-  if (name.includes("pro") || name.includes("max") || name.includes("ultra")) score -= 25;
-  if (/(speech|audio|asr|tts|realtime|embedding|image|ocr|livetranslate)/.test(name)) score -= 400;
-  if (/-(19|20)\d{2}-\d{2}-\d{2}$/.test(name)) score -= 4;
-  return score;
-}
-
-function sortFastModels(models, providerName = "") {
-  return [...new Set(models.filter((model) => typeof model === "string" && model))]
-    .sort((left, right) => modelSpeedScore(right, providerName) - modelSpeedScore(left, providerName));
-}
-
-function chooseFastModel(models, providerName = "") {
-  return sortFastModels(models, providerName)[0] || "";
-}
-
-function readAssistantMessage(body) {
-  const content = body?.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content.trim();
-  if (Array.isArray(content)) {
-    return content
-      .map((item) => typeof item === "string" ? item : item?.text || "")
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-  }
-  return "";
-}
-
-function normalizeModelApiUrl(input) {
-  const value = String(input || "").trim().replace(/\/$/, "");
-  if (!value) return "";
-  const url = new URL(value);
-  const local = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
-  if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
-    throw new Error("API 地址必须使用 HTTPS；本机地址可以使用 HTTP。" );
-  }
-  return url.href.replace(/\/$/, "");
 }
 
 async function discoverCompatibleModels(baseUrl, apiKey) {
@@ -2057,22 +2421,72 @@ async function saveModelProvider(payload) {
   return { status: "saved", message: discoveryMessage, providers: sanitizeModelProviders(store) };
 }
 
-async function searchWithBoundModel(payload) {
+async function resolveBoundModelProvider(request = {}) {
   const store = await readModelGuardStore();
-  const requestedModel = typeof payload?.model === "string" ? payload.model : "";
+  const requestedModel = typeof request?.model === "string" ? request.model : "";
   const storedProvider = store.providers.find((item) =>
     Array.isArray(item.models) && item.models.includes(requestedModel)
   ) || store.providers.find((item) => item.id === store.defaultId) || store.providers[0];
   const provider = withKnownProviderDefaults(storedProvider);
   if (!provider?.baseUrl) return null;
   const apiKey = decryptModelKey(storedProvider);
-  if (!apiKey) return null;
   const model = provider.models?.includes(requestedModel)
     ? requestedModel
     : chooseFastModel(provider.models || [], provider.name);
-  if (!model) return null;
+  if (!apiKey || !model) return null;
+  return {
+    apiKey,
+    baseUrl: provider.baseUrl,
+    model,
+    providerName: provider.name || "默认 API",
+  };
+}
 
-  const query = typeof payload?.query === "string" ? payload.query.trim().slice(0, 12_000) : "";
+async function selectedTabLocalResults(payload) {
+  const tab = payload?.context?.tab;
+  if (!tab?.url) return [];
+  const view = typeof tab.id === "string" ? browserViews.get(tab.id) : null;
+  const webContents = getLiveViewWebContents(view);
+  let body = "";
+  if (webContents) {
+    try {
+      body = await webContents.executeJavaScript(`String(document.body?.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 24000)`);
+    } catch {
+      body = "";
+    }
+  }
+  return [makeResult({
+    url: tab.url,
+    title: tab.title || tab.url,
+    snippet: body.slice(0, 400) || "用户主动插入的浏览器标签页。",
+    body,
+    bodySource: body ? "cheerio" : "snippet",
+    hits: [{ provider: "local", rank: 0, query: payload.query }],
+  })];
+}
+
+function getScoutSearchService() {
+  if (scoutSearchService) return scoutSearchService;
+  const serper = createSerperClient({ getApiKey: () => modelGuard.readServiceKey("serper") });
+  const bocha = createBochaClient({ getApiKey: () => modelGuard.readServiceKey("bocha") });
+  const legacy = createLegacyClient();
+  const scrapeCache = createScrapeCache({
+    filePath: path.join(app.getPath("userData"), "scout-scrape-cache.json"),
+  });
+  scoutSearchService = createSearchService({
+    answerEngine: createAnswerEngine({ llm: llmClient }),
+    serper,
+    bocha,
+    legacy,
+    scrapeCache,
+    hasServiceKey: async (id) => Boolean(await modelGuard.readServiceKey(id)),
+    getLocalResults: selectedTabLocalResults,
+  });
+  return scoutSearchService;
+}
+
+async function searchWithBoundModel(payload) {
+  const query = typeof payload?.query === "string" ? payload.query.trim() : "";
   if (!query) return { status: "error", message: "请输入搜索内容。" };
   const contextTab = payload?.context?.tab;
   const attachmentNames = Array.isArray(payload?.context?.attachmentNames)
@@ -2082,40 +2496,26 @@ async function searchWithBoundModel(payload) {
     contextTab?.url ? `用户插入的标签页：${contextTab.title || contextTab.url}（${contextTab.url}）` : "",
     attachmentNames.length ? `用户附加的文件名：${attachmentNames.join("、")}。不要声称读取了文件内容。` : "",
   ].filter(Boolean).join("\n");
-  const controller = new AbortController();
-  const requestTimeoutMs = Math.min(90_000, Math.max(5_000, Number(payload?.timeoutMs) || 45_000));
-  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
   try {
-    const response = await fetch(`${provider.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: "system",
-            content: payload?.systemPrompt || "你是 Brizo 的快速回答模型。优先使用中文，明确区分已知事实与推测。当前是模型直连回答，不要声称已经联网搜索或引用了网页来源。",
-          },
-          { role: "user", content: context ? `${query}\n\n${context}` : query },
-        ],
-        stream: false,
-      }),
-      signal: controller.signal,
+    const response = await llmClient.callChat({
+      model: typeof payload?.model === "string" ? payload.model : "",
+      messages: [
+        {
+          role: "system",
+          content: payload?.systemPrompt || "你是 Brizo 的快速回答模型。明确区分已知事实与推测。当前是模型直连回答，不要声称已经联网搜索或引用了网页来源。",
+        },
+        { role: "user", content: context ? `${query}\n\n${context}` : query },
+      ],
+      timeoutMs: Math.min(90_000, Math.max(5_000, Number(payload?.timeoutMs) || 45_000)),
     });
-    if (!response.ok) throw new Error(`模型接口返回 HTTP ${response.status}`);
-    const body = await response.json();
-    const message = readAssistantMessage(body);
+    const message = response.content;
     if (!message) throw new Error("模型没有返回文字内容");
     return {
       status: "success",
       message,
       sources: [],
-      providerLabel: `${provider.name || "自定义 API"} · 直接回答`,
-      modelLabel: model,
+      providerLabel: `${response.providerName || "自定义 API"} · 直接回答`,
+      modelLabel: response.model,
       mode: "direct",
     };
   } catch (error) {
@@ -2125,11 +2525,7 @@ async function searchWithBoundModel(payload) {
       message: error?.name === "AbortError"
         ? "默认模型响应超时，请稍后再试。"
         : `默认模型调用失败：${error.message}`,
-      providerLabel: provider.name || "自定义 API",
-      modelLabel: model,
     };
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
@@ -2159,13 +2555,11 @@ async function searchWithQwenEditorialModel(payload) {
 }
 
 async function askCurrentPageWithBoundModel(payload) {
-  if (!browserView || browserView.webContents.isDestroyed()) {
+  const activeWebContents = getLiveViewWebContents(browserView);
+  if (!activeWebContents) {
     return { status: "error", message: "当前没有可以提问的网页。" };
   }
-  const question = typeof payload?.question === "string"
-    ? payload.question.trim().slice(0, 4_000)
-    : "";
-  if (!question) return { status: "error", message: "请输入关于当前网页的问题。" };
+  const question = "请快速总结当前页面，直接给出最终结果。";
 
   const store = await readModelGuardStore();
   const storedProvider = store.providers.find((provider) => provider.id === store.defaultId)
@@ -2175,25 +2569,27 @@ async function askCurrentPageWithBoundModel(payload) {
   if (!provider?.baseUrl || !apiKey) {
     return { status: "error", message: "请先在“大模型护航”中绑定并选择默认 API。" };
   }
-  const model = chooseFastModel(provider.models || [], provider.name);
+  const model = sortFastModels(provider.models || [], provider.name).find((candidate) =>
+    !/(reasoner|reasoning|thinking|(^|[/_.-])r1($|[/_.-])|(^|[/_.-])o[134]($|[/_.-]))/i.test(candidate)
+  ) || "";
   if (!model) {
     return {
       status: "error",
-      message: "默认 API 中没有可用的文本模型。",
+      message: "默认 API 中没有可用的快速非推理文本模型。",
       providerLabel: provider.name || "默认 API",
     };
   }
 
   try {
-    const page = await browserView.webContents.executeJavaScript(`
+    const page = await activeWebContents.executeJavaScript(`
       (() => {
         const fullText = String(document.body?.innerText || "")
           .replace(/[ \\t]+/g, " ")
           .replace(/\\n{3,}/g, "\\n\\n")
           .trim();
         return {
-          text: fullText.slice(0, 120000),
-          textTruncated: fullText.length > 120000,
+          text: fullText.slice(0, 48000),
+          textTruncated: fullText.length > 48000,
           title: document.title || "",
           url: location.href,
         };
@@ -2203,11 +2599,11 @@ async function askCurrentPageWithBoundModel(payload) {
       `用户问题：${question}`,
       `网页标题：${page.title || "未命名网页"}`,
       `网页地址：${page.url || browserDisplayUrl}`,
-      `网页文字${page.textTruncated ? "（内容过长，已截取前 120000 个字符）" : ""}：\n${page.text || "页面没有可读取的文字。"}`,
+      `网页文字${page.textTruncated ? "（内容过长，已截取前 48000 个字符）" : ""}：\n${page.text || "页面没有可读取的文字。"}`,
     ].filter(Boolean).join("\n\n");
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90_000);
+    const timeout = setTimeout(() => controller.abort(), 35_000);
     try {
       const response = await fetch(`${provider.baseUrl}/chat/completions`, {
         method: "POST",
@@ -2221,14 +2617,16 @@ async function askCurrentPageWithBoundModel(payload) {
           messages: [
             {
               role: "system",
-              content: "你是 Brizo 的当前页面阅读助手。只根据提供的网页文字回答。默认使用简洁中文，不要声称看到了图片、图表或访问了未提供的外部信息。",
+              content: "你是 Brizo 的网页快速总结助手。只根据提供的网页文字，直接输出最终总结，不展示分析、推理、思考过程或模型说明。使用简洁中文，先给核心结论，再列出不超过 5 条关键要点；不要声称看到了图片、图表或访问了未提供的外部信息。",
             },
             {
               role: "user",
               content: pageContext,
             },
           ],
+          max_tokens: 900,
           stream: false,
+          temperature: 0.2,
         }),
         signal: controller.signal,
       });
@@ -2242,240 +2640,34 @@ async function askCurrentPageWithBoundModel(payload) {
         modelLabel: model,
         pageTitle: page.title || "当前网页",
         pageUrl: page.url || browserDisplayUrl,
-        providerLabel: `${provider.name || "默认 API"} · 页面问答`,
+        providerLabel: `${provider.name || "默认 API"} · 页面快速总结`,
         status: "success",
       };
     } finally {
       clearTimeout(timeout);
     }
   } catch (error) {
-    console.error("[ask-current-page]", error instanceof Error ? error.message : String(error));
+    console.error("[summarize-current-page]", error instanceof Error ? error.message : String(error));
     return {
       status: "error",
       message: error?.name === "AbortError"
-        ? "页面分析超时，请稍后再试。"
-        : `无法分析当前网页：${error.message}`,
+        ? "页面总结超时，请稍后再试。"
+        : `无法总结当前网页：${error.message}`,
       providerLabel: provider.name || "默认 API",
       modelLabel: model,
     };
   }
 }
 
-function normalizeSearchResultUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl, "https://html.duckduckgo.com");
-    if (url.hostname.endsWith("duckduckgo.com") && url.searchParams.get("uddg")) {
-      return decodeURIComponent(url.searchParams.get("uddg"));
-    }
-    return url.href;
-  } catch {
-    return "";
-  }
-}
-
-async function searchDuckDuckGoHtml(query) {
-  const { stdout } = await execFileAsync("/usr/bin/curl", [
-    "-L",
-    "--silent",
-    "--show-error",
-    "--max-time",
-    "6",
-    "-A",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
-    "--data-urlencode",
-    `q=${query}`,
-    "https://lite.duckduckgo.com/lite/",
-  ], {
-    encoding: "utf8",
-    maxBuffer: 4 * 1024 * 1024,
-    timeout: 8_000,
-  });
-  const { load } = await loadCheerioModule();
-  const $ = load(stdout);
-  const results = [];
-  $(".result").each((_, element) => {
-    const anchor = $(element).find(".result-link").first();
-    const url = normalizeSearchResultUrl(anchor.attr("href") || "");
-    const title = anchor.text().replace(/\s+/g, " ").trim();
-    const snippet = $(element).find(".result__snippet").text().replace(/\s+/g, " ").trim();
-    if (url && title) results.push({ title, url, snippet });
-  });
-  if (!results.length) {
-    $(".result-link").each((_, anchorElement) => {
-      const anchor = $(anchorElement);
-      const url = normalizeSearchResultUrl(anchor.attr("href") || "");
-      const title = anchor.text().replace(/\s+/g, " ").trim();
-      const snippet = anchor.closest("tr").nextAll("tr").first().find(".result-snippet").text().replace(/\s+/g, " ").trim();
-      if (url && title) results.push({ title, url, snippet });
-    });
-  }
-  return results.slice(0, 10);
-}
-
-async function searchBingRss(query) {
-  const url = new URL("https://www.bing.com/search");
-  url.searchParams.set("q", query);
-  url.searchParams.set("format", "rss");
-  url.searchParams.set("setlang", "zh-Hans");
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/rss+xml,application/xml,text/xml",
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/126 Safari/537.36",
-    },
-    signal: AbortSignal.timeout(6_000),
-  });
-  if (!response.ok) throw new Error(`Bing 返回 HTTP ${response.status}`);
-  const { load } = await loadCheerioModule();
-  const $ = load(await response.text(), { xmlMode: true });
-  const results = [];
-  $("item").each((_, element) => {
-    const title = $(element).find("title").first().text().replace(/\s+/g, " ").trim();
-    const resultUrl = $(element).find("link").first().text().trim();
-    const snippet = $(element).find("description").first().text().replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    if (title && resultUrl) results.push({ title, url: resultUrl, snippet });
-  });
-  return results.slice(0, 10);
-}
-
-const webSearchResultCache = new Map();
-const WEB_SEARCH_CACHE_TTL_MS = 10 * 60_000;
-
-async function searchWebQuery(query, { force = false } = {}) {
-  const cacheKey = String(query || "").replace(/\s+/g, " ").trim().toLowerCase();
-  const cached = webSearchResultCache.get(cacheKey);
-  if (!force && cached?.results && cached.expiresAt > Date.now()) return cached.results;
-  if (!force && cached?.promise) return cached.promise;
-  const promise = Promise.allSettled([
-    searchDuckDuckGoHtml(query),
-    searchBingRss(query),
-  ]).then((settled) => {
-    const results = settled.flatMap((item) => item.status === "fulfilled" ? item.value : []);
-    if (!results.length) {
-      const reason = settled.find((item) => item.status === "rejected")?.reason;
-      throw reason || new Error("搜索引擎没有返回结果");
-    }
-    webSearchResultCache.set(cacheKey, {
-      expiresAt: Date.now() + WEB_SEARCH_CACHE_TTL_MS,
-      results,
-    });
-    if (webSearchResultCache.size > 160) webSearchResultCache.delete(webSearchResultCache.keys().next().value);
-    return results;
-  }).catch((error) => {
-    webSearchResultCache.delete(cacheKey);
-    throw error;
-  });
-  webSearchResultCache.set(cacheKey, { promise });
-  return promise;
-}
-
-function tokenizeForSearchScore(text) {
-  const normalized = String(text || "").toLowerCase();
-  return [...new Set(normalized.match(/[a-z0-9][a-z0-9._+-]{1,}|[\u3400-\u9fff]{2,}/g) || [])];
-}
-
-function rankAndDedupeSearchResults(query, groups) {
-  const queryTokens = tokenizeForSearchScore(query);
-  const seenUrls = new Set();
-  const domainCounts = new Map();
-  return groups.flatMap((results, groupIndex) => results.map((result, rank) => {
-    const haystack = `${result.title} ${result.snippet}`.toLowerCase();
-    const matches = queryTokens.filter((token) => haystack.includes(token)).length;
-    return { ...result, score: matches * 4 + 3 / (rank + 1) - groupIndex * 0.12 };
-  })).sort((left, right) => right.score - left.score).filter((result) => {
-    let normalized;
-    try {
-      const url = new URL(result.url);
-      url.hash = "";
-      normalized = url.href.replace(/\/$/, "");
-      const domain = url.hostname.replace(/^www\./i, "");
-      if (seenUrls.has(normalized) || (domainCounts.get(domain) || 0) >= 2) return false;
-      seenUrls.add(normalized);
-      domainCounts.set(domain, (domainCounts.get(domain) || 0) + 1);
-    } catch {
-      return false;
-    }
-    return true;
-  }).slice(0, 12).map(({ score: _score, ...result }) => result);
-}
-
-function parseModelLines(message, limit) {
-  return String(message || "").split("\n")
-    .map((item) => item.replace(/^\s*(?:[-*•]|\d+[.)、])\s*/, "").trim())
-    .filter((item) => item.length > 2 && item.length < 180)
-    .slice(0, limit);
-}
-
-async function searchWithVaneAlgorithm(payload) {
-  const query = typeof payload?.query === "string" ? payload.query.trim().slice(0, 4000) : "";
-  if (!query) return { status: "error", message: "请输入搜索内容。" };
-
-  const queryPlan = await searchWithBoundModel({
-    ...payload,
-    systemPrompt: "你是网页搜索查询规划器。将用户问题改写成最多三条适合搜索引擎的精确关键词查询。每行一条，不要编号或解释；保留必要的人名、产品名、日期和限定词。",
-    query,
-  });
-  const plannedQueries = queryPlan?.status === "success"
-    ? parseModelLines(queryPlan.message, 3)
-    : [];
-  const queries = [...new Set([query, ...plannedQueries])].slice(0, 3);
-
-  let searchGroups;
-  try {
-    searchGroups = await Promise.all(queries.map((plannedQuery) => searchWebQuery(plannedQuery)));
-  } catch (error) {
-    console.error("[web-search]", error instanceof Error ? error.message : String(error));
-    return { status: "error", message: `网页检索失败：${error.message}`, providerLabel: "Brizo Web" };
-  }
-  const sources = rankAndDedupeSearchResults(query, searchGroups);
-  if (!sources.length) {
-    return { status: "error", message: "没有找到可用于回答的网页结果，请换一种问法重试。", providerLabel: "Brizo Web" };
-  }
-
-  const context = sources.map((source, index) => [
-    `[${index + 1}] ${source.title}`,
-    `URL: ${source.url}`,
-    `摘要: ${source.snippet || source.title}`,
-  ].join("\n")).join("\n\n");
-  const answer = await searchWithBoundModel({
-    ...payload,
-    systemPrompt: [
-      "你是 Brizo 的网页答案引擎，采用 Vane 的搜索写作原则。",
-      "只使用给定网页搜索上下文回答；不得把模型记忆伪装成检索事实。",
-      "使用中文，先给简洁结论，再按需要使用小标题和项目符号。",
-      "每个事实句末必须使用与上下文对应的 [数字] 引用；可以一处使用多个引用，如 [1][3]。",
-      "如果上下文不足，明确说明限制，不要编造。不要输出主标题。",
-    ].join("\n"),
-    query: `用户问题：${query}\n\n网页搜索上下文：\n${context}`,
-  });
-  if (answer?.status !== "success") {
-    return answer || { status: "error", message: "默认模型无法生成搜索答案。" };
-  }
-
-  const suggestionResult = await searchWithBoundModel({
-    ...payload,
-    systemPrompt: "你是 AI 搜索引擎的延伸问题生成器。根据原问题和搜索答案生成三个有价值、可继续进行网页搜索的中文问题。每行一条，不要编号或解释。",
-    query: `原问题：${query}\n\n搜索答案：${answer.message.slice(0, 3000)}`,
-  });
-
-  return {
-    status: "success",
-    message: answer.message,
-    sources: sources.map((source) => {
-      let domain = "";
-      try { domain = new URL(source.url).hostname.replace(/^www\./i, ""); } catch { domain = source.url; }
-      return { ...source, domain };
-    }),
-    relatedQuestions: suggestionResult?.status === "success"
-      ? parseModelLines(suggestionResult.message, 3)
-      : [],
-    providerLabel: "Brizo Web · Vane 算法",
-    modelLabel: answer.modelLabel,
-    mode: "web",
-  };
-}
-
 async function searchWithVane(payload) {
-  return await searchWithVaneAlgorithm(payload);
+  try {
+    return await getScoutSearchService().run(payload, {
+      emit: () => {},
+      signal: new AbortController().signal,
+    });
+  } catch (error) {
+    return { status: "error", message: error?.message || "搜索暂时不可用。" };
+  }
 }
 
 const countryLanguageMap = {
@@ -2512,12 +2704,13 @@ async function detectUserLocale() {
 async function fetchSearchSuggestions(input) {
   const query = String(input || "").trim().slice(0, 160);
   if (query.length < 2) return [];
-  const cacheKey = query.toLocaleLowerCase();
+  const inputLanguage = languageForInput(query);
+  const cacheKey = `${inputLanguage}:${query.toLocaleLowerCase()}`;
   const cached = searchSuggestionCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.suggestions;
   if (searchSuggestionCooldownUntil > Date.now()) return [];
   try {
-    if (await suggestionRegionPromise === "CN") {
+    if (inputLanguage === "zh") {
       const baiduUrl = new URL("https://suggestion.baidu.com/su");
       baiduUrl.searchParams.set("action", "opensearch");
       baiduUrl.searchParams.set("wd", query);
@@ -2525,7 +2718,9 @@ async function fetchSearchSuggestions(input) {
       if (!response.ok) return [];
       const payload = JSON.parse(new TextDecoder("gbk").decode(await response.arrayBuffer()));
       const suggestions = Array.isArray(payload?.[1])
-        ? payload[1].filter((item) => typeof item === "string" && item.trim()).slice(0, 8)
+        ? payload[1].filter((item) =>
+          typeof item === "string" && matchesRequestedLanguage(item, inputLanguage)
+        ).slice(0, 8)
         : [];
       searchSuggestionCache.set(cacheKey, {
         suggestions,
@@ -2533,10 +2728,11 @@ async function fetchSearchSuggestions(input) {
       });
       return suggestions;
     }
-    const { language = "zh-CN" } = await userLocalePromise;
     const url = new URL("https://api.bing.com/osjson.aspx");
     url.searchParams.set("query", query);
-    url.searchParams.set("language", language);
+    url.searchParams.set("language", inputLanguage === "ja"
+      ? "ja-JP"
+      : inputLanguage === "ko" ? "ko-KR" : "en-US");
     const response = await fetch(url, {
       headers: { "Accept": "application/json" },
       signal: AbortSignal.timeout(3500),
@@ -2548,7 +2744,9 @@ async function fetchSearchSuggestions(input) {
     if (!response.ok) return [];
     const payload = await response.json();
     const suggestions = Array.isArray(payload?.[1])
-      ? payload[1].filter((item) => typeof item === "string" && item.trim()).slice(0, 8)
+      ? payload[1].filter((item) =>
+        typeof item === "string" && matchesRequestedLanguage(item, inputLanguage)
+      ).slice(0, 8)
       : [];
     searchSuggestionCache.set(cacheKey, {
       suggestions,
@@ -2568,13 +2766,38 @@ function registerBrowserIpc() {
     Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
 
   ipcMain.on("bean-browser:page-interaction", (event, interactionType) => {
-    if (!browserView || browserView.webContents.isDestroyed()) return;
-    if (event.sender !== browserView.webContents) return;
+    const webContents = getLiveViewWebContents(browserView);
+    if (!webContents || event.sender !== webContents) return;
     if (interactionType !== "top-edge-change") publishBrowserActivation();
     if (["wheel", "scroll", "touchstart", "top-edge-change"].includes(interactionType)) {
       clearTimeout(pageEdgeColorUpdateTimer);
       pageEdgeColorUpdateTimer = setTimeout(() => updatePageBackgroundColor(), 90);
     }
+  });
+
+  ipcMain.on("bean-browser:selection-menu", (event, payload) => {
+    const webContents = getLiveViewWebContents(browserView);
+    if (!webContents || event.sender !== webContents || !mainWindow || mainWindow.isDestroyed()) return;
+    const selectedText = String(payload?.text || "").trim().slice(0, 12_000);
+    if (!selectedText) return;
+    const params = {
+      x: Math.max(0, Math.round(Number(payload?.x) || 0)),
+      y: Math.max(0, Math.round(Number(payload?.y) || 0)),
+    };
+    showWebContextMenu({
+      actions: {
+        "copy-text": () => clipboard.writeText(selectedText),
+        "ask-brizo": () => {
+          if (!mainWindow || mainWindow.isDestroyed()) return;
+          mainWindow.webContents.send("bean-browser:ask-selection", selectedText);
+        },
+        translate: () => { void translateSelectedText(webContents, selectedText); },
+      },
+      ariaLabel: "文字操作",
+      items: selectionContextMenuItems,
+      params,
+      window: mainWindow,
+    });
   });
 
   ipcMain.handle("bean-browser:get-state", (event) =>
@@ -2595,15 +2818,17 @@ function registerBrowserIpc() {
     if (!isTrustedSender(event) || typeof tabId !== "string") return false;
     const view = browserViews.get(tabId);
     if (!view) return false;
+    const webContents = getLiveViewWebContents(view);
     browserViews.delete(tabId);
     if (view === browserView) browserView = undefined;
-    if (!view.webContents.isDestroyed()) view.webContents.close();
+    webContents?.close();
     return true;
   });
   ipcMain.handle("bean-browser:capture-preview", async (event) => {
-    if (!isTrustedSender(event) || !browserView || browserView.webContents.isDestroyed()) return "";
+    const webContents = getLiveViewWebContents(browserView);
+    if (!isTrustedSender(event) || !webContents) return "";
     try {
-      return (await browserView.webContents.capturePage()).toDataURL();
+      return (await webContents.capturePage()).toDataURL();
     } catch {
       return "";
     }
@@ -2624,21 +2849,27 @@ function registerBrowserIpc() {
   );
   ipcMain.handle("bean-browser:back", (event) => {
     if (!isTrustedSender(event) || !browserView?.webContents.navigationHistory.canGoBack()) return false;
-    browserView.webContents.navigationHistory.goBack();
-    return true;
+    const targetView = browserView;
+    return beginBrowserNavigation(targetView, () => {
+      targetView.webContents.navigationHistory.goBack();
+    });
   });
   ipcMain.handle("bean-browser:forward", (event) => {
     if (!isTrustedSender(event) || !browserView?.webContents.navigationHistory.canGoForward()) return false;
-    browserView.webContents.navigationHistory.goForward();
-    return true;
+    const targetView = browserView;
+    return beginBrowserNavigation(targetView, () => {
+      targetView.webContents.navigationHistory.goForward();
+    });
   });
   ipcMain.handle("bean-browser:reload", (event) => {
     if (!isTrustedSender(event) || !browserView) return false;
     if (browserErrorPageActive && browserDisplayUrl) {
       return navigateBrowserUrl(browserDisplayUrl, browserOwnerTabId);
     }
-    browserView.webContents.reload();
-    return true;
+    const targetView = browserView;
+    return beginBrowserNavigation(targetView, () => {
+      targetView.webContents.reload();
+    });
   });
   ipcMain.handle("bean-browser:get-app-info", (event) => {
     if (!isTrustedSender(event)) return null;
@@ -2676,6 +2907,42 @@ function registerBrowserIpc() {
       return { status: "error", message: "搜索请求未获授权。" };
     }
     return await searchWithVane(payload);
+  });
+  ipcMain.handle("bean-browser:start-search", async (event, payload) => {
+    if (!isTrustedSender(event)) return { status: "error", message: "搜索请求未获授权。" };
+    const requestedId = typeof payload?.searchId === "string" ? payload.searchId : "";
+    const searchId = /^[a-zA-Z0-9_-]{8,120}$/.test(requestedId)
+      ? requestedId
+      : `search-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    activeSearchControllers.get(searchId)?.abort();
+    const controller = new AbortController();
+    activeSearchControllers.set(searchId, controller);
+    const sender = event.sender;
+    const region = await userLocalePromise.catch(() => ({ country: "", language: "" }));
+    const emit = (message) => {
+      if (!sender.isDestroyed()) sender.send("bean-browser:search-stream", { searchId, ...message });
+    };
+    // Search depth is intentionally product-controlled for now. Do not trust a
+    // stale renderer or restored payload to re-enable the removed slower modes.
+    void getScoutSearchService().run({ ...payload, depth: "fast", region, searchId }, { emit, signal: controller.signal })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        emit({
+          type: "error",
+          message: error?.message || "搜索暂时不可用。",
+          stage: "searching",
+        });
+      })
+      .finally(() => activeSearchControllers.delete(searchId));
+    return { searchId, status: "started" };
+  });
+  ipcMain.handle("bean-browser:cancel-search", (event, searchId) => {
+    if (!isTrustedSender(event) || typeof searchId !== "string") return false;
+    const controller = activeSearchControllers.get(searchId);
+    if (!controller) return false;
+    controller.abort();
+    activeSearchControllers.delete(searchId);
+    return true;
   });
   ipcMain.handle("bean-browser:brief-sync-signals", async (event, payload) => {
     if (!isTrustedSender(event)) return { status: "error", message: "简报画像同步未获授权。" };
@@ -2752,6 +3019,12 @@ function registerBrowserIpc() {
     const { importBookmarksFromHtml } = await loadBrowserToolsModule();
     return await importBookmarksFromHtml(mainWindow);
   });
+  ipcMain.handle("bean-browser:resolve-bookmark-favicons", async (event, bookmarks) => {
+    if (!isTrustedSender(event)) return [];
+    const candidates = Array.isArray(bookmarks) ? bookmarks.slice(0, 5_000) : [];
+    const { resolveBookmarkFavicons } = await loadBrowserToolsModule();
+    return await resolveBookmarkFavicons(candidates);
+  });
   ipcMain.handle("bean-browser:print", async (event) => {
     if (!isTrustedSender(event) || !browserView) {
       return { status: "error", message: "Printing is not available right now." };
@@ -2766,6 +3039,11 @@ function registerBrowserIpc() {
         ),
       );
     });
+  });
+  ipcMain.handle("bean-browser:copy-text", (event, value) => {
+    if (!isTrustedSender(event) || typeof value !== "string") return false;
+    clipboard.writeText(value.slice(0, 200_000));
+    return true;
   });
   ipcMain.handle("bean-browser:screenshot", async (event, mode) => {
     if (!isTrustedSender(event) || !browserView) {
@@ -2836,6 +3114,38 @@ function registerBrowserIpc() {
       pdfExportInProgress = false;
     }
   });
+  ipcMain.handle("bean-browser:export-search-pdf", async (event, payload) => {
+    if (!isTrustedSender(event) || pdfExportInProgress) {
+      return { status: "error", message: "PDF 导出当前不可用。" };
+    }
+    pdfExportInProgress = true;
+    try {
+      const {
+        createPdfFilename,
+        createSearchResultArticle,
+        renderArticlePdf,
+      } = await loadArticlePdfModule();
+      const article = createSearchResultArticle(payload);
+      const saveResult = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: path.join(app.getPath("documents"), createPdfFilename(`${article.title} - Brizo`)),
+        filters: [{ name: "PDF 文档", extensions: ["pdf"] }],
+        properties: ["createDirectory", "showOverwriteConfirmation"],
+        title: "下载 Brizo 搜索结果 PDF",
+      });
+      if (saveResult.canceled || !saveResult.filePath) return { status: "canceled" };
+      const pdf = await renderArticlePdf(article);
+      await writeFile(saveResult.filePath, pdf);
+      return { status: "saved", filePath: saveResult.filePath };
+    } catch (error) {
+      console.error("[search-pdf-export]", error instanceof Error ? error.message : String(error));
+      return {
+        status: "error",
+        message: error instanceof Error ? error.message : "无法生成搜索结果 PDF。",
+      };
+    } finally {
+      pdfExportInProgress = false;
+    }
+  });
   ipcMain.on("bean-browser:set-bounds", (event, bounds) => {
     if (isTrustedSender(event)) setBrowserBounds(bounds);
   });
@@ -2879,9 +3189,12 @@ function createWindow() {
     minWidth: 760,
     minHeight: 640,
     show: false,
-    backgroundColor: "#f8f9f7",
+    backgroundColor: "#00000000",
+    transparent: true,
     ...(process.platform === "darwin" ? {
       titleBarStyle: "hidden",
+      vibrancy: "under-window",
+      visualEffectState: "active",
       trafficLightPosition: {
         x: initialWindowWidth - windowButtonRightInset,
         y: windowButtonTopInset,
@@ -2894,6 +3207,12 @@ function createWindow() {
       sandbox: true,
     },
   });
+
+  // Electron 43 renders BrowserWindow web contents through a BaseWindow
+  // content View. That intermediate View is opaque by default, so transparent
+  // renderer pixels otherwise flatten to white before reaching macOS vibrancy.
+  window.setBackgroundColor("#00000000");
+  window.contentView.setBackgroundColor("#00000000");
 
   mainWindow = window;
   const positionMacWindowButtons = () => {
@@ -3009,7 +3328,7 @@ function createWindow() {
                 && wordmark?.complete
                 && mark.naturalWidth > 0
                 && wordmark.naturalWidth > 0
-                && /\\/logo(?:-[^/]+)?\\.png$/.test(markUrl)
+                && /\\/hermes logo(?:-[^/]+)?\\.svg$/.test(decodeURIComponent(markUrl))
                 && /\\/logo brizo(?:-[^/]+)?\\.png$/.test(wordmarkUrl),
               );
             })(),
@@ -3111,6 +3430,9 @@ function createWindow() {
               const toolbarRect = toolbar.getBoundingClientRect();
               const strokeStyle = getComputedStyle(stroke);
               const strokePath = stroke.getAttribute("d") || "";
+              const host = document.querySelector(".web-content-host");
+              const leftFramePseudo = getComputedStyle(document.querySelector(".spaces-panel"), "::after");
+              const rightFramePseudo = getComputedStyle(toolbar, "::after");
               return activeStyle.borderBottomWidth === "0px"
                 && toolbarStyle.borderTopWidth === "0px"
                 && getComputedStyle(tabList).zIndex === "auto"
@@ -3118,7 +3440,11 @@ function createWindow() {
                 && Math.abs(activeRect.bottom - toolbarRect.top) <= 0.5
                 && strokeStyle.fill === "none"
                 && (strokePath.match(/M /g) || []).length === 1
-                && !strokePath.includes(" Z");
+                && (strokePath.match(/A 12 12/g) || []).length === 2
+                && strokePath.trim().endsWith("Z")
+                && getComputedStyle(host).boxShadow === "none"
+                && leftFramePseudo.content === "none"
+                && rightFramePseudo.content === "none";
             })(),
             imageLoaded: (() => {
               const image = document.querySelector(".protein-figure img");
@@ -3130,7 +3456,7 @@ function createWindow() {
 
         result.pageAskTool = await window.webContents.executeJavaScript(`
           (() => {
-            const trigger = document.querySelector('[aria-label="询问当前页面"]');
+            const trigger = document.querySelector('[aria-label="总结当前页面"]');
             const disabledOnNewTab = Boolean(trigger?.disabled);
             const fixture = document.createElement('div');
             fixture.className = 'settings-dialog-content';
@@ -3139,7 +3465,7 @@ function createWindow() {
               + '<article class="page-ask-answer"><div class="new-tab-answer-bullet"><span>•</span><p><strong>要点：</strong>'
               + '这是一段用于验证页面回答不会横向溢出的超长中文内容'.repeat(80)
               + '</p></div></article>'
-              + '<div class="settings-dialog-actions"><button>关闭</button><button>Ask Brizo</button></div>'
+              + '<div class="settings-dialog-actions"><button>关闭</button></div>'
               + '</form>';
             document.body.appendChild(fixture);
             const form = fixture.querySelector('.page-ask-form');
@@ -3158,6 +3484,8 @@ function createWindow() {
             && position.y === windowButtonTopInset,
           );
         })();
+        const shellPixel = await window.webContents.capturePage({ x: 4, y: 4, width: 1, height: 1 });
+        result.shellCaptureAlpha = shellPixel.toBitmap()[3] ?? 255;
         result.newTabDefault = await window.webContents.executeJavaScript(`
           (async () => {
             document.querySelector(".new-tab-button")?.click();
@@ -3171,6 +3499,7 @@ function createWindow() {
             const insertButton = document.querySelector('[aria-label="插入文件或图片"]');
             const submitButton = document.querySelector('.new-tab-submit-button');
             const surfaceRect = surface?.getBoundingClientRect();
+            const page = document.querySelector('.new-tab-page');
             const insertRect = insertButton?.getBoundingClientRect();
             const submitRect = submitButton?.getBoundingClientRect();
             return {
@@ -3180,6 +3509,7 @@ function createWindow() {
               beamActive: beam?.hasAttribute('data-active') || false,
               beamStrength: beam?.style.getPropertyValue('--beam-strength') || "",
               beamWidth: Math.round(beam?.getBoundingClientRect().width || 0),
+              backgroundOpacity: page ? getComputedStyle(page, '::before').opacity : "",
               contextMenuItems: document.querySelectorAll('.new-tab-tab-menu [role="menuitem"]').length,
               heading: document.querySelector(".new-tab-compose h1")?.textContent?.trim() || "",
               leftInset: Math.round((insertRect?.left || 0) - (surfaceRect?.left || 0)),
@@ -3274,6 +3604,7 @@ function createWindow() {
           result.newTabDefault.beamActive &&
           result.newTabDefault.beamStrength === "0.7" &&
           result.newTabDefault.beamWidth === 760 &&
+          result.newTabDefault.backgroundOpacity === "0.1" &&
           result.newTabDefault.heading.length > 0 &&
           !result.newTabDefault.heading.startsWith("今天") &&
           Math.abs(result.newTabDefault.leftInset - result.newTabDefault.rightInset) <= 1 &&
@@ -3355,6 +3686,9 @@ function createWindow() {
             "preconnect",
             "saveModelProvider",
             "saveBriefPreferences",
+            "startSearch",
+            "cancelSearch",
+            "onSearchStream",
             "searchVane",
             "setDefaultModelProvider",
             "syncBriefSignals"
@@ -3394,7 +3728,7 @@ function createWindow() {
 
   window.on("closed", () => {
     for (const view of browserViews.values()) {
-      if (!view.webContents.isDestroyed()) view.webContents.close();
+      getLiveViewWebContents(view)?.close();
     }
     browserViews.clear();
     browserView = undefined;
@@ -3405,11 +3739,30 @@ function createWindow() {
   return window;
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (configureSearchKeys) {
+    try {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error("系统加密存储当前不可用。");
+      const input = await readOneJsonLineFromStdin();
+      const source = input?.services && typeof input.services === "object" ? input.services : input;
+      const configured = [];
+      for (const serviceId of ["serper", "bocha"]) {
+        const apiKey = typeof source?.[serviceId] === "string" ? source[serviceId].trim() : "";
+        if (!apiKey) continue;
+        await modelGuard.saveServiceKey(serviceId, apiKey);
+        configured.push(serviceId);
+      }
+      if (!configured.length) throw new Error("未收到可配置的检索凭据。");
+      console.log(`[search-credentials] ${JSON.stringify({ configured, encrypted: true })}`);
+      app.exit(0);
+    } catch (error) {
+      console.error(`[search-credentials] ${error?.message || "配置失败。"}`);
+      app.exit(1);
+    }
+    return;
+  }
+  await modelGuard.seedServicesFromFile(path.join(projectRoot, "search-keys.local.json"));
   userLocalePromise = detectUserLocale();
-  suggestionRegionPromise = userLocalePromise.then(({ country }) =>
-    country === "CN" ? "CN" : "GLOBAL",
-  );
   const appIcon = nativeImage.createFromPath(appIconPath);
   if (headlessTest && appIcon.isEmpty()) {
     failTest(`App icon failed to load: ${appIconPath}`);
@@ -3417,6 +3770,49 @@ app.whenReady().then(() => {
   }
   if (process.platform === "darwin" && !appIcon.isEmpty()) {
     app.dock.setIcon(appIcon);
+  }
+  if (searchSmokeTest) {
+    const events = [];
+    try {
+      const result = await getScoutSearchService().run({
+        depth: "fast",
+        query: process.env.BEAN_SEARCH_SMOKE_QUERY?.trim()
+          || "DeepSeek V4 最新发布信息与主要变化",
+        region: await userLocalePromise,
+      }, {
+        emit: (event) => events.push(event.type),
+        signal: new AbortController().signal,
+      });
+      const summary = {
+        degraded: Boolean(result.degraded),
+        followupCount: result.relatedQuestions?.length || 0,
+        grounded: Boolean(result.grounded),
+        nonMatchingSourceCount: (result.sources || []).filter((source) =>
+          !matchesRequestedLanguage(`${source.title} ${source.snippet || ""}`, languageForInput(result.plan?.queries?.[0] || ""))
+        ).length,
+        providers: result.retrievalProviders || [],
+        sourceCount: result.sources?.length || 0,
+        status: result.status,
+        streamEvents: events.filter((type) => type === "token").length,
+        stages: [...new Set(events.filter((type) => ["stage", "sources", "done"].includes(type)))],
+        topLevelHeadingCount: String(result.message || "").split("\n")
+          .filter((line) => /^\s*#(?!#)\s+/.test(line)).length,
+        zhihuEvidenceCount: (result.sources || []).filter(isZhihuSource).length,
+      };
+      console.log(`[search-smoke] ${JSON.stringify(summary)}`);
+      if (process.env.BEAN_SEARCH_SMOKE_VERBOSE === "1") {
+        console.log(`[search-smoke-result] ${JSON.stringify({
+          answer: result.message,
+          queries: result.plan?.queries || [],
+          sources: (result.sources || []).map(({ domain, title, url }) => ({ domain, title, url })),
+        })}`);
+      }
+      app.exit(result.status === "success" && result.sources?.length && result.message ? 0 : 1);
+    } catch (error) {
+      console.error(`[search-smoke] ${error?.message || error}`);
+      app.exit(1);
+    }
+    return;
   }
   registerBrowserIpc();
   briefService.startScheduler();

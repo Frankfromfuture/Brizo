@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   allocateStorySlots,
+  briefSourcePriority,
   buildSupplementalFeeds,
   createExtractiveSummary,
   createBriefService,
@@ -12,6 +13,7 @@ import {
   groundModelTopics,
   inferTopicsFromSignals,
   isAllowedBriefSource,
+  isLowQualityBriefResult,
   isLikelyArticleUrl,
   scoreBriefSignals,
   selectFrontStories,
@@ -199,6 +201,22 @@ test("front page keeps domestic and international balance", () => {
   assert.ok(selected.filter((story) => story.region === "国际").length >= 2);
 });
 
+test("front page prioritizes Serper stories over RSS fallback", () => {
+  const stories = [
+    { id: "rss-cn", region: "国内", score: 1, sources: [{ sourceAdapter: "publisher-rss" }] },
+    { id: "bocha-cn", region: "国内", score: 0.7, sources: [{ sourceAdapter: "bocha-news" }] },
+    { id: "rss-world", region: "国际", score: 0.98, sources: [{ sourceAdapter: "publisher-rss" }] },
+    { id: "serper-world", region: "国际", score: 0.65, sources: [{ sourceAdapter: "serper-news" }] },
+  ];
+  const selected = selectFrontStories(stories, 4);
+  assert.deepEqual(selected.slice(0, 2).map((story) => story.id), ["serper-world", "bocha-cn"]);
+});
+
+test("Brief source priority keeps Serper primary and RSS as fallback", () => {
+  assert.ok(briefSourcePriority("serper-news") > briefSourcePriority("bocha-news"));
+  assert.ok(briefSourcePriority("bocha-news") > briefSourcePriority("publisher-rss"));
+});
+
 test("brief sources allow authoritative newsrooms and reject wiki/zhihu hubs", () => {
   assert.equal(isAllowedBriefSource("https://www.reuters.com/world/asia/china-policy-update-2026-08-03/"), true);
   assert.equal(isAllowedBriefSource("https://www.thepaper.cn/newsDetail_forward_31234567"), true);
@@ -210,6 +228,14 @@ test("brief sources allow authoritative newsrooms and reject wiki/zhihu hubs", (
   assert.equal(isAllowedBriefSource("https://www.reuters.com/world"), false);
   assert.equal(isLikelyArticleUrl("https://www.bbc.com/news"), false);
   assert.equal(isLikelyArticleUrl("https://www.bbc.com/news/articles/c1234567890"), true);
+});
+
+test("Brief filters roundup and daily-digest headlines instead of treating them as one event", () => {
+  assert.equal(isLowQualityBriefResult({ title: "今日早报每日热点15条新闻简报，每天一分钟知晓天下事" }), true);
+  assert.equal(isLowQualityBriefResult({ title: "「早报」美股半导体集体爆发，油价大跌，黄金走强" }), true);
+  assert.equal(isLowQualityBriefResult({ title: "导读" }), true);
+  assert.equal(isLowQualityBriefResult({ title: "认识自我_标签_网易出品" }), true);
+  assert.equal(isLowQualityBriefResult({ title: "三星与SK海力士测试中国芯片设备" }), false);
 });
 
 test("signal persistence enforces limits, excludes private records, and stores no sensitive payload fields", async (t) => {
@@ -248,9 +274,24 @@ test("signal persistence enforces limits, excludes private records, and stores n
   assert.equal((await stat(filePath)).mode & 0o777, 0o600);
 });
 
-test("report translates one RSS source without synthesizing other content", async (t) => {
+test("report synthesizes multiple sources and returns five related image stories", async (t) => {
   const userDataPath = await mkdtemp(path.join(os.tmpdir(), "brizo-brief-report-"));
   t.after(() => rm(userDataPath, { force: true, recursive: true }));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response("<!doctype html><html><head><meta property=\"og:image\" content=\"https://images.example/report.jpg\"></head><body><article><p>来源正文补充。</p></article></body></html>", {
+    headers: { "content-type": "text/html" },
+    status: 200,
+  });
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const relatedStories = Array.from({ length: 5 }, (_, index) => ({
+    headline: `相关新闻 ${index + 1}`,
+    id: `related-${index + 1}`,
+    imageUrl: `https://images.example/related-${index + 1}.jpg`,
+    publishedAt: new Date(Date.now() - index * 60_000).toISOString(),
+    summary: `相关新闻摘要 ${index + 1}`,
+    topicId: "technology",
+    url: `https://www.bbc.com/news/articles/related-${index + 1}`,
+  }));
   const edition = {
     id: "edition-1",
     pages: [{
@@ -258,14 +299,24 @@ test("report translates one RSS source without synthesizing other content", asyn
         headline: "微软发布产品更新",
         id: "story-1",
         summary: "微软发布产品更新。 [1]",
-        sources: [{
-          bodyExcerpt: "Microsoft released a product update with a new workflow feature.",
-          domain: "reuters.com",
-          snippet: "Microsoft released a product update.",
-          title: "Microsoft releases product update",
-          url: "https://www.reuters.com/technology/rss-product-update-2026-08-03/",
-        }],
-      }],
+        topicId: "technology",
+        sources: [
+          {
+            bodyExcerpt: "Microsoft released a product update with a new workflow feature.",
+            domain: "reuters.com",
+            snippet: "Microsoft released a product update.",
+            title: "Microsoft releases product update",
+            url: "https://www.reuters.com/technology/rss-product-update-2026-08-03/",
+          },
+          {
+            bodyExcerpt: "The product adds workflow controls for enterprise customers.",
+            domain: "apnews.com",
+            snippet: "The update adds enterprise workflow controls.",
+            title: "Microsoft adds enterprise workflow controls",
+            url: "https://apnews.com/article/microsoft-product-workflow-update",
+          },
+        ],
+      }, ...relatedStories],
     }],
     status: "success",
     updatedAt: new Date().toISOString(),
@@ -275,16 +326,20 @@ test("report translates one RSS source without synthesizing other content", asyn
     preferences: {},
     reports: {},
   }), { mode: 0o600 });
-  let translationPrompt = "";
+  let synthesisPrompt = "";
   const service = createBriefService({
     callModel: async ({ systemPrompt }) => {
-      translationPrompt = systemPrompt;
+      synthesisPrompt = systemPrompt;
       return ({
-      message: JSON.stringify({
-        headline: "微软发布产品更新",
-        body: ["微软发布了一项产品更新，加入新的工作流功能。"],
-      }),
-      status: "success",
+        message: JSON.stringify({
+          headline: "微软推出企业工作流产品更新",
+          lead: "微软发布了新的工作流功能，并面向企业客户增加控制能力。[1][2]",
+          body: [
+            "微软公布了产品更新的主要功能与发布时间。[1]",
+            "另一家媒体补充称，新功能重点服务企业客户。[2]",
+          ],
+        }),
+        status: "success",
       });
     },
     search: async () => [],
@@ -292,10 +347,13 @@ test("report translates one RSS source without synthesizing other content", asyn
   });
   const report = await service.getReport({ editionId: edition.id, storyId: "story-1" });
   assert.equal(report.status, "success");
-  assert.deepEqual(report.body, ["微软发布了一项产品更新，加入新的工作流功能。 [1]"]);
-  assert.equal(report.sources.length, 1);
-  assert.match(translationPrompt, /只把给定的外文新闻标题和正文忠实翻译/);
-  assert.doesNotMatch(translationPrompt, /整理成一篇|为什么重要|趋势判断/);
+  assert.equal(report.synthesisState, "model");
+  assert.equal(report.sources.length, 2);
+  assert.equal(report.relatedStories.length, 5);
+  assert.match(report.lead, /\[1\]\[2\]/);
+  assert.match(report.body.join(" "), /\[1\].*\[2\]/);
+  assert.match(synthesisPrompt, /整理成一篇简体中文综合报道/);
+  assert.match(synthesisPrompt, /来源冲突必须明确指出/);
 });
 
 test("generation failure keeps the latest successful cached edition", async (t) => {
@@ -322,7 +380,7 @@ test("generation failure keeps the latest successful cached edition", async (t) 
   });
   const result = await service.getEdition({ at: localTime(2026, 8, 2, 12, 0) });
   assert.equal(result.id, cached.id);
-  assert.match(result.staleReason, /RSS 新闻源/);
+  assert.match(result.staleReason, /专业新闻检索与 RSS/);
 });
 
 test("Chinese RSS items publish without any AI call", async (t) => {

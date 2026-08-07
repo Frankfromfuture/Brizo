@@ -27,6 +27,81 @@ export function createPdfFilename(title) {
   return `${safeTitle || "Web article"}.pdf`;
 }
 
+function formatSearchInline(value) {
+  return escapeHtml(value)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\[(\d+)\]/g, "<sup>[$1]</sup>");
+}
+
+function searchAnswerToHtml(answer) {
+  const blocks = [];
+  let listType = "";
+  const closeList = () => {
+    if (listType) blocks.push(`</${listType}>`);
+    listType = "";
+  };
+  for (const rawLine of String(answer || "").split("\n")) {
+    const line = rawLine.trim();
+    if (!line) {
+      closeList();
+      continue;
+    }
+    if (/^#(?!#)\s+/.test(line)) continue;
+    const heading = line.match(/^#{2,4}\s+(.+)$/);
+    if (heading) {
+      closeList();
+      blocks.push(`<h2>${formatSearchInline(heading[1])}</h2>`);
+      continue;
+    }
+    const bullet = line.match(/^[-*•]\s+(.+)$/);
+    const ordered = line.match(/^\d+[.)、]\s+(.+)$/);
+    if (bullet || ordered) {
+      const nextType = ordered ? "ol" : "ul";
+      if (listType !== nextType) {
+        closeList();
+        blocks.push(`<${nextType}>`);
+        listType = nextType;
+      }
+      blocks.push(`<li>${formatSearchInline((ordered || bullet)[1])}</li>`);
+      continue;
+    }
+    closeList();
+    blocks.push(`<p>${formatSearchInline(line)}</p>`);
+  }
+  closeList();
+  return blocks.join("\n");
+}
+
+export function createSearchResultArticle(payload = {}) {
+  const query = String(payload.query || "Brizo 搜索结果").replace(/\s+/g, " ").trim().slice(0, 500);
+  const sources = (Array.isArray(payload.sources) ? payload.sources : []).slice(0, 20);
+  const sourceItems = sources.map((source, index) => {
+    let url = "";
+    try {
+      const parsed = new URL(String(source?.url || ""));
+      if (["http:", "https:"].includes(parsed.protocol)) url = parsed.href;
+    } catch {
+      url = "";
+    }
+    const title = escapeHtml(String(source?.title || source?.domain || "网页来源").slice(0, 500));
+    const domain = escapeHtml(String(source?.domain || "").slice(0, 200));
+    const link = url ? `<a href="${escapeHtml(url)}">${title}</a>` : title;
+    return `<p><strong>[${index + 1}]</strong> ${link}${domain ? ` <small>${domain}</small>` : ""}</p>`;
+  }).join("\n");
+  const content = `
+    <section class="search-answer">${searchAnswerToHtml(String(payload.answer || "").slice(0, 80_000))}</section>
+    ${sourceItems ? `<section class="search-sources"><h2>来源</h2><div class="search-source-list">${sourceItems}</div></section>` : ""}
+  `;
+  return {
+    byline: "Brizo Scout AI",
+    content,
+    dir: "auto",
+    lang: /[\u3400-\u9fff]/.test(query) ? "zh-CN" : "en",
+    publishedTime: new Date().toISOString(),
+    title: query || "Brizo 搜索结果",
+  };
+}
+
 export async function extractReadableArticle(webContents) {
   if (!webContents || webContents.isDestroyed()) {
     throw new Error("The page is no longer available.");
@@ -387,6 +462,26 @@ function buildArticleDocument(article) {
 
       .article-content {
         font-size: 12pt;
+      }
+
+      .search-sources {
+        margin-top: 10mm;
+        padding-top: 6mm;
+        border-top: 0.5pt solid #c9c9c9;
+      }
+
+      .search-sources small {
+        color: #686868;
+        font-size: 9pt;
+      }
+
+      .search-source-list p {
+        margin-bottom: 2.4mm;
+      }
+
+      .search-answer sup {
+        color: #536b58;
+        font-size: 8pt;
       }
 
       .article-content > :first-child {

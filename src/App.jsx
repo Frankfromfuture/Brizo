@@ -23,9 +23,9 @@ import {
   CirclesFour,
   ClockCounterClockwise,
   Compass,
+  CopySimple,
   DotsThreeVertical,
   DownloadSimple,
-  DotsSixVertical,
   EyeSlash,
   FilePdf,
   Flask,
@@ -48,6 +48,7 @@ import {
   Printer,
   Rocket,
   Selection,
+  ShareNetwork,
   ShieldCheck,
   Sparkle,
   SquaresFour,
@@ -58,15 +59,24 @@ import {
 } from "@phosphor-icons/react";
 import { BorderBeam } from "border-beam";
 import browserErrorBackgroundUrl from "../404.png";
-import brizoLogoUrl from "../logo.png";
+import brizoLogoUrl from "../hermes logo.svg";
 import brizoWordmarkUrl from "../logo brizo.png";
-import modelGuardIconUrl from "../model.png";
+import modelGuardIconUrl from "../hermes logo.svg";
+import errorTabIconUrl from "./anchor.svg";
+import newTabIconUrl from "./compass-alt.svg";
 import {
   getDefaultBookmarkFaviconUrl,
   normalizeImportedBookmark,
   normalizeImportedBookmarkFolder,
 } from "../shared/bookmark-folders.mjs";
 import { shouldUseLightForeground } from "../shared/page-color.mjs";
+import {
+  createSearchShareUrl,
+  isZhihuSource,
+  languageForInput,
+  matchesRequestedLanguage,
+  queryFromSearchShareUrl,
+} from "../shared/search-text.mjs";
 import { BriefPage, createBriefPreviewEdition } from "./BriefPage.jsx";
 
 const NEW_TAB_CHROME_COLOR = "rgb(252, 250, 250)";
@@ -181,11 +191,7 @@ const starterBookmarks = articles.map((article, index) => ({
 function formatAddressForDisplay(address) {
   try {
     const url = new URL(address);
-    const domain = url.hostname.replace(/^www\./i, "");
-    const subAddress = `${url.pathname}${url.search}${url.hash}`
-      .replace(/^\/+/, "")
-      .replace(/\/$/, "");
-    return subAddress ? `${domain} - ${subAddress}` : domain;
+    return url.host;
   } catch {
     return address;
   }
@@ -233,12 +239,6 @@ function looksLikeWebsiteInput(value) {
     || /^[\w-]+(?:\.[\w-]+)+(?:[/:?#]|$)/i.test(input);
 }
 
-const browserSuggestionRegionPromise = window.beanBrowser
-  ? Promise.resolve("DESKTOP")
-  : fetch("https://api.country.is/")
-      .then((response) => response.ok ? response.json() : null)
-      .then((payload) => payload?.country === "CN" ? "CN" : "GLOBAL")
-      .catch(() => "GLOBAL");
 const browserSuggestionCache = new Map();
 const BROWSER_SUGGESTION_CACHE_TTL = 5 * 60 * 1000;
 
@@ -263,11 +263,12 @@ function requestJsonpSuggestions({ callbackParam, endpoint, params, scriptCharse
 }
 
 async function requestBrowserSuggestions(input) {
-  const cacheKey = String(input || "").trim().toLocaleLowerCase();
+  const inputLanguage = languageForInput(input);
+  const cacheKey = `${inputLanguage}:${String(input || "").trim().toLocaleLowerCase()}`;
   const cached = browserSuggestionCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.suggestions;
   let suggestions;
-  if (await browserSuggestionRegionPromise === "CN") {
+  if (inputLanguage === "zh") {
     suggestions = await requestJsonpSuggestions({
       callbackParam: "cb",
       endpoint: "https://suggestion.baidu.com/su",
@@ -280,11 +281,12 @@ async function requestBrowserSuggestions(input) {
       endpoint: "https://api.bing.com/osjson.aspx",
       params: {
         JsonType: "callback",
-        language: "zh-CN",
+        language: inputLanguage === "ja" ? "ja-JP" : inputLanguage === "ko" ? "ko-KR" : "en-US",
         query: input,
       },
     });
   }
+  suggestions = suggestions.filter((item) => matchesRequestedLanguage(item, inputLanguage));
   browserSuggestionCache.set(cacheKey, {
     suggestions,
     expiresAt: Date.now() + BROWSER_SUGGESTION_CACHE_TTL,
@@ -335,21 +337,35 @@ function createSearchHistorySnapshot(result) {
   return {
     message: String(result.message || "").slice(0, 50_000),
     mode: typeof result.mode === "string" ? result.mode : "",
-    modelLabel: typeof result.modelLabel === "string" ? result.modelLabel : "",
-    providerLabel: typeof result.providerLabel === "string" ? result.providerLabel : "",
     relatedQuestions: Array.isArray(result.relatedQuestions)
-      ? result.relatedQuestions.filter((item) => typeof item === "string").slice(0, 3)
+      ? result.relatedQuestions.filter((item) => typeof item === "string").slice(0, 5)
       : [],
+    cards: Array.isArray(result.cards)
+      ? result.cards.slice(0, 2).map((group) => ({
+        kind: String(group?.kind || ""),
+        items: Array.isArray(group?.items) ? group.items.slice(0, 8).map((item) => ({
+          ...item,
+          title: String(item?.title || "").slice(0, 500),
+          url: String(item?.url || "").slice(0, 4_000),
+          imageUrl: String(item?.imageUrl || item?.thumbnailUrl || "").slice(0, 4_000),
+        })) : [],
+      }))
+      : [],
+    depth: ["fast", "balanced", "deep"].includes(result.depth) ? result.depth : "",
+    degraded: Boolean(result.degraded),
+    grounded: result.grounded !== false,
+    notices: Array.isArray(result.notices) ? result.notices.slice(0, 4).map((item) => String(item).slice(0, 500)) : [],
     sources: Array.isArray(result.sources)
-      ? result.sources.slice(0, 8).map((source) => ({
+      ? result.sources.slice(0, 12).map((source) => ({
         domain: String(source?.domain || "").slice(0, 300),
+        imageUrl: String(source?.imageUrl || "").slice(0, 4_000),
+        rank: Number.isInteger(source?.rank) ? source.rank : null,
         snippet: String(source?.snippet || "").slice(0, 2_000),
         title: String(source?.title || "").slice(0, 500),
         url: String(source?.url || "").slice(0, 4_000),
       }))
       : [],
     status: result.status === "success" || result.status === "preview" ? result.status : "error",
-    vaneUrl: typeof result.vaneUrl === "string" ? result.vaneUrl.slice(0, 4_000) : "",
   };
 }
 
@@ -379,7 +395,7 @@ function Logo() {
 }
 
 function CitedAnswerText({ onOpenSource, sources, text }) {
-  const parts = String(text || "").split(/(\[\d+\]|\*\*[^*]+\*\*)/g).filter(Boolean);
+  const parts = String(text || "").split(/(\[\d+\]|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)]+\))/g).filter(Boolean);
   return parts.map((part, index) => {
     const citation = part.match(/^\[(\d+)\]$/);
     if (citation) {
@@ -399,13 +415,68 @@ function CitedAnswerText({ onOpenSource, sources, text }) {
     if (part.startsWith("**") && part.endsWith("**")) {
       return <strong key={`${part}-${index}`}>{part.slice(2, -2)}</strong>;
     }
+    if (part.startsWith("`") && part.endsWith("`")) {
+      return <code key={`${part}-${index}`}>{part.slice(1, -1)}</code>;
+    }
+    const link = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
+    if (link) {
+      return (
+        <a
+          href={link[2]}
+          key={`${part}-${index}`}
+          onClick={(event) => {
+            event.preventDefault();
+            onOpenSource(link[2]);
+          }}
+        >
+          {link[1]}
+        </a>
+      );
+    }
     return <span key={`${part}-${index}`}>{part}</span>;
   });
 }
 
 function SearchAnswer({ message, onOpenSource, sources }) {
-  const blocks = String(message || "").split("\n").map((line) => line.trim()).filter(Boolean);
-  return blocks.map((line, index) => {
+  const blocks = useMemo(() => {
+    const lines = String(message || "").split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !/^#(?!#)\s+/.test(line));
+    const parsed = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      const next = lines[index + 1] || "";
+      if (line.includes("|") && /^\|?\s*:?-{3,}/.test(next)) {
+        const rows = [];
+        const splitRow = (value) => value.replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
+        const headers = splitRow(line);
+        index += 2;
+        while (index < lines.length && lines[index].includes("|")) {
+          rows.push(splitRow(lines[index]));
+          index += 1;
+        }
+        index -= 1;
+        parsed.push({ type: "table", headers, rows });
+      } else {
+        parsed.push({ type: "line", value: line });
+      }
+    }
+    return parsed;
+  },
+    [message],
+  );
+  return blocks.map((block, index) => {
+    if (block.type === "table") {
+      return (
+        <div className="new-tab-answer-table-wrap" key={`table-${index}`}>
+          <table>
+            <thead><tr>{block.headers.map((cell, cellIndex) => <th key={cellIndex}><CitedAnswerText text={cell} sources={sources} onOpenSource={onOpenSource} /></th>)}</tr></thead>
+            <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}><CitedAnswerText text={cell} sources={sources} onOpenSource={onOpenSource} /></td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      );
+    }
+    const line = block.value;
     const heading = line.match(/^#{2,4}\s+(.+)$/);
     if (heading) {
       return <h3 key={`${line}-${index}`}><CitedAnswerText text={heading[1]} sources={sources} onOpenSource={onOpenSource} /></h3>;
@@ -414,8 +485,116 @@ function SearchAnswer({ message, onOpenSource, sources }) {
     if (bullet) {
       return <div className="new-tab-answer-bullet" key={`${line}-${index}`}><span>•</span><p><CitedAnswerText text={bullet[1]} sources={sources} onOpenSource={onOpenSource} /></p></div>;
     }
+    const ordered = line.match(/^(\d+)[.)、]\s+(.+)$/);
+    if (ordered) {
+      return <div className="new-tab-answer-bullet is-ordered" key={`${line}-${index}`}><span>{ordered[1]}.</span><p><CitedAnswerText text={ordered[2]} sources={sources} onOpenSource={onOpenSource} /></p></div>;
+    }
     return <p key={`${line}-${index}`}><CitedAnswerText text={line} sources={sources} onOpenSource={onOpenSource} /></p>;
   });
+}
+
+function SearchVerticalCards({ cards, onOpenSource }) {
+  if (!Array.isArray(cards) || !cards.length) return null;
+  return cards.map((group) => (
+    <section className={`new-tab-cards is-${group.kind}`} key={group.kind} aria-label="专项搜索结果">
+      <h3>{{ news: "最新动态", images: "图片", videos: "视频", scholar: "研究论文", places: "地点" }[group.kind] || "相关结果"}</h3>
+      <div>
+        {(group.items || []).slice(0, 8).map((item, index) => {
+          const canOpen = Boolean(item.url);
+          const Component = canOpen ? "button" : "article";
+          return (
+            <Component
+              key={`${item.url || item.title}-${index}`}
+              {...(canOpen ? { type: "button", onClick: () => onOpenSource(item.url) } : {})}
+            >
+              {(item.imageUrl || item.thumbnailUrl) && <img src={item.thumbnailUrl || item.imageUrl} alt="" />}
+              <span>
+                <strong>{item.title || item.address || "相关结果"}</strong>
+                <small>{item.source || item.domain || item.publicationInfo || item.address || item.category || ""}</small>
+                {(item.dateLabel || item.duration || item.year || item.rating) && (
+                  <em>{item.dateLabel || item.duration || item.year || `${item.rating} 分`}</em>
+                )}
+              </span>
+            </Component>
+          );
+        })}
+      </div>
+    </section>
+  ));
+}
+
+function SourceFavicon({ className = "", source }) {
+  const [failed, setFailed] = useState(false);
+  const faviconUrl = source.imageUrl || getDefaultBookmarkFaviconUrl(source.url);
+  const fallback = (source.domain || source.title || "网").slice(0, 1).toUpperCase();
+  return (
+    <span className={className}>
+      {faviconUrl && !failed
+        ? <img src={faviconUrl} alt="" onError={() => setFailed(true)} />
+        : <span>{fallback}</span>}
+    </span>
+  );
+}
+
+function SearchSources({ expanded, id, onOpenSource, onToggle, sources }) {
+  const rankedSources = useMemo(() => sources.map((source, citationIndex) => ({
+    ...source,
+    citationIndex: citationIndex + 1,
+    displayRank: Number.isInteger(source?.rank) ? source.rank : citationIndex,
+  })).sort((left, right) => left.displayRank - right.displayRank), [sources]);
+  const visibleSources = expanded ? rankedSources : rankedSources.slice(0, 3);
+  if (!rankedSources.length) return null;
+  return (
+    <section className={`new-tab-sources${expanded ? " is-expanded" : ""}`} aria-label="来源">
+      <div className="new-tab-sources-heading">
+        <h3>来源</h3>
+        <span>按权威性与相关度排序</span>
+      </div>
+      <div className="new-tab-source-list" id={id}>
+        {visibleSources.map((source) => {
+          return (
+            <button
+              key={`${source.url}-${source.citationIndex}`}
+              type="button"
+              onClick={() => onOpenSource(source.url)}
+            >
+              <span className="new-tab-source-card-meta">
+                <SourceFavicon className="new-tab-source-favicon" source={source} />
+                <small>{source.domain || source.url}</small>
+                <span className="new-tab-source-index">{source.citationIndex}</span>
+              </span>
+              <strong>{source.title || source.domain || "网页来源"}</strong>
+              {source.snippet && <em>{source.snippet}</em>}
+              <LinkSimple size={14} />
+            </button>
+          );
+        })}
+      </div>
+      <div className="new-tab-source-summary">
+        <span className="new-tab-source-stack" aria-hidden="true">
+          {rankedSources.slice(0, 5).map((source, index) => (
+            <SourceFavicon
+              className="new-tab-source-stack-icon"
+              key={`${source.url}-stack-${index}`}
+              source={source}
+            />
+          ))}
+        </span>
+        <span>{rankedSources.length} 个来源</span>
+        {rankedSources.length > 3 && (
+          <button
+            type="button"
+            aria-controls={id}
+            aria-expanded={expanded}
+            onClick={onToggle}
+          >
+            {expanded ? "收起来源" : `展开其余 ${rankedSources.length - 3} 个`}
+            <CaretDown size={13} />
+          </button>
+        )}
+      </div>
+    </section>
+  );
 }
 
 const START_TAB = {
@@ -507,7 +686,7 @@ function groupDownloads(downloads) {
   })).filter((group) => group.downloads.length);
 }
 
-function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialPrompt, onOpenSource, onRestoreHistory, onSubmit, tabs, useTodayGreeting }) {
+function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialPrompt, onNotify, onOpenSource, onRestoreHistory, onSearchComplete, onSubmit, tabs, useTodayGreeting }) {
   const [greeting] = useState(() => {
     const pair = NEW_TAB_GREETINGS[Math.floor(Math.random() * NEW_TAB_GREETINGS.length)];
     return pair[useTodayGreeting ? 0 : 1];
@@ -523,10 +702,20 @@ function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialP
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResult, setSearchResult] = useState(null);
   const [searchState, setSearchState] = useState("idle");
+  const [searchStage, setSearchStage] = useState("");
+  const [searchThread, setSearchThread] = useState([]);
+  const [sourcesExpanded, setSourcesExpanded] = useState(false);
+  const [resultPdfExporting, setResultPdfExporting] = useState(false);
   const fileInputRef = useRef(null);
   const historyMenuRef = useRef(null);
   const promptInputRef = useRef(null);
+  const resultsRef = useRef(null);
+  const followStream = useRef(true);
   const searchSequence = useRef(0);
+  const activeSearchId = useRef("");
+  const searchQueryRef = useRef("");
+  const tokenBuffer = useRef("");
+  const tokenFrame = useRef(0);
   const initialPromptStarted = useRef(false);
   const availableTabs = tabs
     .filter((tab) => tab.id !== activeTabId && !tab.isNewTab)
@@ -571,6 +760,72 @@ function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialP
     };
   }, [historyMenuOpen]);
 
+  useEffect(() => {
+    if (!window.beanBrowser?.onSearchStream) return undefined;
+    const unsubscribe = window.beanBrowser.onSearchStream((event) => {
+      if (!event || event.searchId !== activeSearchId.current) return;
+      if (event.type === "stage") {
+        setSearchStage(event.detail || "");
+      } else if (event.type === "plan") {
+        setSearchResult((current) => ({ ...current, plan: event, depth: event.depth }));
+      } else if (event.type === "sources") {
+        setSearchResult((current) => ({ ...current, sources: event.sources || [] }));
+      } else if (event.type === "cards") {
+        setSearchResult((current) => ({ ...current, cards: event.cards || [] }));
+      } else if (event.type === "notice") {
+        setSearchResult((current) => ({
+          ...current,
+          notices: [...(current?.notices || []), event.message].filter(Boolean).slice(-4),
+        }));
+      } else if (event.type === "token") {
+        tokenBuffer.current += event.text || "";
+        if (!tokenFrame.current) {
+          tokenFrame.current = window.requestAnimationFrame(() => {
+            const text = tokenBuffer.current;
+            tokenBuffer.current = "";
+            tokenFrame.current = 0;
+            setSearchResult((current) => ({ ...current, message: `${current?.message || ""}${text}` }));
+            setSearchState("streaming");
+          });
+        }
+      } else if (event.type === "done") {
+        if (tokenFrame.current) window.cancelAnimationFrame(tokenFrame.current);
+        tokenFrame.current = 0;
+        tokenBuffer.current = "";
+        const result = { ...event.result, notices: event.result?.notices || [] };
+        setSearchResult((current) => ({ ...current, ...result, notices: current?.notices || result.notices || [] }));
+        setSearchState("success");
+        setSearchStage("");
+        activeSearchId.current = "";
+        setSearchThread((current) => [...current, {
+          query: searchQueryRef.current,
+          answer: result.message,
+          sources: result.sources,
+        }].slice(-4));
+        onSearchComplete?.({ query: searchQueryRef.current, result });
+      } else if (event.type === "error") {
+        setSearchResult((current) => ({
+          ...current,
+          status: "error",
+          message: event.message || "搜索暂时不可用。",
+        }));
+        setSearchState("error");
+        setSearchStage("");
+        activeSearchId.current = "";
+      }
+    });
+    return () => {
+      unsubscribe?.();
+      if (activeSearchId.current) window.beanBrowser?.cancelSearch?.(activeSearchId.current);
+      if (tokenFrame.current) window.cancelAnimationFrame(tokenFrame.current);
+    };
+  }, [onSearchComplete]);
+
+  useEffect(() => {
+    if (searchState !== "streaming" || !followStream.current || !resultsRef.current) return;
+    resultsRef.current.scrollTop = resultsRef.current.scrollHeight;
+  }, [searchResult?.message, searchState]);
+
   const runPrompt = async (rawValue) => {
     const value = rawValue.trim();
     if (!value) {
@@ -579,15 +834,28 @@ function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialP
     }
     const sequence = searchSequence.current + 1;
     searchSequence.current = sequence;
+    if (activeSearchId.current) window.beanBrowser?.cancelSearch?.(activeSearchId.current);
+    const searchId = `search-${window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+    activeSearchId.current = searchId;
+    searchQueryRef.current = value;
+    tokenBuffer.current = "";
     setTabMenuOpen(false);
     setHistoryMenuOpen(false);
     setSearchQuery(value);
     setSearchResult(null);
     setSearchState("loading");
-    const result = await onSubmit({ attachments, contextTab, model, tabId: activeTabId, value });
+    setSourcesExpanded(false);
+    followStream.current = true;
+    setSearchStage("正在启动检索");
+    const result = await onSubmit({ attachments, contextTab, depth: "fast", model, searchId, tabId: activeTabId, thread: searchThread, value });
     if (searchSequence.current !== sequence || result?.status === "navigated") return;
+    if (result?.status === "started" || result?.status === "streaming") return;
+    activeSearchId.current = "";
     setSearchResult(result);
     setSearchState(result?.status === "success" || result?.status === "preview" ? "success" : "error");
+    if (result?.status === "success" || result?.status === "preview") {
+      onSearchComplete?.({ query: value, result });
+    }
   };
 
   useEffect(() => {
@@ -604,6 +872,59 @@ function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialP
 
   const hasResults = searchState !== "idle";
   const sourceItems = Array.isArray(searchResult?.sources) ? searchResult.sources : [];
+  const visibleSourceItems = sourceItems.filter((source) => !isZhihuSource(source));
+  const waitingForEvidence = searchState === "loading" && !sourceItems.length && !searchResult?.message;
+  const copyText = async (value) => {
+    if (window.beanBrowser?.copyText) return await window.beanBrowser.copyText(value);
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+    return false;
+  };
+  const copySearchResult = async () => {
+    const sourceText = visibleSourceItems.map((source, index) =>
+      `[${index + 1}] ${source.title || source.domain || "网页来源"}\n${source.url || ""}`
+    ).join("\n\n");
+    const text = [searchQuery, searchResult?.message, sourceText ? `来源\n${sourceText}` : ""]
+      .filter(Boolean)
+      .join("\n\n");
+    try {
+      const copied = await copyText(text);
+      onNotify?.(copied ? "搜索结果已复制" : "无法复制搜索结果");
+    } catch {
+      onNotify?.("无法复制搜索结果");
+    }
+  };
+  const shareSearchResult = async () => {
+    const url = createSearchShareUrl(searchQuery);
+    try {
+      const copied = await copyText(url);
+      onNotify?.(copied ? "搜索地址已复制" : "无法复制搜索地址");
+    } catch {
+      onNotify?.("无法复制搜索地址");
+    }
+  };
+  const exportSearchPdf = async () => {
+    if (!window.beanBrowser?.exportSearchPdf) {
+      onNotify?.("PDF 下载仅在桌面版可用");
+      return;
+    }
+    setResultPdfExporting(true);
+    try {
+      const result = await window.beanBrowser.exportSearchPdf({
+        answer: searchResult?.message || "",
+        query: searchQuery,
+        sources: visibleSourceItems,
+      });
+      if (result?.status === "saved") onNotify?.("搜索结果 PDF 已保存");
+      else if (result?.status === "error") onNotify?.(result.message || "无法生成 PDF");
+    } catch {
+      onNotify?.("无法生成 PDF");
+    } finally {
+      setResultPdfExporting(false);
+    }
+  };
 
   return (
     <section className={`new-tab-page${hasResults ? " has-results" : ""}`} aria-label="Brizo new tab">
@@ -640,11 +961,13 @@ function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialP
                     if (item.result) {
                       setSearchQuery(item.query);
                       setSearchResult(item.result);
+                      setSearchThread([{ query: item.query, answer: item.result.message, sources: item.result.sources || [] }]);
                       setSearchState(
                         item.result.status === "success" || item.result.status === "preview"
                           ? "success"
                           : "error",
                       );
+                      setSourcesExpanded(false);
                       onRestoreHistory?.({ query: item.query, tabId: activeTabId });
                     }
                     window.requestAnimationFrame(() => promptInputRef.current?.focus());
@@ -661,55 +984,85 @@ function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialP
           </div>
         )}
       </div>
-      <section className="new-tab-results" aria-live="polite" aria-label="搜索结果" aria-hidden={!hasResults}>
-        {hasResults && <>
+      <section
+        className="new-tab-results"
+        ref={resultsRef}
+        aria-live="polite"
+        aria-label="搜索结果"
+        aria-hidden={!hasResults}
+        onScroll={(event) => {
+          const node = event.currentTarget;
+          followStream.current = node.scrollHeight - node.scrollTop - node.clientHeight < 90;
+        }}
+      >
+        {hasResults && <div className="new-tab-results-content">
         <header className="new-tab-results-header">
-          <span>{searchState === "loading" ? "正在处理" : searchResult?.mode === "direct" ? "Brizo 回答" : "Brizo Scout AI"}</span>
+          <span>Brizo Scout AI</span>
           <h2>{searchQuery}</h2>
         </header>
 
-        {searchState === "loading" ? (
+        {waitingForEvidence ? (
           <div className="new-tab-loading-result">
             <div className="new-tab-loading-label">
               <ArrowsClockwise size={16} />
-              <span>正在搜索网页并组织答案…</span>
+              <span>{searchStage || "正在搜索网页并组织答案…"}</span>
             </div>
             <i /><i /><i /><i />
           </div>
         ) : (
           <>
+            {(searchState === "loading" || searchState === "streaming") && (
+              <div className="new-tab-live-stage" role="status">
+                <ArrowsClockwise size={14} />
+                <span>{searchStage || "正在组织答案"}</span>
+              </div>
+            )}
+            {searchResult?.notices?.map((notice) => (
+              <p className="new-tab-search-notice" key={notice}>{notice}</p>
+            ))}
+
+            <SearchSources
+              expanded={sourcesExpanded}
+              id={`new-tab-source-list-${activeTabId}`}
+              sources={visibleSourceItems}
+              onOpenSource={onOpenSource}
+              onToggle={() => setSourcesExpanded((value) => !value)}
+            />
+
             <article className={`new-tab-answer${searchState === "error" ? " is-error" : ""}`}>
-              <SearchAnswer
-                message={searchResult?.message || "搜索服务暂时不可用。"}
-                sources={sourceItems}
-                onOpenSource={onOpenSource}
-              />
-              {searchState === "error" && searchResult?.vaneUrl && (
-                <code className="new-tab-vane-url">{searchResult.vaneUrl}</code>
-              )}
+              {searchResult?.message ? (
+                <SearchAnswer
+                  message={searchResult.message}
+                  sources={sourceItems}
+                  onOpenSource={onOpenSource}
+                />
+              ) : searchState === "error" ? (
+                <p>搜索服务暂时不可用。</p>
+              ) : null}
             </article>
 
-            {sourceItems.length > 0 && (
-              <section className="new-tab-sources" aria-label="来源">
-                <h3>来源</h3>
-                <div className="new-tab-source-list">
-                  {sourceItems.slice(0, 6).map((source, index) => (
-                    <button
-                      key={`${source.url}-${index}`}
-                      type="button"
-                      onClick={() => onOpenSource(source.url)}
-                    >
-                      <span className="new-tab-source-index">{index + 1}</span>
-                      <span className="new-tab-source-copy">
-                        <strong>{source.title || source.domain || "网页来源"}</strong>
-                        <small>{source.domain || source.url}</small>
-                        {source.snippet && <em>{source.snippet}</em>}
-                      </span>
-                      <LinkSimple size={15} />
-                    </button>
-                  ))}
-                </div>
-              </section>
+            <SearchVerticalCards cards={searchResult?.cards} onOpenSource={onOpenSource} />
+
+            {searchState === "success" && searchResult?.message && (
+              <div className="new-tab-result-actions" aria-label="搜索结果操作">
+                <button type="button" title="复制搜索结果" aria-label="复制搜索结果" onClick={copySearchResult}>
+                  <CopySimple size={15} />
+                </button>
+                <button
+                  type="button"
+                  title="下载 PDF"
+                  aria-label="下载 PDF"
+                  disabled={resultPdfExporting}
+                  onClick={exportSearchPdf}
+                >
+                  {resultPdfExporting
+                    ? <ArrowsClockwise className="is-spinning" size={15} />
+                    : <FilePdf size={15} />}
+                </button>
+                <button type="button" title="分享：复制搜索地址" aria-label="分享并复制搜索地址" onClick={shareSearchResult}>
+                  <ShareNetwork size={15} />
+                </button>
+              </div>
             )}
 
             {searchResult?.relatedQuestions?.length > 0 && (
@@ -734,7 +1087,7 @@ function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialP
             )}
           </>
         )}
-        </>}
+        </div>}
       </section>
 
       <div className="new-tab-compose">
@@ -844,7 +1197,7 @@ function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialP
                           promptInputRef.current?.focus();
                         }}
                       >
-                        <SiteIcon id={tab.id} faviconUrl={tab.faviconUrl} />
+                        <SiteIcon id={tab.id} faviconUrl={tab.faviconUrl} isError={tab.loadError} isNewTab={tab.isNewTab} />
                         <span>{tab.shortTitle}</span>
                         {contextTab?.id === tab.id && <Check size={15} weight="bold" />}
                       </button>
@@ -855,9 +1208,9 @@ function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialP
             </div>
 
             <div className="new-tab-action-group new-tab-submit-group">
-              <button className="new-tab-submit-button" type="submit" aria-label="确认" disabled={searchState === "loading"}>
+              <button className="new-tab-submit-button" type="submit" aria-label="确认" disabled={searchState === "loading" || searchState === "streaming"}>
                 <span className="new-tab-submit-label" aria-hidden="true">Ask Brizo</span>
-                {searchState === "loading" ? <ArrowsClockwise className="is-spinning" size={19} /> : <ArrowUp size={21} />}
+                {searchState === "loading" || searchState === "streaming" ? <ArrowsClockwise className="is-spinning" size={19} /> : <ArrowUp size={21} />}
               </button>
             </div>
           </div>
@@ -871,7 +1224,7 @@ function NewTabPage({ activeTabId, availableModels, bookmarks, history, initialP
   );
 }
 
-function SiteIcon({ id = 1, faviconUrl = "" }) {
+function SiteIcon({ id = 1, faviconUrl = "", isError = false, isNewTab = false }) {
   const icons = {
     1: Flask,
     2: Brain,
@@ -883,14 +1236,24 @@ function SiteIcon({ id = 1, faviconUrl = "" }) {
   };
   const Icon = icons[id] ?? Compass;
   return (
-    <span className={`site-icon site-icon-${id}${faviconUrl ? " has-favicon" : ""}`} aria-hidden="true">
-      {faviconUrl ? <img src={faviconUrl} alt="" /> : <Icon size={13} weight="bold" />}
+    <span className={`site-icon${faviconUrl ? " has-favicon" : ""}${isNewTab ? " is-new-tab" : ""}${isError ? " is-error" : ""}`} aria-hidden="true">
+      {isNewTab
+        ? <img src={newTabIconUrl} alt="" />
+        : isError
+          ? <img src={errorTabIconUrl} alt="" />
+        : faviconUrl
+          ? <img src={faviconUrl} alt="" />
+          : <Icon size={13} weight="bold" />}
     </span>
   );
 }
 
 function TopTabOutline({ activeTabId, tabOrderKey }) {
   const svgRef = useRef(null);
+  const geometryRef = useRef(null);
+  const animationFrameRef = useRef(0);
+  const previousActiveIdRef = useRef(activeTabId);
+  const previousTabOrderKeyRef = useRef(tabOrderKey);
   const [geometry, setGeometry] = useState(null);
 
   useLayoutEffect(() => {
@@ -899,29 +1262,30 @@ function TopTabOutline({ activeTabId, tabOrderKey }) {
     const tabList = strip?.querySelector(".top-tab-list");
     if (!svg || !strip || !tabList) return undefined;
 
-    const updateGeometry = () => {
-      const active = strip.querySelector(".top-tab.active, .brief-utility-tab.active");
-      if (!active) return;
-
-      const stripRect = strip.getBoundingClientRect();
-      const activeRect = active.getBoundingClientRect();
-      const width = stripRect.width;
-      const height = stripRect.height;
-      const left = activeRect.left - stripRect.left + 0.5;
-      const right = activeRect.right - stripRect.left - 0.5;
-      const top = activeRect.top - stripRect.top + 0.5;
-      const baseline = height - 0.5;
+    const makeGeometry = ({ frameHeight, height, left, right, top, width }) => {
+      const frameStrokeInset = 0.75;
+      const baseline = height - frameStrokeInset;
       const shoulderRadius = 11;
       const topRadius = 8;
       const stripEdgeRadius = 10;
+      const bottomRadius = 12;
+      const bottomFrameInset = 6;
+      const rightFrameInset = 6;
+      const leftFrame = 0;
+      const rightFrame = width - rightFrameInset;
+      const frameBottom = frameHeight - bottomFrameInset;
       const shoulderTop = baseline - shoulderRadius;
       const leftOuter = left - shoulderRadius;
       const rightOuter = right + shoulderRadius;
 
-      setGeometry({
+      return {
         width,
         height,
-        outlineHeight: height + stripEdgeRadius,
+        left,
+        right,
+        top,
+        frameHeight,
+        outlineHeight: frameHeight,
         fillPath: [
           `M ${leftOuter} ${baseline}`,
           `A ${shoulderRadius} ${shoulderRadius} 0 0 0 ${left} ${shoulderTop}`,
@@ -936,8 +1300,8 @@ function TopTabOutline({ activeTabId, tabOrderKey }) {
           "Z",
         ].join(" "),
         strokePath: [
-          `M 0 ${baseline + stripEdgeRadius}`,
-          `A ${stripEdgeRadius} ${stripEdgeRadius} 0 0 1 ${stripEdgeRadius} ${baseline}`,
+          `M ${leftFrame} ${baseline + stripEdgeRadius}`,
+          `A ${stripEdgeRadius} ${stripEdgeRadius} 0 0 1 ${leftFrame + stripEdgeRadius} ${baseline}`,
           `H ${leftOuter}`,
           `A ${shoulderRadius} ${shoulderRadius} 0 0 0 ${left} ${shoulderTop}`,
           `V ${top + topRadius}`,
@@ -946,22 +1310,92 @@ function TopTabOutline({ activeTabId, tabOrderKey }) {
           `A ${topRadius} ${topRadius} 0 0 1 ${right} ${top + topRadius}`,
           `V ${shoulderTop}`,
           `A ${shoulderRadius} ${shoulderRadius} 0 0 0 ${rightOuter} ${baseline}`,
-          `H ${width - stripEdgeRadius}`,
-          `A ${stripEdgeRadius} ${stripEdgeRadius} 0 0 1 ${width} ${baseline + stripEdgeRadius}`,
+          `H ${rightFrame - stripEdgeRadius}`,
+          `A ${stripEdgeRadius} ${stripEdgeRadius} 0 0 1 ${rightFrame} ${baseline + stripEdgeRadius}`,
+          `V ${frameBottom - bottomRadius}`,
+          `A ${bottomRadius} ${bottomRadius} 0 0 1 ${rightFrame - bottomRadius} ${frameBottom}`,
+          `H ${leftFrame + bottomRadius}`,
+          `A ${bottomRadius} ${bottomRadius} 0 0 1 ${leftFrame} ${frameBottom - bottomRadius}`,
+          "Z",
         ].join(" "),
-      });
+      };
+    };
+
+    const publishGeometry = (nextGeometry) => {
+      geometryRef.current = nextGeometry;
+      setGeometry(nextGeometry);
+    };
+
+    const updateGeometry = () => {
+      if (animationFrameRef.current) return;
+      const active = strip.querySelector(".top-tab.active, .brief-utility-tab.active");
+      if (!active) return;
+
+      const stripRect = strip.getBoundingClientRect();
+      const panelRect = strip.closest(".browser-panel")?.getBoundingClientRect();
+      const activeRect = active.getBoundingClientRect();
+      const width = stripRect.width;
+      const height = stripRect.height;
+      const frameHeight = panelRect?.height || window.innerHeight;
+      const left = activeRect.left - stripRect.left + 0.75;
+      const right = activeRect.right - stripRect.left - 0.75;
+      const top = activeRect.top - stripRect.top + 0.75;
+      const target = makeGeometry({ frameHeight, height, left, right, top, width });
+      const previous = geometryRef.current;
+      const shouldAnimate = Boolean(
+        previous
+        && previousActiveIdRef.current !== activeTabId
+        && previousTabOrderKeyRef.current === tabOrderKey
+        && previous.width === target.width
+        && previous.height === target.height
+        && previous.frameHeight === target.frameHeight
+        && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      );
+      previousActiveIdRef.current = activeTabId;
+      previousTabOrderKeyRef.current = tabOrderKey;
+
+      if (!shouldAnimate) {
+        publishGeometry(target);
+        return;
+      }
+
+      const startedAt = performance.now();
+      const duration = 220;
+      const animate = (now) => {
+        const progress = Math.min(1, (now - startedAt) / duration);
+        const eased = 1 - ((1 - progress) ** 3);
+        const interpolate = (from, to) => from + (to - from) * eased;
+        publishGeometry(makeGeometry({
+          frameHeight: target.frameHeight,
+          width: target.width,
+          height: target.height,
+          left: interpolate(previous.left, target.left),
+          right: interpolate(previous.right, target.right),
+          top: interpolate(previous.top, target.top),
+        }));
+        if (progress < 1) {
+          animationFrameRef.current = window.requestAnimationFrame(animate);
+        } else {
+          animationFrameRef.current = 0;
+        }
+      };
+      animationFrameRef.current = window.requestAnimationFrame(animate);
     };
 
     updateGeometry();
     const observer = new ResizeObserver(updateGeometry);
     observer.observe(strip);
     observer.observe(tabList);
+    const panel = strip.closest(".browser-panel");
+    if (panel) observer.observe(panel);
     const active = strip.querySelector(".top-tab.active, .brief-utility-tab.active");
     if (active) observer.observe(active);
     tabList.addEventListener("scroll", updateGeometry, { passive: true });
     window.addEventListener("resize", updateGeometry);
 
     return () => {
+      window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = 0;
       observer.disconnect();
       tabList.removeEventListener("scroll", updateGeometry);
       window.removeEventListener("resize", updateGeometry);
@@ -973,6 +1407,7 @@ function TopTabOutline({ activeTabId, tabOrderKey }) {
       ref={svgRef}
       className="top-tab-outline"
       viewBox={geometry ? `0 0 ${geometry.width} ${geometry.outlineHeight}` : undefined}
+      style={geometry ? { height: `${geometry.outlineHeight}px` } : undefined}
       preserveAspectRatio="none"
       aria-hidden="true"
       focusable="false"
@@ -988,15 +1423,7 @@ function TopTabOutline({ activeTabId, tabOrderKey }) {
 }
 
 function BookmarkFavicon({ bookmark }) {
-  const directFavicon = getDefaultBookmarkFaviconUrl(bookmark.url);
-  const domainServiceFavicon = bookmark.url
-    ? `https://www.bing.com/favicon.ico?target_url=${encodeURIComponent(bookmark.url)}&size=64`
-    : "";
-  const candidates = [...new Set([
-    bookmark.faviconUrl,
-    directFavicon,
-    domainServiceFavicon,
-  ].filter(Boolean))];
+  const candidates = [bookmark.faviconUrl].filter(Boolean);
   const candidateKey = candidates.join("|");
   const [candidateIndex, setCandidateIndex] = useState(0);
 
@@ -1267,7 +1694,6 @@ function BookmarkTree({
     >
       <BookmarkFavicon bookmark={bookmark} />
       <span className="bookmark-tree-copy">{bookmark.title}</span>
-      <DotsSixVertical className="bookmark-drag-handle" size={13} weight="bold" />
     </button>
   ));
 
@@ -1308,7 +1734,7 @@ function BookmarkTree({
                 const maxHeight = Math.max(160, Math.floor(window.innerHeight / 2));
                 const itemCount = folderNode.bookmarks.length
                   + Object.keys(folderNode.folders).length;
-                const estimatedHeight = itemCount * 46 + 10;
+                const estimatedHeight = itemCount * 36 + 8;
                 const isOverflowing = estimatedHeight > maxHeight;
                 window.clearTimeout(folderHoverTimer.current);
                 folderHoverTimer.current = window.setTimeout(() => {
@@ -1335,7 +1761,6 @@ function BookmarkTree({
                 ? <FolderOpen size={17} weight="fill" />
                 : <FolderSimple size={17} weight="fill" />}
               <span className="bookmark-tree-copy">{folderName}</span>
-              <DotsSixVertical className="bookmark-drag-handle" size={13} weight="bold" />
             </button>
             {isExpanded && (
               <div className="bookmark-folder-flyout" style={flyoutPositions[folderPath] || undefined}>
@@ -1400,10 +1825,10 @@ export function App() {
     }
   });
   const [addressFocused, setAddressFocused] = useState(false);
+  const [addressInputDirty, setAddressInputDirty] = useState(false);
   const [addressOnlineSuggestions, setAddressOnlineSuggestions] = useState([]);
   const [aiOpen, setAiOpen] = useState(false);
   const [pageAskOpen, setPageAskOpen] = useState(false);
-  const [pageAskQuestion, setPageAskQuestion] = useState("帮我快速总结这页要点");
   const [pageAskResult, setPageAskResult] = useState(null);
   const [pageAskLoading, setPageAskLoading] = useState(false);
   const [downloads, setDownloads] = useState([]);
@@ -1496,7 +1921,9 @@ export function App() {
     canGoBack: false,
     canGoForward: false,
     error: "",
+    isContentReady: false,
     isLoading: false,
+    navigationPreview: "",
     pageBackgroundColor: "#ffffff",
     pageFaviconUrl: "",
     title: "",
@@ -1508,10 +1935,50 @@ export function App() {
   const addressInput = useRef(null);
   const addressValue = useRef(initialAddress);
   const bookmarkDragJustEnded = useRef(false);
+  const bookmarkFaviconAttempts = useRef(new Set());
+  const bookmarkFaviconResolution = useRef(null);
   const modelGuardDockRef = useRef(null);
   const sidebarActivationTimer = useRef(0);
   const sidebarCollapseTimer = useRef(0);
   const webContentHost = useRef(null);
+  const addressBarRef = useRef(null);
+  const addressLoadAnimation = useRef(0);
+  const addressLoadFadeTimer = useRef(0);
+  const addressLoadAngle = useRef(0);
+  const addressLoadWasActive = useRef(false);
+  const [addressLoadPhase, setAddressLoadPhase] = useState("idle");
+
+  const resolveMissingBookmarkFavicons = () => {
+    if (!browserApi?.resolveBookmarkFavicons || bookmarkFaviconResolution.current) return;
+    const candidates = bookmarkLibrary.filter((bookmark) => {
+      return bookmark.url && !bookmarkFaviconAttempts.current.has(bookmark.url);
+    });
+    if (!candidates.length) return;
+    for (const bookmark of candidates) bookmarkFaviconAttempts.current.add(bookmark.url);
+    const byDepth = new Map();
+    for (const bookmark of candidates) {
+      const depth = String(bookmark.folder || "").split("/").filter(Boolean).length;
+      if (!byDepth.has(depth)) byDepth.set(depth, []);
+      byDepth.get(depth).push(bookmark);
+    }
+    bookmarkFaviconResolution.current = (async () => {
+      for (const depth of [...byDepth.keys()].sort((left, right) => left - right)) {
+        const resolved = await browserApi.resolveBookmarkFavicons(byDepth.get(depth));
+        if (!Array.isArray(resolved) || !resolved.length) continue;
+        const byUrl = new Map(resolved.map((item) => [item.url, item.faviconUrl]));
+        setBookmarkLibrary((current) => current.map((bookmark) => {
+          const faviconUrl = byUrl.get(bookmark.url);
+          return faviconUrl ? { ...bookmark, faviconUrl } : bookmark;
+        }));
+      }
+    })()
+      .catch(() => {
+        for (const bookmark of candidates) bookmarkFaviconAttempts.current.delete(bookmark.url);
+      })
+      .finally(() => {
+        bookmarkFaviconResolution.current = null;
+      });
+  };
 
   const currentArticle = useMemo(
     () => tabs.find((article) => article.id === activeTab) ?? tabs[0],
@@ -1533,7 +2000,7 @@ export function App() {
     && shouldUseLightForeground(pageBackgroundColor);
   const filteredBookmarkLibrary = bookmarkLibrary;
   const addressSuggestions = useMemo(() => {
-    if (!addressFocused) return [];
+    if (!addressFocused || !addressInputDirty) return [];
     if (looksLikeWebsiteInput(addressText)) {
       return addressSuggestionsFor(addressText, bookmarkLibrary, tabs)
         .slice(0, 3)
@@ -1546,12 +2013,73 @@ export function App() {
       searchHistory,
       addressOnlineSuggestions,
     );
-  }, [addressFocused, addressOnlineSuggestions, addressText, bookmarkLibrary, searchHistory, tabs]);
+  }, [addressFocused, addressInputDirty, addressOnlineSuggestions, addressText, bookmarkLibrary, searchHistory, tabs]);
+
+  useEffect(() => {
+    window.cancelAnimationFrame(addressLoadAnimation.current);
+    window.clearTimeout(addressLoadFadeTimer.current);
+    const setProgressAngle = (angle) => {
+      addressLoadAngle.current = angle;
+      addressBarRef.current?.style.setProperty("--address-load-angle", `${angle}deg`);
+    };
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (navigationState.isLoading) {
+      addressLoadWasActive.current = true;
+      setAddressLoadPhase("loading");
+      setProgressAngle(0);
+      if (reduceMotion) {
+        setProgressAngle(340);
+        return undefined;
+      }
+      const startedAt = performance.now();
+      const advance = (now) => {
+        // Advance quickly at first, then approach the end without ever closing
+        // the ring. Only a paint-ready document is allowed to reach 360°.
+        const elapsed = Math.max(0, now - startedAt);
+        setProgressAngle(Math.min(340, 340 * (1 - Math.exp(-elapsed / 1_800))));
+        addressLoadAnimation.current = window.requestAnimationFrame(advance);
+      };
+      addressLoadAnimation.current = window.requestAnimationFrame(advance);
+      return () => window.cancelAnimationFrame(addressLoadAnimation.current);
+    }
+    if (!addressLoadWasActive.current) return undefined;
+    addressLoadWasActive.current = false;
+    if (reduceMotion) {
+      setProgressAngle(360);
+      setAddressLoadPhase("complete");
+      addressLoadFadeTimer.current = window.setTimeout(() => {
+        setAddressLoadPhase("idle");
+        setProgressAngle(0);
+      }, 260);
+      return () => window.clearTimeout(addressLoadFadeTimer.current);
+    }
+    const startedAt = performance.now();
+    const startingAngle = addressLoadAngle.current;
+    const complete = (now) => {
+      const progress = Math.min(1, (now - startedAt) / 260);
+      const eased = 1 - ((1 - progress) ** 3);
+      setProgressAngle(startingAngle + ((360 - startingAngle) * eased));
+      if (progress < 1) {
+        addressLoadAnimation.current = window.requestAnimationFrame(complete);
+        return;
+      }
+      setAddressLoadPhase("complete");
+      addressLoadFadeTimer.current = window.setTimeout(() => {
+        setAddressLoadPhase("idle");
+        setProgressAngle(0);
+      }, 260);
+    };
+    addressLoadAnimation.current = window.requestAnimationFrame(complete);
+    return () => {
+      window.cancelAnimationFrame(addressLoadAnimation.current);
+      window.clearTimeout(addressLoadFadeTimer.current);
+    };
+  }, [navigationState.isLoading]);
 
   useEffect(() => {
     const query = addressText.trim();
     setAddressOnlineSuggestions([]);
-    if (!addressFocused || looksLikeWebsiteInput(query) || query.length < 2) return undefined;
+    if (!addressFocused || !addressInputDirty || looksLikeWebsiteInput(query) || query.length < 2) return undefined;
     let cancelled = false;
     const timer = window.setTimeout(async () => {
       const suggestions = window.beanBrowser?.suggestQueries
@@ -1563,18 +2091,24 @@ export function App() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [addressFocused, addressText]);
+  }, [addressFocused, addressInputDirty, addressText]);
   useEffect(() => {
-    if (!addressFocused || !looksLikeWebsiteInput(addressText)) return undefined;
+    if (!addressFocused || !addressInputDirty || !looksLikeWebsiteInput(addressText)) return undefined;
     const timer = window.setTimeout(() => browserApi?.preconnect?.(addressText), 120);
     return () => window.clearTimeout(timer);
-  }, [addressFocused, addressText, browserApi]);
+  }, [addressFocused, addressInputDirty, addressText, browserApi]);
   const bookmarkTree = useMemo(
     () => buildBookmarkTree(filteredBookmarkLibrary),
     [filteredBookmarkLibrary],
   );
   const visibleExpandedFolders = expandedFolders;
   const bookmarkCascadeOpen = expandedFolders.size > 0;
+  const browserShellOverlayOpen = bookmarkCascadeOpen
+    || aiOpen
+    || pageAskOpen
+    || settingsMenuOpen
+    || Boolean(settingsPanel)
+    || addressSuggestions.length > 0;
 
   useEffect(() => () => {
     window.clearTimeout(sidebarActivationTimer.current);
@@ -1830,6 +2364,17 @@ export function App() {
   ]);
 
   useEffect(() => {
+    const ownerTabId = navigationState.ownerTabId;
+    if (!ownerTabId) return;
+    const loadError = Boolean(navigationState.error);
+    setTabs((currentTabs) => currentTabs.map((tab) => (
+      tab.id === ownerTabId && Boolean(tab.loadError) !== loadError
+        ? { ...tab, loadError }
+        : tab
+    )));
+  }, [navigationState.error, navigationState.ownerTabId]);
+
+  useEffect(() => {
     if (!browserApi || !webContentHost.current) return undefined;
 
     const host = webContentHost.current;
@@ -1841,8 +2386,8 @@ export function App() {
         browserApi.setBounds({
           x: bounds.left + 1,
           y: bounds.top,
-          width: Math.max(1, bounds.width - 1),
-          height: bounds.height,
+          width: Math.max(1, bounds.width - 2),
+          height: Math.max(1, bounds.height - 1),
         });
       });
     };
@@ -1860,7 +2405,7 @@ export function App() {
   }, [briefOpen, browserApi, newTabOpen, sidebarOpen]);
 
   useEffect(() => {
-    if (!browserApi?.capturePreview || briefOpen || newTabOpen || !bookmarkCascadeOpen) {
+    if (!browserApi?.capturePreview || briefOpen || newTabOpen || !browserShellOverlayOpen) {
       setBrowserPreview("");
       return undefined;
     }
@@ -1869,13 +2414,16 @@ export function App() {
       if (!cancelled && typeof preview === "string") setBrowserPreview(preview);
     });
     return () => { cancelled = true; };
-  }, [bookmarkCascadeOpen, briefOpen, browserApi, newTabOpen]);
+  }, [browserShellOverlayOpen, briefOpen, browserApi, newTabOpen]);
 
   useEffect(() => {
     browserApi?.setVisible(
-      !briefOpen && !newTabOpen && !navigationState.error && !(bookmarkCascadeOpen && browserPreview) && !aiOpen && !pageAskOpen && !settingsMenuOpen && !settingsPanel && addressSuggestions.length === 0,
+      !briefOpen
+        && !newTabOpen
+        && !navigationState.error
+        && !(browserShellOverlayOpen && browserPreview),
     );
-  }, [addressSuggestions.length, aiOpen, bookmarkCascadeOpen, briefOpen, browserApi, browserPreview, navigationState.error, newTabOpen, pageAskOpen, settingsMenuOpen, settingsPanel]);
+  }, [briefOpen, browserApi, browserPreview, browserShellOverlayOpen, navigationState.error, newTabOpen]);
 
   useEffect(() => {
     const closeOnEscape = (event) => {
@@ -2144,7 +2692,9 @@ export function App() {
   };
 
   const submitAddressValue = (value) => {
-    if (looksLikeWebsiteInput(value)) navigateFromAddress(value);
+    const sharedQuery = queryFromSearchShareUrl(value);
+    if (sharedQuery) exploreFromAddress(sharedQuery);
+    else if (looksLikeWebsiteInput(value)) navigateFromAddress(value);
     else exploreFromAddress(value);
   };
 
@@ -2153,7 +2703,19 @@ export function App() {
     submitAddressValue(addressValue.current);
   };
 
-  const submitNewTabPrompt = async ({ attachments, contextTab, model, tabId, value }) => {
+  const saveCompletedSearch = ({ query: completedQuery, result }) => {
+    const snapshot = createSearchHistorySnapshot(result);
+    if (!snapshot) return;
+    setSearchHistory((current) => {
+      const existing = current.find((item) => item.query === completedQuery);
+      return persistSearchHistory([
+        { ...existing, query: completedQuery, result: snapshot, updatedAt: Date.now() },
+        ...current.filter((item) => item.query !== completedQuery),
+      ]);
+    });
+  };
+
+  const submitNewTabPrompt = async ({ attachments, contextTab, depth, model, searchId, tabId, thread, value }) => {
     const looksLikeDestination = looksLikeWebsiteInput(value);
 
     if (looksLikeDestination) {
@@ -2188,49 +2750,27 @@ export function App() {
     }
 
     let result;
-    if (browserApi?.searchVane) {
-      result = await browserApi.searchVane({
+    if (browserApi?.startSearch) {
+      result = await browserApi.startSearch({
         context: {
           attachmentNames: attachments.map((file) => file.name).slice(0, 8),
-          tab: contextTab ? { title: contextTab.title, url: contextTab.url } : null,
+          tab: contextTab ? { id: contextTab.id, title: contextTab.title, url: contextTab.url } : null,
         },
+        depth,
         model,
         query: value,
+        searchId,
+        thread,
       });
     } else {
       await new Promise((resolve) => window.setTimeout(resolve, 420));
       result = {
         status: "preview",
-        providerLabel: "Brizo Web · 界面预览",
-        modelLabel: model,
-        message: "这是 Brizo Scout AI 结果状态的界面预览。桌面版会运行 Vane 风格的轻量搜索链路：改写查询、检索真实网页、排序去重、生成带引用答案和延伸问题；当前网页预览不会发起或伪造真实搜索。",
-        sources: [
-          {
-            title: "Vane — AI-powered answering engine",
-            domain: "github.com",
-            url: "https://github.com/ItzCrazyKns/Vane",
-            snippet: "Vane 项目、部署方式与模型提供商说明。",
-          },
-          {
-            title: "Vane Search API",
-            domain: "github.com",
-            url: "https://github.com/ItzCrazyKns/Vane/blob/master/docs/API/SEARCH.md",
-            snippet: "搜索请求、模型选择、来源与响应格式。",
-          },
-        ],
+        message: "这是 Brizo Scout AI 的浏览器预览状态。桌面版会并行检索真实网页、融合排序，并流式生成带编号引用和延伸问题的答案；当前网页预览不会发起搜索，也不会伪造来源。",
+        sources: [],
       };
     }
 
-    const snapshot = createSearchHistorySnapshot(result);
-    if (snapshot) {
-      setSearchHistory((current) => {
-        const existing = current.find((item) => item.query === value);
-        return persistSearchHistory([
-          { ...existing, query: value, result: snapshot },
-          ...current.filter((item) => item.query !== value),
-        ]);
-      });
-    }
     return result;
   };
 
@@ -2280,28 +2820,21 @@ export function App() {
     }
   };
 
-  const openPageAsk = () => {
-    setPageAskQuestion("帮我快速总结这页要点");
+  const openPageAsk = async () => {
+    if (pageAskLoading) return;
     setPageAskResult(null);
     setPageAskOpen(true);
-  };
-
-  const submitPageAsk = async (event) => {
-    event.preventDefault();
-    const question = pageAskQuestion.trim();
-    if (!question || pageAskLoading) return;
     setPageAskLoading(true);
-    setPageAskResult(null);
     try {
       const result = browserApi?.askCurrentPage
-        ? await browserApi.askCurrentPage({ question })
+        ? await browserApi.askCurrentPage({ mode: "summary" })
         : {
             status: "error",
-            message: "当前网页预览不能读取外部页面，请在 Brizo 桌面版中使用页面问答。",
+            message: "当前网页预览不能读取外部页面，请在 Brizo 桌面版中使用页面总结。",
           };
       setPageAskResult(result);
     } catch {
-      setPageAskResult({ status: "error", message: "当前页面分析失败，请稍后再试。" });
+      setPageAskResult({ status: "error", message: "当前页面总结失败，请稍后再试。" });
     } finally {
       setPageAskLoading(false);
     }
@@ -2733,6 +3266,7 @@ export function App() {
   };
 
   const openBrief = () => {
+    const shouldRefreshAgain = activeSurface === "brief";
     setActiveSurface("brief");
     setAddressFocused(false);
     addressEditing.current = false;
@@ -2740,6 +3274,7 @@ export function App() {
     setAddressText("");
     setSettingsMenuOpen(false);
     setSettingsPanel("");
+    if (shouldRefreshAgain) void refreshBrief();
   };
 
   const refreshBrief = async () => {
@@ -2820,13 +3355,14 @@ export function App() {
       className={`app-shell ${sidebarOpen ? "" : "spaces-collapsed"}`}
       style={{
         "--tab-seam-color": pageUsesLightForeground
-          ? "rgba(255, 255, 255, 0.3)"
-          : "#d4d8d3",
+          ? "rgba(255, 255, 255, 0.44)"
+          : "#dde0dc",
       }}
     >
       <aside
         className="spaces-panel"
         onPointerEnter={() => {
+          resolveMissingBookmarkFavicons();
           window.clearTimeout(sidebarCollapseTimer.current);
           window.clearTimeout(sidebarActivationTimer.current);
           setSidebarOpen(true);
@@ -2949,16 +3485,10 @@ export function App() {
             type="button"
             aria-expanded={modelGuardMenuOpen}
             aria-label="模型护航"
+            title="模型护航"
             onClick={() => setModelGuardMenuOpen((open) => !open)}
           >
             <span className="model-guard-trigger-icon"><img src={modelGuardIconUrl} alt="" /></span>
-            <span className="model-guard-trigger-copy">
-              <strong>模型护航</strong>
-              <small>{defaultModelProvider
-                ? defaultModelProvider.selectedModel || defaultModelProvider.models?.[0] || defaultModelProvider.name
-                : "暂未绑定模型"}</small>
-            </span>
-            <CaretDown className="model-guard-trigger-caret" size={13} />
           </button>
         </footer>
       </aside>
@@ -3014,7 +3544,7 @@ export function App() {
                   title={article.title}
                   onClick={() => selectArticle(article)}
                 >
-                  <SiteIcon id={article.id} faviconUrl={article.faviconUrl} />
+                  <SiteIcon id={article.id} faviconUrl={article.faviconUrl} isError={article.loadError} isNewTab={article.isNewTab} />
                   <span className="top-tab-title">{article.shortTitle}</span>
                   {article.unread && <span className="top-tab-unread" aria-label="Updated" />}
                 </button>
@@ -3070,24 +3600,31 @@ export function App() {
               </IconButton>
             </div>
 
-            <form className="address-bar" onSubmit={submitAddress}>
+            <form
+              ref={addressBarRef}
+              className={`address-bar address-load-${addressLoadPhase}${!briefOpen && !newTabOpen ? " is-site-address" : ""}${addressFocused ? " is-editing" : ""}`}
+              onSubmit={submitAddress}
+            >
               {briefOpen || newTabOpen
                 ? <MagnifyingGlass className="address-search-icon" size={15} />
-                : <span className={`secure-dot ${navigationState.isLoading ? "is-loading" : ""}`} />}
+                : null}
               <input
                 ref={addressInput}
                 value={addressText}
                 onChange={(event) => {
                   addressValue.current = event.target.value;
+                  setAddressInputDirty(true);
                   setAddressText(event.target.value);
                 }}
                 onFocus={() => {
                   addressEditing.current = true;
+                  setAddressInputDirty(false);
                   setAddressFocused(true);
                 }}
                 onPointerDown={(event) => {
                   const input = event.currentTarget;
                   addressEditing.current = true;
+                  setAddressInputDirty(false);
                   setAddressFocused(true);
                   setAddressText(addressValue.current);
                   window.requestAnimationFrame(() => {
@@ -3097,6 +3634,7 @@ export function App() {
                 }}
                 onBlur={() => {
                   addressEditing.current = false;
+                  setAddressInputDirty(false);
                   setAddressFocused(false);
                   setAddressText(formatAddressForDisplay(addressValue.current));
                 }}
@@ -3138,7 +3676,7 @@ export function App() {
 
             <div className="browser-actions">
               <IconButton
-                label="询问当前页面"
+                label="总结当前页面"
                 className={pageAskOpen ? "is-active" : ""}
                 disabled={
                   briefOpen ||
@@ -3417,9 +3955,11 @@ export function App() {
               bookmarks={bookmarkLibrary}
               history={searchHistory}
               initialPrompt={tab.initialPrompt || ""}
+              onNotify={showToast}
               tabs={tabs}
               onOpenSource={openNewTabSource}
               onRestoreHistory={restoreSearchHistoryTab}
+              onSearchComplete={saveCompletedSearch}
               onSubmit={submitNewTabPrompt}
               useTodayGreeting={Boolean(tab.useTodayGreeting)}
             />
@@ -3431,10 +3971,17 @@ export function App() {
             className="web-content-host"
             ref={webContentHost}
           >
-            {bookmarkCascadeOpen && browserPreview && (
+            {browserPreview && (
               <div
                 className="web-content-preview"
                 style={{ backgroundImage: `url(${browserPreview})` }}
+                aria-hidden="true"
+              />
+            )}
+            {!navigationState.isContentReady && navigationState.navigationPreview && (
+              <div
+                className="web-content-preview navigation-preview"
+                style={{ backgroundImage: `url(${navigationState.navigationPreview})` }}
                 aria-hidden="true"
               />
             )}
@@ -3458,10 +4005,14 @@ export function App() {
                   })()}
                 </div>
               </div>
-            ) : navigationState.isLoading && (
-              <div className="web-content-placeholder" aria-label="网页加载中" aria-live="polite" role="status">
-                <img src={brizoLogoUrl} alt="" />
-              </div>
+            ) : !navigationState.isContentReady && !navigationState.navigationPreview && (
+              <div
+                className="web-content-placeholder"
+                style={{ backgroundColor: pageBackgroundColor }}
+                aria-label="网页加载中"
+                aria-live="polite"
+                role="status"
+              />
             )}
           </div>
         ) : (
@@ -3553,69 +4104,27 @@ export function App() {
 
       {pageAskOpen && (
         <SettingsDialog
-          title="询问当前页面"
+          title="页面总结"
           onClose={() => {
             if (!pageAskLoading) setPageAskOpen(false);
           }}
         >
-          <form className="page-ask-form" onSubmit={submitPageAsk}>
-            <BorderBeam
-              className="new-tab-beam page-ask-beam"
-              size="md"
-              colorVariant="colorful"
-              theme="light"
-              strength={0.7}
-              borderRadius={10}
-            >
-              <div className="new-tab-command-surface page-ask-command-surface">
-                <div className="new-tab-prompt-row">
-                  <textarea
-                    autoFocus
-                    aria-label="询问当前页面的问题"
-                    rows={2}
-                    value={pageAskQuestion}
-                    onChange={(event) => setPageAskQuestion(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && !event.shiftKey) {
-                        event.preventDefault();
-                        submitPageAsk(event);
-                      }
-                    }}
-                  />
-                </div>
-                <div className="new-tab-command-actions page-ask-command-actions">
-                  <div className="new-tab-action-group new-tab-submit-group">
-                    <button
-                      className="new-tab-submit-button"
-                      type="submit"
-                      aria-label="询问 Brizo"
-                      disabled={pageAskLoading || !pageAskQuestion.trim()}
-                    >
-                      <span className="new-tab-submit-label" aria-hidden="true">Ask Brizo</span>
-                      {pageAskLoading
-                        ? <ArrowsClockwise className="is-spinning" size={19} />
-                        : <ArrowUp size={21} />}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </BorderBeam>
+          <div className="page-ask-form">
             {pageAskLoading && (
               <div className="page-ask-loading" role="status">
                 <ArrowsClockwise className="is-spinning" size={17} />
-                <span>正在读取网页文字并组织回答…</span>
+                <span>正在快速读取并总结当前页面…</span>
               </div>
             )}
             {pageAskResult && (
               <article className={`page-ask-answer${pageAskResult.status === "error" ? " is-error" : ""}`}>
-                <span className="answer-label"><Sparkle size={15} /> Brizo Scout AI</span>
                 <SearchAnswer message={pageAskResult.message} sources={[]} />
               </article>
             )}
             <div className="settings-dialog-actions">
               <button type="button" disabled={pageAskLoading} onClick={() => setPageAskOpen(false)}>关闭</button>
             </div>
-          </form>
+          </div>
         </SettingsDialog>
       )}
 

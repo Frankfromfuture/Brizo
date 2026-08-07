@@ -68,7 +68,7 @@ def main() -> None:
     else:
         print("iconutil is unavailable; skipped build/icon.icns")
 
-    print("Prepared Brizo app icons from logo app.png")
+    print("Prepared Brizo app icons from Hermes logo source")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,17 @@
 import { load } from "cheerio";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  clamp,
+  domainFor,
+  mapWithConcurrency,
+  normalizeUrl,
+  parseModelJson,
+  safeText,
+  slugify,
+  tokenSimilarity,
+  tokenize,
+} from "../shared/search-text.mjs";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const OVERNIGHT_REFRESH_MS = 30 * 60 * 1000;
@@ -10,8 +21,8 @@ const METADATA_FETCH_TIMEOUT_MS = 2_800;
 const METADATA_CACHE_TTL_MS = 30 * 60_000;
 const TOPIC_PROFILE_TTL_MS = 7 * DAY_MS;
 const TOPIC_PROFILE_VERSION = 5;
-const EDITION_CONTENT_VERSION = 10;
-const REPORT_CONTENT_VERSION = 3;
+const EDITION_CONTENT_VERSION = 20;
+const REPORT_CONTENT_VERSION = 4;
 const SIGNAL_KIND_SHARES = { bookmark: 0.45, search: 0.35, history: 0.2 };
 const DEFAULT_TOPICS = [
   { id: "technology", label: "AI 与科技产业", weight: 0.34 },
@@ -22,12 +33,12 @@ const DEFAULT_TOPICS = [
 ];
 
 const EDITORIAL_SECTIONS = [
-  { id: "technology", label: "科技与技术", page: 2, query: "全球前沿科技 人工智能 芯片 技术突破", region: "国际", slots: 3, weight: 0.17 },
-  { id: "business-finance", label: "商业与金融", page: 2, query: "全球商业 金融 市场 公司 最新重要新闻", region: "国际", slots: 3, weight: 0.16 },
-  { id: "international", label: "国际重要新闻", page: 3, query: "国际重大新闻 全球热点 前沿动态", region: "国际", slots: 4, weight: 0.24 },
-  { id: "domestic", label: "国内重要新闻", page: 3, query: "中国 国内 重大新闻 政策 社会", region: "国内", slots: 2, weight: 0.14 },
-  { id: "arts-culture", label: "艺术与文化", page: 4, query: "全球艺术 文化 设计 文学 电影 最新", region: "国际", slots: 3, weight: 0.15 },
-  { id: "sports-entertainment", label: "体育与娱乐", page: 4, query: "全球体育 娱乐 流行文化 最新热点", region: "国际", slots: 3, weight: 0.14 },
+  { id: "technology", label: "科技与技术", page: 2, query: "今天 人工智能 芯片 科技产业 重大进展 权威媒体", serperGl: "cn", serperHl: "zh-cn", region: "国际", slots: 3, weight: 0.17 },
+  { id: "business-finance", label: "商业与金融", page: 2, query: "今天 财经 公司 金融市场 重要新闻 界面 财新 第一财经", serperGl: "cn", serperHl: "zh-cn", region: "国际", slots: 3, weight: 0.16 },
+  { id: "international", label: "国际重要新闻", page: 3, query: "今天 国际重大新闻 全球热点", serperQuery: "top world news today Reuters AP BBC", serperGl: "us", serperHl: "en", region: "国际", slots: 4, weight: 0.24 },
+  { id: "domestic", label: "国内重要新闻", page: 3, query: "今天 中国 重大新闻 政策 社会 新华社 人民日报 中新网", serperGl: "cn", serperHl: "zh-cn", region: "国内", slots: 2, weight: 0.14 },
+  { id: "arts-culture", label: "艺术与文化", page: 4, query: "今天 艺术 文化 设计 文学 电影 重要新闻 澎湃 界面", serperGl: "cn", serperHl: "zh-cn", region: "国际", slots: 3, weight: 0.15 },
+  { id: "sports-entertainment", label: "体育与娱乐", page: 4, query: "今天 体育 赛事 娱乐 电影 重要新闻 中新网", serperGl: "cn", serperHl: "zh-cn", region: "国际", slots: 3, weight: 0.14 },
 ];
 
 // Hard allowlist: Brief stories and citations may only come from these news domains.
@@ -93,6 +104,8 @@ const BLOCKED_SOURCE_PATTERNS = [
   /(^|\.)apple\.com$/i, /(^|\.)microsoft\.com$/i, /(^|\.)support\./i,
 ];
 
+const LOW_QUALITY_BRIEF_HEADLINE = /(?:今日|每日|早间|午间|晚间|盘前|盘后).{0,14}(?:早报|晚报|简报|快讯|热点|要闻|新闻)|(?:早报|晚报|简报|一览|汇总|盘点).{0,18}(?:\d+[条个]|美股|天下事|热点)|\d+[条个].{0,10}(?:国际热点|新闻简报|每日热点)|(?:^|[_|｜])标签(?:[_|｜]|$)|网易出品$/i;
+
 const SECTION_HUB_PATHS = new Set([
   "news", "world", "sports", "tech", "technology", "business", "finance",
   "entertainment", "culture", "science", "ai", "opinion", "politics", "china",
@@ -111,8 +124,6 @@ const LOCAL_TOPIC_TAXONOMY = [
 ];
 
 const AUTHORITY_FEEDS = [
-  { url: "https://www.ftchinese.com/rss/feed", sections: ["business-finance", "international", "technology", "domestic"], region: "国际" },
-  { url: "https://feedx.net/rss/ft.xml", sections: ["business-finance", "international", "technology", "domestic"], region: "国际" },
   { url: "https://feeds.bbci.co.uk/news/technology/rss.xml", sections: ["technology"], region: "国际" },
   { url: "https://feeds.bbci.co.uk/news/business/rss.xml", sections: ["business-finance"], region: "国际" },
   { url: "https://feeds.bbci.co.uk/news/world/rss.xml", sections: ["international"], region: "国际" },
@@ -142,8 +153,6 @@ const AUTHORITY_FEEDS = [
 // Curated direct RSS sources published in Horizon's MIT-licensed example and preset configs.
 // Brizo consumes the original feeds directly and runs them through its own allowlist and editorial pipeline.
 const HORIZON_CURATED_FEEDS = [
-  { url: "https://www.ftchinese.com/rss/feed", sections: ["business-finance", "international", "technology"], region: "国际", sourceAdapter: "horizon-preset" },
-  { url: "https://feedx.net/rss/ft.xml", sections: ["business-finance", "international", "technology"], region: "国际", sourceAdapter: "horizon-preset" },
   { url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664", sections: ["business-finance"], region: "国际", sourceAdapter: "horizon-preset" },
   { url: "https://developer.nvidia.com/blog/tag/cuda/feed/", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
   { url: "https://lwn.net/headlines/rss", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
@@ -157,14 +166,6 @@ const HORIZON_CURATED_FEEDS = [
 ];
 
 const RSSHUB_ROUTES = [
-  { path: "/ft/chinese", sections: ["business-finance", "international", "technology", "domestic"], region: "国际" },
-  { path: "/ft/chinese/news", sections: ["international"], region: "国际" },
-  { path: "/ft/chinese/opinion", sections: ["business-finance", "international"], region: "国际" },
-  { path: "/ft/chinese/business", sections: ["business-finance"], region: "国际" },
-  { path: "/ft/chinese/tech", sections: ["technology"], region: "国际" },
-  { path: "/ft/chinese/china", sections: ["domestic", "international"], region: "国际" },
-  { path: "/ft/chinese/finance", sections: ["business-finance"], region: "国际" },
-  { path: "/ft/chinese/hot", sections: ["business-finance", "technology", "international"], region: "国际" },
   { path: "/reuters/world", sections: ["international"], region: "国际" },
   { path: "/reuters/world/china", sections: ["international", "domestic"], region: "国际" },
   { path: "/reuters/business", sections: ["business-finance"], region: "国际" },
@@ -217,66 +218,6 @@ const PERSONAL_TOPIC_FEED_SECTIONS = {
 };
 
 const metadataCache = new Map();
-
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function safeText(value, limit = 500) {
-  return String(value || "").replace(/\s+/g, " ").trim().slice(0, limit);
-}
-
-function slugify(value, fallback = "topic") {
-  const slug = safeText(value, 80).toLowerCase()
-    .replace(/[^a-z0-9\u3400-\u9fff]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return slug || fallback;
-}
-
-function domainFor(rawUrl) {
-  try {
-    return new URL(rawUrl).hostname.replace(/^www\./i, "").toLowerCase();
-  } catch {
-    return safeText(rawUrl, 120);
-  }
-}
-
-function normalizeUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    if (!/^https?:$/.test(url.protocol)) return "";
-    url.hash = "";
-    for (const key of [...url.searchParams.keys()]) {
-      if (/^(utm_|spm$|from$|ref$|source$|at_|traffic_source$|ceid$)/i.test(key)) {
-        url.searchParams.delete(key);
-      }
-    }
-    return url.href.replace(/\/$/, "");
-  } catch {
-    return "";
-  }
-}
-
-function tokenize(value) {
-  const text = safeText(value, 2_000).toLowerCase();
-  const latin = text.match(/[a-z0-9][a-z0-9.+_-]{1,}/g) || [];
-  const chinese = text.match(/[\u3400-\u9fff]+/g) || [];
-  const chineseBigrams = chinese.flatMap((segment) => Array.from(
-    { length: Math.max(1, segment.length - 1) },
-    (_, index) => segment.length === 1 ? segment : segment.slice(index, index + 2),
-  ));
-  return [...new Set([...latin, ...chineseBigrams])];
-}
-
-function tokenSimilarity(left, right) {
-  const leftTokens = new Set(tokenize(left));
-  const rightTokens = new Set(tokenize(right));
-  if (!leftTokens.size || !rightTokens.size) return 0;
-  let overlap = 0;
-  for (const token of leftTokens) if (rightTokens.has(token)) overlap += 1;
-  return overlap / Math.max(1, Math.min(leftTokens.size, rightTokens.size));
-}
 
 function editionKindAt(input = Date.now()) {
   const date = new Date(input);
@@ -546,21 +487,6 @@ export function allocateStorySlots(topics, totalSlots = 18) {
   }));
 }
 
-function parseModelJson(message) {
-  const text = String(message || "").replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-  const start = Math.min(...[text.indexOf("{"), text.indexOf("[")].filter((value) => value >= 0));
-  const sliced = Number.isFinite(start) ? text.slice(start) : text;
-  try {
-    return JSON.parse(sliced);
-  } catch {
-    const objectEnd = sliced.lastIndexOf("}");
-    const arrayEnd = sliced.lastIndexOf("]");
-    const end = Math.max(objectEnd, arrayEnd);
-    if (end < 0) return null;
-    try { return JSON.parse(sliced.slice(0, end + 1)); } catch { return null; }
-  }
-}
-
 function matchesDomainEntry(domain, knownDomain) {
   return domain === knownDomain || domain.endsWith(`.${knownDomain}`);
 }
@@ -612,6 +538,11 @@ export function isAllowedBriefSource(rawUrl, domain = "") {
   return isLikelyArticleUrl(url);
 }
 
+export function isLowQualityBriefResult(result) {
+  const title = safeText(result?.title || result?.name, 400);
+  return title.replace(/[\s\p{P}\p{S}]/gu, "").length < 8 || LOW_QUALITY_BRIEF_HEADLINE.test(title);
+}
+
 function sourceAuthority(domain) {
   return matchedAuthority(domain) || 0;
 }
@@ -631,6 +562,12 @@ function resultScore(result, topic, resultIndex, groupSize, now) {
   const authority = sourceAuthority(result.domain);
   if (!authority) return 0;
   return relevance * 0.35 + attention * 0.25 + recency * 0.25 + authority * 0.15 - resultIndex * 0.002;
+}
+
+export function briefSourcePriority(sourceAdapter) {
+  if (sourceAdapter === "serper-news") return 2;
+  if (sourceAdapter === "bocha-news") return 1;
+  return 0;
 }
 
 function clusterResults(results) {
@@ -737,20 +674,6 @@ async function enrichResult(result) {
   return { ...result, ...(await promise) };
 }
 
-async function mapWithConcurrency(items, limit, mapper) {
-  const output = new Array(items.length);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      output[index] = await mapper(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return output;
-}
-
 function feedSectionIdsForTopic(topic) {
   if (EDITORIAL_SECTIONS.some((section) => section.id === topic.id)) return [topic.id];
   return PERSONAL_TOPIC_FEED_SECTIONS[topic.id] || EDITORIAL_SECTIONS.map((section) => section.id);
@@ -853,7 +776,7 @@ async function collectAuthorityFeedResults(topic, force = false) {
   return deduped;
 }
 
-function sourcesForCluster(cluster, allResults, limit = 5) {
+function sourcesForCluster(cluster, allResults, limit = 12) {
   const combined = [...cluster].filter((item) => isAllowedBriefSource(item.url, item.domain));
   const seenDomains = new Set(combined.map((item) => item.domain));
   for (const candidate of allResults) {
@@ -870,6 +793,7 @@ function sourcesForCluster(cluster, allResults, limit = 5) {
     id: `source-${index + 1}`,
     domain: source.domain,
     imageUrl: normalizeUrl(source.imageUrl),
+    faviconUrl: normalizeUrl(source.faviconUrl),
     publishedAt: source.publishedAt || "",
     snippet: safeText(source.snippet, 1_000),
     sourceAdapter: safeText(source.sourceAdapter, 40),
@@ -880,6 +804,12 @@ function sourcesForCluster(cluster, allResults, limit = 5) {
 
 function fallbackSummary(result) {
   return `${safeText(result.snippet || result.title, 500)} [1]`;
+}
+
+function cleanBriefHeadline(value) {
+  return safeText(value, 400)
+    .replace(/\s*[_|｜]\s*(?:手机)?(?:网易|腾讯|界面|新浪|搜狐|凤凰|澎湃|财联社|第一财经)(?:新闻|网)?(?:[_|｜].*)?$/i, "")
+    .trim();
 }
 
 export function createExtractiveSummary(sources) {
@@ -909,7 +839,7 @@ async function translateStoriesForPublication(stories, callModel, fallbackModel)
     const sourceTitle = safeText(primary?.title || story.headline, 220);
     const sourceExcerpt = safeText(primary?.bodyExcerpt || primary?.snippet || story.summary, 1_000);
     if (containsChinese(sourceTitle) && containsChinese(sourceExcerpt)) {
-      story.headline = sourceTitle;
+      story.headline = cleanBriefHeadline(sourceTitle);
       story.summary = `${sourceExcerpt.replace(/\s*\[\d+\]\s*$/g, "")} [1]`;
       story.translationState = "source-chinese";
       publishedIds.add(story.url || story.id);
@@ -960,7 +890,7 @@ async function translateStoriesForPublication(stories, callModel, fallbackModel)
   for (const story of foreignStories) {
     const translation = translated.get(story.url || story.id);
     if (translation) {
-      story.headline = safeText(translation.headline, 220);
+      story.headline = cleanBriefHeadline(translation.headline);
       story.summary = `${safeText(translation.excerpt, 1_000).replace(/\s*\[\d+\]\s*$/g, "")} [1]`;
       story.translationState = "translated";
     } else {
@@ -997,7 +927,7 @@ function buildStoriesForTopic({ results, topic, allResults, now }) {
       id: `story-${index + 1}`,
       primary,
       region: result.region,
-      sources: sourcesForCluster([{ ...primary }, ...result.cluster.slice(1)], allResults, 5),
+      sources: sourcesForCluster([{ ...primary }, ...result.cluster.slice(1)], allResults, 12),
     };
   });
   return prepared.map((item, index) => {
@@ -1005,7 +935,7 @@ function buildStoriesForTopic({ results, topic, allResults, now }) {
     return {
       id: `${topic.id}-${index + 1}-${slugify(item.primary.title, "story")}`,
       author: safeText(item.primary.author, 120),
-      headline: safeText(item.primary.title, 220),
+      headline: cleanBriefHeadline(item.primary.title),
       imageUrl: normalizeUrl(item.primary.imageUrl),
       publishedAt: item.primary.publishedAt || new Date(now).toISOString(),
       region: item.region,
@@ -1031,7 +961,12 @@ function packTopicPages(sections) {
 }
 
 export function selectFrontStories(stories, limit = 8) {
-  const ranked = [...stories].sort((left, right) => (right.score || 0) - (left.score || 0));
+  const compareStories = (left, right) => {
+    const providerDelta = briefSourcePriority(right.sources?.[0]?.sourceAdapter)
+      - briefSourcePriority(left.sources?.[0]?.sourceAdapter);
+    return providerDelta || (right.score || 0) - (left.score || 0);
+  };
+  const ranked = [...stories].sort(compareStories);
   const selected = [];
   const topicCounts = new Map();
   const topicCount = new Set(ranked.map((story) => story.topicId).filter(Boolean)).size;
@@ -1051,7 +986,7 @@ export function selectFrontStories(stories, limit = 8) {
   addRegion("国内");
   addRegion("国际");
   ranked.forEach((story) => { if (selected.length < limit) add(story); });
-  return selected.slice(0, limit).sort((left, right) => (right.score || 0) - (left.score || 0));
+  return selected.slice(0, limit).sort(compareStories);
 }
 
 function sanitizeSignals(payload) {
@@ -1082,7 +1017,25 @@ function emptyStore() {
   return { editions: {}, preferences: { mutedTopicIds: [], pinnedTopicIds: [], reducedTopicIds: [] }, reports: {} };
 }
 
-export function createBriefService({ callModel, callEditorialModel = callModel, notify, search, userDataPath }) {
+export function normalizeBriefNewsResult(item, { adapter, region } = {}) {
+  const url = normalizeUrl(item?.url || item?.link);
+  const domain = safeText(item?.domain || domainFor(url), 180);
+  return {
+    author: safeText(item?.author || item?.source, 140),
+    bodyExcerpt: safeText(item?.body || item?.summary || item?.snippet, 6_000),
+    domain,
+    faviconUrl: normalizeUrl(item?.faviconUrl || item?.siteIcon),
+    imageUrl: normalizeUrl(item?.imageUrl || item?.thumbnailUrl),
+    publishedAt: safeText(item?.publishedAt || item?.datePublished || item?.date, 100),
+    region: region || "",
+    snippet: safeText(item?.summary || item?.snippet, 1_000),
+    sourceAdapter: adapter || "news-search",
+    title: safeText(item?.title || item?.name, 400),
+    url,
+  };
+}
+
+export function createBriefService({ callModel, callEditorialModel = callModel, notify, search = {}, userDataPath }) {
   const signalsPath = path.join(userDataPath, "brief-signals.json");
   const storePath = path.join(userDataPath, "brief-store.json");
   let generationPromise = null;
@@ -1133,12 +1086,41 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
   };
 
   const collectTopicResults = async (topic, slots, descriptor, now, force) => {
-    const feedResults = await collectAuthorityFeedResults(topic, force);
+    const searchResults = [];
+    const searchFailures = [];
+    if (typeof search?.serper === "function") {
+      try {
+        const items = await search.serper(topic.serperQuery || topic.query, {
+          count: Math.max(12, slots + 6),
+          gl: topic.serperGl || "cn",
+          hl: topic.serperHl || "zh-cn",
+        });
+        searchResults.push(...(Array.isArray(items) ? items : []).map((item) => normalizeBriefNewsResult(item, {
+          adapter: "serper-news",
+          region: topic.region,
+        })));
+      } catch (error) {
+        searchFailures.push(`Serper：${safeText(error?.message || "新闻检索失败", 120)}`);
+      }
+    }
+
+    // Publisher RSS remains a resilient fallback and source supplement, but the
+    // discovery feed is driven primarily by the professional news search calls.
+    let feedResults = [];
+    const usableProfessionalResultCount = searchResults.filter((result) => {
+      const url = normalizeUrl(result.url);
+      return url && !isLowQualityBriefResult(result)
+        && isAllowedBriefSource(url, result.domain || domainFor(url));
+    }).length;
+    if (usableProfessionalResultCount < Math.max(4, (topic.slots || 0) + 2)) {
+      feedResults = await collectAuthorityFeedResults(topic, force);
+    }
+    const combinedResults = [...searchResults, ...feedResults];
     const deduped = [];
     const seen = new Set();
-    for (const result of feedResults) {
+    for (const result of combinedResults) {
       const url = normalizeUrl(result.url);
-      if (!url || seen.has(url)) continue;
+      if (!url || seen.has(url) || isLowQualityBriefResult(result)) continue;
       const domain = result.domain || domainFor(url);
       if (!isAllowedBriefSource(url, domain)) continue;
       seen.add(url);
@@ -1150,7 +1132,7 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       });
     }
     if (!deduped.length) {
-      throw new Error("RSS 新闻源暂时没有返回可用条目");
+      throw new Error(searchFailures.join("；") || "专业新闻检索与 RSS 暂时没有返回可用条目");
     }
     const clusters = clusterResults(deduped);
     return clusters.map((cluster, index) => {
@@ -1165,7 +1147,11 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
         },
         region,
       };
-    }).sort((left, right) => right.primary.score - left.primary.score).slice(0, slots);
+    }).sort((left, right) => {
+      const providerDelta = briefSourcePriority(right.primary.sourceAdapter)
+        - briefSourcePriority(left.primary.sourceAdapter);
+      return providerDelta || right.primary.score - left.primary.score;
+    }).slice(0, slots);
   };
 
   const generateEdition = async (descriptor, force = false) => {
@@ -1196,10 +1182,10 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
         return { results: [], topic };
       }
     };
-    let [personalCollections, editorialCollections] = await Promise.all([
-      Promise.all(topics.map((topic) => collectSafely(topic, 8 + Math.ceil(topic.weight * 5)))),
-      Promise.all(EDITORIAL_SECTIONS.map((topic) => collectSafely(topic, Math.max(12, topic.slots + 7)))),
-    ]);
+    let personalCollections = [];
+    let editorialCollections = await Promise.all(
+      EDITORIAL_SECTIONS.map((topic) => collectSafely(topic, Math.max(6, topic.slots + 3))),
+    );
     const searchMs = Date.now() - searchStartedAt;
     const primaryByUrl = new Map();
     for (const { results } of [...personalCollections, ...editorialCollections]) {
@@ -1215,8 +1201,10 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
         const primary = {
           ...result.primary,
           author: result.primary.author || enrichment.author,
+          bodyExcerpt: result.primary.bodyExcerpt || enrichment.bodyExcerpt,
           imageUrl: result.primary.imageUrl || enrichment.imageUrl,
           publishedAt: result.primary.publishedAt || enrichment.publishedAt,
+          title: result.primary.title || enrichment.title,
         };
         return {
           ...result,
@@ -1266,10 +1254,11 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       previous.setDate(previous.getDate() - 1);
       const previousEvening = store.editions?.[`${localDateKey(previous)}:evening`];
       const carried = (previousEvening?.pages?.[0]?.stories || []).slice(0, 2)
-        .filter((story) => isAllowedBriefSource(story.url, domainFor(story.url)))
+        .filter((story) => story.sources?.[0]?.sourceAdapter !== "bocha-news"
+          && isAllowedBriefSource(story.url, domainFor(story.url)))
         .map((story) => ({ ...story, carriedOver: true }));
       const seen = new Set();
-      frontCandidates = [...carried, ...uniqueStories].filter((story) => {
+      frontCandidates = [...carried, ...editorialCandidates].filter((story) => {
         const key = story.url || story.id;
         if (seen.has(key)) return false;
         seen.add(key);
@@ -1318,10 +1307,10 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       section.stories = section.stories.filter((story) => chineseStoryIds.has(story.url || story.id));
     }
     const sectionStoryCount = topicSections.reduce((sum, section) => sum + section.stories.length, 0);
-    if (!frontStories.length && !sectionStoryCount) throw new Error("RSS 已返回新闻，但外文内容暂时无法翻译；已保留上一期简报。");
+    if (!frontStories.length && !sectionStoryCount) throw new Error("新闻检索已返回结果，但外文内容暂时无法翻译；已保留上一期 Brief。");
     const publishedStoryCount = frontStories.length + sectionStoryCount;
     const contentNotice = sectionStoryCount < 18 || frontStories.length < 8
-      ? `${searchFailures.length ? "部分 RSS 新闻源暂时不可用" : "部分外文 RSS 条目暂时无法翻译"}；本期已更新 ${publishedStoryCount} 条 RSS 新闻。`
+      ? `${searchFailures.length ? "部分专业新闻源暂时不可用" : "部分外文新闻暂时无法翻译"}；本期已更新 ${publishedStoryCount} 条新闻。`
       : "";
     const edition = {
       id: descriptor.id,
@@ -1339,7 +1328,10 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       generationMetrics: {
         enrichedUrlCount: primaryByUrl.size,
         directChineseStoryCount: translationResult.directChineseCount,
-        rssCandidateCount: translationResult.candidateCount,
+        newsCandidateCount: translationResult.candidateCount,
+        rssCandidateCount: displayedStories.filter((story) => story.sources?.[0]?.sourceAdapter?.includes("rss")).length,
+        bochaStoryCount: displayedStories.filter((story) => story.sources?.[0]?.sourceAdapter === "bocha-news").length,
+        serperStoryCount: displayedStories.filter((story) => story.sources?.[0]?.sourceAdapter === "serper-news").length,
         translatedStoryCount: translationResult.translatedCount,
         translationFailureCount: translationResult.translationFailureCount,
         sourceSelectionUsedModel: false,
@@ -1422,80 +1414,104 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
     if (!Array.isArray(story.sources) || story.sources.length < 1) {
       return { status: "error", message: "这条新闻目前没有可核验的真实来源，无法生成正文。" };
     }
-    let primary = story.sources[0];
-    let sourceBody = safeText(primary.bodyExcerpt || primary.snippet || primary.title, 6_000);
-    if (sourceBody.length < 300 && primary.url) {
+    const sourceCandidates = story.sources.slice(0, 6);
+    const enrichedSources = await mapWithConcurrency(sourceCandidates, 4, async (source) => {
       try {
-        const enriched = await fetchEnrichedResult(primary);
-        if (enriched.bodyExcerpt && enriched.bodyExcerpt.length > sourceBody.length) {
-          primary = { ...primary, bodyExcerpt: enriched.bodyExcerpt };
-          sourceBody = safeText(enriched.bodyExcerpt, 6_000);
-        }
+        const enriched = await enrichResult(source);
+        return {
+          ...source,
+          author: source.author || enriched.author,
+          bodyExcerpt: enriched.bodyExcerpt || source.bodyExcerpt || source.snippet,
+          faviconUrl: source.faviconUrl || enriched.faviconUrl,
+          imageUrl: enriched.imageUrl || source.imageUrl,
+          publishedAt: source.publishedAt || enriched.publishedAt,
+          title: source.title || enriched.title,
+        };
       } catch {
-        // Fallback to original source body if page fetch fails.
+        return source;
       }
+    });
+    const usableSources = enrichedSources.filter((source) =>
+      safeText(source.bodyExcerpt || source.snippet || source.title, 6_000).length >= 20
+    );
+    if (!usableSources.length) {
+      return { status: "error", message: "这些来源暂时没有可用于整理的正文内容。" };
     }
-    const splitBody = (value) => {
-      const rawBlocks = String(value || "")
-        .split(/\n\s*\n|\n/)
-        .map((s) => safeText(s, 2_000))
-        .filter((text) => text.length >= 20);
-      if (rawBlocks.length >= 2) return rawBlocks;
-      const sentences = String(value || "").split(/(?<=[。！？.!?])\s*/u).map((item) => safeText(item, 900)).filter(Boolean);
-      const paragraphs = [];
-      let current = "";
-      for (const sentence of sentences) {
-        if (current && current.length + sentence.length > 150) {
-          paragraphs.push(current);
-          current = sentence;
-        } else {
-          current += sentence;
-        }
-      }
-      if (current) paragraphs.push(current);
-      return paragraphs.length ? paragraphs : [safeText(value, 900)].filter(Boolean);
+
+    const sourcePayload = usableSources.map((source, index) => ({
+      id: index + 1,
+      excerpt: safeText(source.bodyExcerpt || source.snippet || source.title, 3_200),
+      publisher: source.domain,
+      publishedAt: source.publishedAt || "",
+      title: source.title,
+    }));
+    const synthesisPayload = {
+      systemPrompt: [
+        "你是 Brizo Brief 的快速新闻编辑。只依据给定来源，把同一事件整理成一篇简体中文综合报道。",
+        "直接输出结果，不展示思考过程。先交代发生了什么，再写关键事实、各方说法、背景与仍待确认的信息；来源冲突必须明确指出，不得补造事实。",
+        "每一段事实都必须带对应编号引用，例如 [1] 或 [2][4]；编号只能引用输入中的来源。",
+        "返回严格 JSON：{\"headline\":\"中文标题\",\"lead\":\"2到3句导语，含引用\",\"body\":[\"段落1，含引用\",\"段落2，含引用\"]}。正文写5到8段，不要 markdown。",
+      ].join("\n"),
+      query: JSON.stringify({ originalHeadline: story.headline, sources: sourcePayload }),
+      timeoutMs: 45_000,
     };
-    let headline = story.headline;
-    let translatedBody = [];
-    if (containsChinese(sourceBody)) {
-      translatedBody = splitBody(sourceBody);
-    } else {
-      const translationPayload = {
-        systemPrompt: [
-          "你是新闻翻译员，只把给定的外文新闻标题和正文忠实翻译成简体中文。",
-          "不得选稿、改写、概括、融合、解释或补充事实；保留原文段落顺序、公司名、人名、数字、时间、引语归属和不确定性。",
-          "返回严格 JSON：{\"headline\":\"中文直译标题\",\"body\":[\"中文直译段落\"]}，不要输出 markdown。",
-        ].join("\n"),
-        query: JSON.stringify({ body: sourceBody, title: primary.title }),
-        timeoutMs: 45_000,
-      };
-      let response = await callModel(translationPayload);
-      if ((!response || response.status !== "success") && callEditorialModel !== callModel) {
-        response = await callEditorialModel(translationPayload);
-      }
-      if (!response || response.status !== "success") {
-        return { status: "error", message: response?.message || "外文 RSS 正文暂时无法翻译。" };
-      }
-      const translated = parseModelJson(response.message);
-      headline = safeText(translated?.headline || story.headline, 220);
-      translatedBody = Array.isArray(translated?.body)
-        ? translated.body.map((paragraph) => safeText(paragraph, 2_000)).filter(containsChinese)
-        : [];
-      if (!translatedBody.length) return { status: "error", message: "翻译模型没有返回可用的中文正文。" };
+    let response = await callModel(synthesisPayload);
+    if ((!response || response.status !== "success") && callEditorialModel !== callModel) {
+      response = await callEditorialModel(synthesisPayload);
     }
-    const body = translatedBody.map((paragraph) => `${paragraph.replace(/\s*\[\d+\]\s*$/g, "")} [1]`);
-    const lead = story.summary || body[0];
+    const synthesized = response?.status === "success" ? parseModelJson(response.message) : null;
+    const validCitation = new RegExp(`\\[(?:${usableSources.map((_, index) => index + 1).join("|")})\\]`);
+    const cleanCitations = (value) => safeText(value, 2_400).replace(/\[(\d+)\]/g, (match, raw) => {
+      const index = Number(raw);
+      return index >= 1 && index <= usableSources.length ? match : "";
+    });
+    let body = (Array.isArray(synthesized?.body) ? synthesized.body : [])
+      .map(cleanCitations)
+      .filter((paragraph) => containsChinese(paragraph) && validCitation.test(paragraph))
+      .slice(0, 8);
+    let lead = cleanCitations(synthesized?.lead);
+    let headline = safeText(synthesized?.headline || story.headline, 220);
+    let synthesisState = "model";
+    if (!containsChinese(headline) || !body.length || !validCitation.test(lead)) {
+      synthesisState = "extractive-fallback";
+      headline = story.headline;
+      const fallbackParagraphs = usableSources.slice(0, 4).map((source, index) => {
+        const excerpt = safeText(source.bodyExcerpt || source.snippet || source.title, 800);
+        return excerpt ? `${excerpt.replace(/\s*\[\d+\]\s*$/g, "")} [${index + 1}]` : "";
+      }).filter((paragraph) => containsChinese(paragraph));
+      body = fallbackParagraphs.length ? fallbackParagraphs : [`${safeText(story.summary, 1_200)} [1]`];
+      lead = `${safeText(story.summary || body[0], 1_200).replace(/\s*\[\d+\]\s*$/g, "")} [1]`;
+    }
+
+    const relatedStories = stories
+      .filter((candidate) => candidate.id !== story.id && candidate.imageUrl)
+      .map((candidate) => ({
+        ...candidate,
+        relatedScore: (candidate.topicId === story.topicId ? 1 : 0)
+          + tokenSimilarity(`${story.headline} ${story.summary}`, `${candidate.headline} ${candidate.summary}`),
+      }))
+      .sort((left, right) => right.relatedScore - left.relatedScore
+        || Date.parse(right.publishedAt || 0) - Date.parse(left.publishedAt || 0))
+      .slice(0, 5)
+      .map(({ relatedScore: _relatedScore, ...candidate }) => candidate);
+    const images = [...new Set([
+      story.imageUrl,
+      ...usableSources.map((source) => source.imageUrl),
+    ].filter(Boolean))].slice(0, 3);
     const report = {
       contentVersion: REPORT_CONTENT_VERSION,
       editionId,
       generatedAt: new Date().toISOString(),
       headline,
-      imageUrl: story.imageUrl,
+      imageUrl: images[0] || story.imageUrl,
+      images,
       lead: safeText(lead, 1_500),
       body,
-      sources: [primary],
+      relatedStories,
+      sources: usableSources,
       status: "success",
       storyId,
+      synthesisState,
     };
     store.reports ||= {};
     store.reports[cacheKey] = report;

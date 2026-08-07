@@ -72,13 +72,14 @@ export function getDefaultBookmarkFaviconUrl(pageUrl) {
 
 function normalizeBookmarkFaviconUrl(value, pageUrl) {
   const faviconUrl = String(value || "").trim();
+  if (/bing\.com\/favicon\.ico/i.test(faviconUrl)) return "";
   if (
     /^https?:\/\//i.test(faviconUrl)
     || (faviconUrl.length <= 50_000 && /^data:image\//i.test(faviconUrl))
   ) {
     return faviconUrl;
   }
-  return getDefaultBookmarkFaviconUrl(pageUrl);
+  return "";
 }
 
 export function normalizeImportedBookmark(bookmark) {

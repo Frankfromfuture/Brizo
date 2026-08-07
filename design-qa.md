@@ -1,89 +1,61 @@
-# Brizo Bookmark Sidebar Design QA
+# Brizo Brief design QA
 
-- Source visual truth: `/var/folders/cj/fpsmzyhn5hd3dgl4lyjvw6c40000gn/T/codex-clipboard-30cdbf13-b361-4e54-a5e8-95f7913faece.png`
-- Implementation screenshot: `/Users/frankfan/Desktop/Project/Brizo/brizo-bookmark-sidebar-final.png`
-- Combined comparison: `/Users/frankfan/Desktop/Project/Brizo/brizo-bookmark-sidebar-comparison.png`
-- Viewport: 1440 × 900 CSS px
-- Source pixels: 618 × 1414
-- Implementation pixels: 1440 × 900
-- Density normalization: implementation captured at 1 CSS px per screenshot pixel; source resized to the implemented 169 px sidebar width for focused comparison
-- State: light theme, 收藏夹 selected, Research folder expanded
+- Source visual truth: `/var/folders/cj/fpsmzyhn5hd3dgl4lyjvw6c40000gn/T/codex-clipboard-c1523185-a695-4b52-be41-f244d92d769f.png`
+- Final implementation screenshot: `/Users/frankfan/Desktop/Project/Brizo/brief-implementation-final.png`
+- Combined comparison: `/Users/frankfan/Desktop/Project/Brizo/brief-design-comparison-final.png`
+- Detail-state screenshot: `/Users/frankfan/Desktop/Project/Brizo/brief-report-implementation.png`
+- Responsive screenshot: `/Users/frankfan/Desktop/Project/Brizo/brief-responsive-800-pass2.png`
+- Reference pixels: 1514 × 1600
+- Implementation pixels: 1489 × 1082 at device scale factor 1
+- Desktop CSS viewport requested: 1489 × 1588; the Codex in-app browser surface captured its available 1489 × 1082 viewport.
+- Responsive CSS viewport: 800 × 900 at device scale factor 1
+- Density normalization: the reference was center-cropped to 1489 × 1082 without resampling and paired with the 1489 × 1082 implementation in the combined comparison.
+- State: Brief selected, 全部 category, stream at top, no hover/focus treatment in the final desktop capture.
 
 ## Full-view comparison evidence
 
-The full implementation keeps Brizo's existing logo header, model guard footer, 169 px rail, and browser chrome. Within that product-owned frame, the bookmark controls and tree follow the supplied GitHub explorer hierarchy: view selector, search field, then compact expandable rows.
-
-## Focused region comparison evidence
-
-The combined comparison aligns both sidebars at 169 px wide. The control heights, thin gray outlines, compact tree indentation, chevrons, filled folders, single-line truncation, and hover/selected row treatment match the reference language. Brizo intentionally substitutes Chinese product labels and its sampled logo gold for GitHub blue.
+The final comparison confirms the same core Discovery hierarchy: a dominant two-column lead with a two-to-three-line headline, publication time, multi-line summary, large image, stacked source marks and source count; a three-column image-news row follows immediately. Brizo intentionally retains its existing light browser shell, POST masthead, serif typography, and category rail instead of copying Perplexity's dark palette. These product constraints do not change the requested information density or scan order.
 
 ## Required fidelity surfaces
 
-- Fonts and typography: existing Brizo Harmony CJK and Inter stack retained; compact 10–11.5 px UI hierarchy matches the narrow rail.
-- Spacing and layout rhythm: selector and search use equal 37 px heights with a 7 px gap; tree rows use 34–35 px rhythm and progressive 13 px indentation.
-- Colors and visual tokens: neutral white/gray GitHub-like surfaces retained; folder fill uses Brizo logo gold `#a58c5e`.
-- Image quality and asset fidelity: no new raster assets were required; existing Brizo logo and real circular favicons remain unchanged. Interface icons use the existing Phosphor family.
-- Copy and content: 收藏夹 / 智能收藏夹 implement the requested master-style switch; “Go to file” searches title, URL, and folder path; the future smart mode clearly states that it is not yet available.
+- Fonts and typography: Brizo's bundled Source Han Serif SC / EB Garamond system is retained. Lead, card, metadata, summary, and report-body sizes establish the same large-title/editorial-summary hierarchy as the reference without broken wrapping.
+- Spacing and layout rhythm: lead copy/image proportions, footer placement, three-card grid, dividers, radii, and vertical gaps are balanced at desktop and collapse cleanly at 800 px.
+- Colors and tokens: the reference's dark surface is intentionally translated into Brizo's established white, charcoal, and muted-gold tokens. Contrast remains clear and metadata stays subordinate.
+- Image quality: cards use real article or source images with cover crops and rounded corners; publisher favicons use circular masks. No CSS-drawn or fake replacement artwork is used.
+- Copy and content: every story exposes a concrete Chinese headline, factual summary, source count, and `已发布 X 分钟/小时/天前`. Detail copy is organized as cited paragraphs and ends with five related image-news summaries.
+- Icons: Phosphor clock, heart, overflow, back, refresh, close, and link icons share one outline family and remain optically aligned.
+- Accessibility and states: story and source controls remain semantic buttons, Escape closes the report, focus outlines remain available, refresh/loading/error content is announced, and no horizontal overflow exists at 800 px.
 
-## Interaction verification
+## Focused region comparison evidence
 
-- 收藏夹 selector opens and switches to 智能收藏夹.
-- 智能收藏夹 renders the future-feature state.
-- Switching back restores the real bookmark tree.
-- “Go to file” filtered for `AlphaFold` and automatically expanded all matching folder ancestors.
-- Search clear restored the normal tree.
-- Browser console errors: none.
-
-## Findings
-
-No actionable P0, P1, or P2 mismatches remain. The persistent Brizo logo header and model guard footer are intentional product constraints outside the referenced GitHub tree component.
+- Lead footer: pass 1 showed the source stack competing with the final summary line. The footer was moved into the lead-copy flow; the final screenshot shows clean separation and preserves the reference's source-count/action anatomy.
+- Responsive source stack: the first 800 px capture measured publisher icons as 20 × 340 px because a broad responsive image selector treated favicons as hero images. The selectors were restricted to each story button's direct hero image. Post-fix measurements are 20 × 20 px with a 50% circular mask in both lead and card footers.
+- Detail report: the captured report opens immediately with cached title, time, sources, lead, and hero image; DOM verification found five related story controls. The page console had no errors or warnings.
 
 ## Comparison history
 
-- Initial implementation used regular outline folder glyphs, which read weaker than the filled GitHub folders.
-- Fix: changed closed and open folder glyphs to filled Phosphor variants and applied the sampled Brizo gold.
-- Post-fix evidence: `brizo-bookmark-sidebar-final.png` and `brizo-bookmark-sidebar-comparison.png`.
+1. Initial desktop comparison
+   - Finding [P2]: lead source footer overlapped the summary line.
+   - Fix: render the lead footer inside `.brief-stream-story-copy` and use normal flow spacing.
+   - Post-fix evidence: `brief-implementation-pass2.png` and final combined comparison.
+2. Initial responsive comparison
+   - Finding [P1]: responsive hero-image rules stretched publisher favicons to article-image height.
+   - Fix: scope lead/card/wide/row image-height rules to `> button > img`.
+   - Post-fix evidence: `brief-responsive-800-pass2.png`; measured lead and card favicons are 20 × 20 px, body width equals viewport width, and there is no horizontal overflow.
+3. Final desktop comparison
+   - No actionable P0/P1/P2 differences remain. The light palette, masthead, browser chrome, and category rail are intentional Brizo product-system adaptations.
 
-## Follow-up polish
+## Findings
 
-- P3: when more root folders are imported, confirm that the current 35 px row rhythm remains comfortable across a very long tree.
+No actionable P0, P1, or P2 findings remain.
+
+## Interaction checks
+
+- Brief tab opens the stream.
+- Lead story opens an in-Brief report without blanking the cached story content.
+- Report displays source links and five related image-news items.
+- Back closes the report and preserves the stream surface.
+- 800 px responsive layout has no horizontal overflow.
+- Browser console errors/warnings checked: none.
 
 final result: passed
-
----
-
-# Brizo Brief design QA
-
-Status: passed
-
-Source of truth: `/Users/frankfan/.codex/generated_images/019fc2f3-79a9-7970-8f3f-1327055e6365/exec-c9b31157-9db8-40ca-a1f9-1d7e531e764e.png`
-
-Final implementation capture: `/Users/frankfan/Desktop/Project/Brizo/qa/brief-front-final.png`
-
-Side-by-side comparison: `/Users/frankfan/Desktop/Project/Brizo/qa/brief-comparison-final.png`
-
-## QA result
-
-- P0: none.
-- P1: none.
-- P2: none unresolved.
-- The fixed Brief entry, serif masthead, gold hairline system, three-column front-page hierarchy, Now rail, restrained page index, topic edit action, and three-column next-page preview all match the selected weighted-gazette direction.
-- Front-page summaries were lengthened and the lower preview gained three headlines per page to match the source density. The main preview image was changed to a real maritime logistics photograph closer to the source subject.
-- The implementation intentionally retains Brizo's durable collapsed-sidebar startup state and the required visible blank new tab; the reference was captured with the bookmark sidebar expanded and no ordinary tab visible.
-
-## States and interaction checked
-
-- Fixed Brief tab appears immediately after `+`, is not draggable or closable, and does not change the normal tab count.
-- Page controls and PageDown snap across all four full-height pages.
-- A page-4 story opens the report overlay; closing it restores page 4.
-- Topic editor exposes 置顶、自动、减少、屏蔽 and reset controls.
-- Desktop front page, 768 px fallback, and 390 px narrow layout were inspected; horizontal overflow is contained and content remains vertically readable.
-- Loading, honest error/no-model, stale-edition notice, reduced-motion, report loading/error, and preview labeling are implemented.
-
-## Verification
-
-- `npm run test:brief`: passed (9 tests).
-- `npm run build`: passed.
-- `npm run test:sites`: passed (4 tests).
-- `npm run desktop:smoke`: passed, including Brief fixed-tab, four-page, and report-position assertions.
-- `npm run desktop:browser-smoke`: passed, including the Brief preload bridge methods.

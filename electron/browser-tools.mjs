@@ -381,6 +381,156 @@ export async function importBookmarksFromHtml(window) {
   };
 }
 
+function faviconCandidatesFromHtml(html, pageUrl) {
+  const candidates = [];
+  const linkPattern = /<link\b[^>]*>/gi;
+  for (const tag of String(html || "").match(linkPattern) || []) {
+    const rel = tag.match(/\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    const relValue = String(rel?.[1] || rel?.[2] || rel?.[3] || "").toLowerCase();
+    if (!/(?:^|\s)(?:shortcut\s+icon|icon|apple-touch-icon)(?:\s|$)/.test(relValue)) continue;
+    const href = tag.match(/\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    const rawHref = decodeHtml(href?.[1] || href?.[2] || href?.[3] || "");
+    try {
+      const resolved = new URL(rawHref, pageUrl);
+      if (["http:", "https:"].includes(resolved.protocol)) candidates.push(resolved.href);
+    } catch {
+      // Ignore malformed icon declarations.
+    }
+  }
+  try {
+    candidates.push(new URL("/favicon.ico", pageUrl).href);
+  } catch {
+    // The caller already validates page URLs.
+  }
+  return [...new Set(candidates)];
+}
+
+function readImageDimensions(bytes, mimeType = "") {
+  const buffer = Buffer.from(bytes);
+  if (buffer.length >= 24 && buffer.subarray(1, 4).toString("ascii") === "PNG") {
+    return { height: buffer.readUInt32BE(20), width: buffer.readUInt32BE(16) };
+  }
+  if (buffer.length >= 10 && ["GIF87a", "GIF89a"].includes(buffer.subarray(0, 6).toString("ascii"))) {
+    return { height: buffer.readUInt16LE(8), width: buffer.readUInt16LE(6) };
+  }
+  if (buffer.length >= 8 && buffer.readUInt16LE(0) === 0 && buffer.readUInt16LE(2) === 1) {
+    return { height: buffer[7] || 256, width: buffer[6] || 256 };
+  }
+  if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < buffer.length) {
+      if (buffer[offset] !== 0xff) { offset += 1; continue; }
+      const marker = buffer[offset + 1];
+      if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) {
+        return { height: buffer.readUInt16BE(offset + 5), width: buffer.readUInt16BE(offset + 7) };
+      }
+      const length = buffer.readUInt16BE(offset + 2);
+      if (!Number.isFinite(length) || length < 2) break;
+      offset += length + 2;
+    }
+  }
+  if (mimeType === "image/svg+xml" || buffer.subarray(0, 512).toString("utf8").includes("<svg")) {
+    const svg = buffer.subarray(0, 4_096).toString("utf8");
+    const width = Number(svg.match(/\bwidth=["']([\d.]+)/i)?.[1]);
+    const height = Number(svg.match(/\bheight=["']([\d.]+)/i)?.[1]);
+    const viewBox = svg.match(/\bviewBox=["'][^"']*?([\d.]+)[ ,]+([\d.]+)["']/i);
+    return {
+      height: height || Number(viewBox?.[2]) || 256,
+      width: width || Number(viewBox?.[1]) || 256,
+    };
+  }
+  return { height: 0, width: 0 };
+}
+
+async function inspectFaviconUrl(iconUrl) {
+  try {
+    const response = await fetch(iconUrl, {
+      headers: { "user-agent": "Mozilla/5.0 Brizo/1.0" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(4_500),
+    });
+    if (!response.ok) return "";
+    const contentLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && (contentLength <= 0 || contentLength > 512_000)) return "";
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (!bytes.length || bytes.length > 512_000) return "";
+    const declaredType = String(response.headers.get("content-type") || "")
+      .split(";", 1)[0]
+      .trim()
+      .toLowerCase();
+    const extension = new URL(response.url || iconUrl).pathname.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
+    const inferredType = extension === "svg" ? "image/svg+xml"
+      : extension === "png" ? "image/png"
+        : ["jpg", "jpeg"].includes(extension) ? "image/jpeg"
+          : extension === "webp" ? "image/webp"
+            : "image/x-icon";
+    const mimeType = declaredType.startsWith("image/") ? declaredType : inferredType;
+    if (!mimeType.startsWith("image/")) return null;
+    const dimensions = readImageDimensions(bytes, mimeType);
+    return { ...dimensions, url: response.url || iconUrl };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveOriginFavicon(pageUrl) {
+  let html = "";
+  try {
+    const response = await fetch(pageUrl, {
+      headers: {
+        accept: "text/html,application/xhtml+xml",
+        "user-agent": "Mozilla/5.0 Brizo/1.0",
+      },
+      redirect: "follow",
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (response.ok) html = (await response.text()).slice(0, 1_000_000);
+  } catch {
+    // The conventional origin favicon remains a valid fallback candidate.
+  }
+  for (const candidate of faviconCandidatesFromHtml(html, pageUrl).slice(0, 8)) {
+    const inspected = await inspectFaviconUrl(candidate);
+    if (inspected) return inspected.url;
+  }
+  return "";
+}
+
+export async function resolveBookmarkFavicons(bookmarks = []) {
+  const byOrigin = new Map();
+  for (const bookmark of bookmarks) {
+    try {
+      const url = new URL(String(bookmark?.url || ""));
+      if (!["http:", "https:"].includes(url.protocol)) continue;
+      if (!byOrigin.has(url.origin)) byOrigin.set(url.origin, []);
+      byOrigin.get(url.origin).push({
+        faviconUrl: String(bookmark?.faviconUrl || ""),
+        url: url.href,
+      });
+    } catch {
+      // Ignore invalid bookmark URLs.
+    }
+  }
+
+  const origins = [...byOrigin.entries()];
+  const resolved = [];
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < origins.length) {
+      const [origin, items] = origins[cursor++];
+      const replacements = [];
+      for (const item of items) {
+        const current = item.faviconUrl ? await inspectFaviconUrl(item.faviconUrl) : null;
+        if (!current || current.width < 20 || current.height < 20) replacements.push(item);
+      }
+      if (!replacements.length) continue;
+      const faviconUrl = await resolveOriginFavicon(replacements[0]?.url || origin);
+      if (faviconUrl) resolved.push(...replacements.map((item) => ({ faviconUrl, url: item.url })));
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(10, origins.length) }, worker));
+  return resolved;
+}
+
 function screenshotFilename(title, suffix) {
   const safeTitle = String(title || "Web page")
     .normalize("NFKC")

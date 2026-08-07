@@ -14,6 +14,8 @@
     "desktop:startup-benchmark": "electron electron/main.mjs --startup-benchmark",
     "desktop:browser-smoke": "npm run build && electron electron/main.mjs --browser-smoke",
     "desktop:pdf-smoke": "npm run build && electron electron/main.mjs --pdf-smoke",
+    "desktop:search-smoke": "electron electron/main.mjs --search-smoke",
+    "search:configure": "electron electron/main.mjs --configure-search-keys",
     "desktop:smoke": "npm run build && electron electron/main.mjs --smoke-test",
     "dist": "npm run icons:prepare && npm run build && electron-builder",
     "dist:mac": "npm run icons:prepare && npm run build && electron-builder --mac",
@@ -21,7 +23,9 @@
     "dist:linux": "npm run icons:prepare && npm run build && electron-builder --linux",
     "preview": "vite preview",
     "perf:startup": "node scripts/benchmark-startup.mjs",
+    "test": "npm run test:search && npm run test:brief && npm run test:sites",
     "test:brief": "node --test tests/brief-service.test.mjs",
+    "test:search": "node --test tests/search-*.test.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs"
   },
   "dependencies": {
