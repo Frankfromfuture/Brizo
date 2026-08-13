@@ -228,6 +228,10 @@ async function findProfileBookmarkFiles(basePath) {
   return files;
 }
 
+function siblingHistoryFiles(bookmarkFiles) {
+  return bookmarkFiles.map((filePath) => path.join(path.dirname(filePath), "History"));
+}
+
 async function findAtlasBookmarkFiles() {
   const atlasHost = path.join(
     os.homedir(),
@@ -250,43 +254,52 @@ async function findAtlasBookmarkFiles() {
 
 async function discoverBookmarkSourceFiles() {
   const applicationSupport = path.join(os.homedir(), "Library", "Application Support");
+  const chromeFiles = await findProfileBookmarkFiles(path.join(applicationSupport, "Google", "Chrome"));
+  const atlasFiles = await findAtlasBookmarkFiles();
+  const edgeFiles = await findProfileBookmarkFiles(path.join(applicationSupport, "Microsoft Edge"));
+  const braveFiles = await findProfileBookmarkFiles(path.join(applicationSupport, "BraveSoftware", "Brave-Browser"));
+  const arcFiles = await findProfileBookmarkFiles(path.join(applicationSupport, "Arc", "User Data"));
   const definitions = [
     {
       id: "chrome",
       name: "Google Chrome",
-      files: await findProfileBookmarkFiles(path.join(applicationSupport, "Google", "Chrome")),
+      files: chromeFiles,
+      historyFiles: siblingHistoryFiles(chromeFiles),
       parser: parseChromiumBookmarks,
     },
     {
       id: "atlas",
       name: "ChatGPT Atlas",
-      files: await findAtlasBookmarkFiles(),
+      files: atlasFiles,
+      historyFiles: siblingHistoryFiles(atlasFiles),
       parser: parseChromiumBookmarks,
     },
     {
       id: "safari",
       name: "Safari",
       files: [path.join(os.homedir(), "Library", "Safari", "Bookmarks.plist")],
+      historyFiles: [path.join(os.homedir(), "Library", "Safari", "History.db")],
       parser: parseSafariBookmarks,
     },
     {
       id: "edge",
       name: "Microsoft Edge",
-      files: await findProfileBookmarkFiles(path.join(applicationSupport, "Microsoft Edge")),
+      files: edgeFiles,
+      historyFiles: siblingHistoryFiles(edgeFiles),
       parser: parseChromiumBookmarks,
     },
     {
       id: "brave",
       name: "Brave",
-      files: await findProfileBookmarkFiles(
-        path.join(applicationSupport, "BraveSoftware", "Brave-Browser"),
-      ),
+      files: braveFiles,
+      historyFiles: siblingHistoryFiles(braveFiles),
       parser: parseChromiumBookmarks,
     },
     {
       id: "arc",
       name: "Arc",
-      files: await findProfileBookmarkFiles(path.join(applicationSupport, "Arc", "User Data")),
+      files: arcFiles,
+      historyFiles: siblingHistoryFiles(arcFiles),
       parser: parseChromiumBookmarks,
     },
   ];
@@ -295,6 +308,13 @@ async function discoverBookmarkSourceFiles() {
     definition.files = (
       await Promise.all(
         definition.files.map(async (filePath) => (
+          await exists(filePath) ? filePath : ""
+        )),
+      )
+    ).filter(Boolean);
+    definition.historyFiles = (
+      await Promise.all(
+        (definition.historyFiles || []).map(async (filePath) => (
           await exists(filePath) ? filePath : ""
         )),
       )
@@ -362,6 +382,25 @@ export async function importDetectedBookmarks(sourceIds = []) {
     bookmarks: dedupeBookmarks(imported).slice(0, 5_000),
     errors: [...new Set(errors)],
   };
+}
+
+export async function resolveBookmarkVisitWeights(bookmarks = []) {
+  const definitions = await discoverBookmarkSourceFiles();
+  const urlsBySource = new Map();
+  for (const bookmark of Array.isArray(bookmarks) ? bookmarks.slice(0, 5_000) : []) {
+    if (!bookmark?.source || !bookmark?.url) continue;
+    if (!urlsBySource.has(bookmark.source)) urlsBySource.set(bookmark.source, []);
+    urlsBySource.get(bookmark.source).push(bookmark.url);
+  }
+  const { mergeSourceVisitWeights, readChromiumVisitWeights, readSafariVisitWeights } = await import("./bookmark-history.mjs");
+  const groups = await Promise.all(definitions.map(async (definition) => {
+    const urls = urlsBySource.get(definition.id) || [];
+    if (!urls.length || !definition.historyFiles.length) return [];
+    return definition.id === "safari"
+      ? readSafariVisitWeights(definition.historyFiles, urls)
+      : readChromiumVisitWeights(definition.historyFiles, urls);
+  }));
+  return mergeSourceVisitWeights(groups);
 }
 
 export async function importBookmarksFromHtml(window) {
@@ -662,6 +701,10 @@ async function captureVisiblePage(webContents) {
     // Hidden or fully occluded windows can lack a display surface; CDP still has one.
   }
 
+  return captureVisiblePageViaDebugger(webContents);
+}
+
+async function captureVisiblePageViaDebugger(webContents) {
   const debuggerApi = webContents.debugger;
   const attachedHere = !debuggerApi.isAttached();
   if (attachedHere) debuggerApi.attach("1.3");
@@ -698,6 +741,11 @@ export async function captureAndSaveScreenshot({ mode, outputPath = "", webConte
   } else if (mode === "full-page") {
     png = await captureFullPage(webContents);
     suffix = "full page";
+  } else if (mode === "visible-debugger") {
+    // Shell overlays intentionally hide the retained WebContentsView. CDP
+    // captures its current compositor surface without resizing or revealing it.
+    png = await captureVisiblePageViaDebugger(webContents);
+    suffix = "visible page";
   } else {
     png = await captureVisiblePage(webContents);
     suffix = "visible page";

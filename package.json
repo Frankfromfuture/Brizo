@@ -9,10 +9,13 @@
     "dev": "vite",
     "build": "vite build && node scripts/prepare-sites-build.mjs",
     "icons:prepare": "python3 scripts/prepare-app-icons.py",
+    "icons:bookmarks": "node scripts/prepare-bookmark-icons.mjs",
     "desktop": "npm run build && electron electron/main.mjs",
     "desktop:run": "electron electron/main.mjs",
     "desktop:startup-benchmark": "electron electron/main.mjs --startup-benchmark",
     "desktop:browser-smoke": "npm run build && electron electron/main.mjs --browser-smoke",
+    "desktop:ctrip-smoke": "electron tests/ctrip-flight-live-smoke.cjs",
+    "desktop:taobao-smoke": "electron tests/taobao-price-live-smoke.cjs",
     "desktop:pdf-smoke": "npm run build && electron electron/main.mjs --pdf-smoke",
     "desktop:search-smoke": "electron electron/main.mjs --search-smoke",
     "search:configure": "electron electron/main.mjs --configure-search-keys",
@@ -23,14 +26,17 @@
     "dist:linux": "npm run icons:prepare && npm run build && electron-builder --linux",
     "preview": "vite preview",
     "perf:startup": "node scripts/benchmark-startup.mjs",
-    "test": "npm run test:search && npm run test:brief && npm run test:sites",
+    "test": "npm run test:search && npm run test:brief && npm run test:smart && npm run test:password && npm run test:sites",
     "test:brief": "node --test tests/brief-service.test.mjs",
     "test:search": "node --test tests/search-*.test.mjs",
+    "test:smart": "node --test tests/smart-bookmarks.test.mjs tests/bookmark-history.test.mjs tests/bookmark-icons.test.mjs",
+    "test:password": "node --test tests/password-vault.test.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
-    "cheerio": "^1.1.2"
+    "cheerio": "^1.1.2",
+    "pdfjs-dist": "^5.7.284"
   },
   "devDependencies": {
     "@fontsource/eb-garamond": "^5.3.0",

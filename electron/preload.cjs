@@ -3,6 +3,10 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("beanBrowser", {
   back: () => ipcRenderer.invoke("bean-browser:back"),
   askCurrentPage: (payload) => ipcRenderer.invoke("bean-browser:ask-current-page", payload),
+  runBrowserCommand: (payload) => ipcRenderer.invoke("bean-browser:run-browser-command", payload),
+  runBrizoUseCommand: (payload) => ipcRenderer.invoke("bean-browser:run-brizo-use-command", payload),
+  pauseBrizoUseCommand: (sessionId) => ipcRenderer.invoke("bean-browser:pause-brizo-use-command", sessionId),
+  setBrizoUseSandboxLayout: (payload) => ipcRenderer.send("bean-browser:set-brizo-use-sandbox-layout", payload),
   getBriefEdition: (payload) => ipcRenderer.invoke("bean-browser:brief-get-edition", payload),
   getBriefReport: (payload) => ipcRenderer.invoke("bean-browser:brief-get-report", payload),
   saveBriefPreferences: (payload) =>
@@ -15,12 +19,15 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   chooseDownloadDirectory: () => ipcRenderer.invoke("bean-browser:choose-download-directory"),
   forward: () => ipcRenderer.invoke("bean-browser:forward"),
   getAppInfo: () => ipcRenderer.invoke("bean-browser:get-app-info"),
+  getPageZoom: () => ipcRenderer.invoke("bean-browser:get-page-zoom"),
   getState: () => ipcRenderer.invoke("bean-browser:get-state"),
+  getSmartBookmarkSnapshot: () => ipcRenderer.invoke("bean-browser:smart-bookmarks-get"),
   importBookmarks: (sourceIds) =>
     ipcRenderer.invoke("bean-browser:import-bookmarks", sourceIds),
   importBookmarksFromHtml: () =>
     ipcRenderer.invoke("bean-browser:import-bookmarks-html"),
   listDownloads: () => ipcRenderer.invoke("bean-browser:list-downloads"),
+  listPasswords: () => ipcRenderer.invoke("bean-browser:list-passwords"),
   listBookmarkSources: () =>
     ipcRenderer.invoke("bean-browser:list-bookmark-sources"),
   resolveBookmarkFavicons: (bookmarks) =>
@@ -29,6 +36,8 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   navigate: (input, tabId) => ipcRenderer.invoke("bean-browser:navigate", input, tabId),
   navigateImage: (input, tabId) =>
     ipcRenderer.invoke("bean-browser:navigate-image", input, tabId),
+  navigatePdf: (input, tabId) =>
+    ipcRenderer.invoke("bean-browser:navigate-pdf", input, tabId),
   onActivated: (callback) => {
     const listener = () => callback();
     ipcRenderer.on("bean-browser:activated", listener);
@@ -43,6 +52,11 @@ contextBridge.exposeInMainWorld("beanBrowser", {
     const listener = (_event, downloads) => callback(downloads);
     ipcRenderer.on("bean-browser:downloads", listener);
     return () => ipcRenderer.removeListener("bean-browser:downloads", listener);
+  },
+  onOpenDownloads: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("bean-browser:open-downloads", listener);
+    return () => ipcRenderer.removeListener("bean-browser:open-downloads", listener);
   },
   onOpenUrlTab: (callback) => {
     const listener = (_event, url) => callback(url);
@@ -64,19 +78,35 @@ contextBridge.exposeInMainWorld("beanBrowser", {
     ipcRenderer.on("bean-browser:search-stream", listener);
     return () => ipcRenderer.removeListener("bean-browser:search-stream", listener);
   },
+  onBrizoUseProgress: (callback) => {
+    const listener = (_event, message) => callback(message);
+    ipcRenderer.on("bean-browser:brizo-use-progress", listener);
+    return () => ipcRenderer.removeListener("bean-browser:brizo-use-progress", listener);
+  },
+  onSmartBookmarkProgress: (callback) => {
+    const listener = (_event, progress) => callback(progress);
+    ipcRenderer.on("bean-browser:smart-bookmarks-progress", listener);
+    return () => ipcRenderer.removeListener("bean-browser:smart-bookmarks-progress", listener);
+  },
   exportArticlePdf: () => ipcRenderer.invoke("bean-browser:export-article-pdf"),
   exportSearchPdf: (payload) => ipcRenderer.invoke("bean-browser:export-search-pdf", payload),
+  downloadCurrentPdf: () => ipcRenderer.invoke("bean-browser:download-current-pdf"),
   openIncognito: () => ipcRenderer.invoke("bean-browser:open-incognito"),
   print: () => ipcRenderer.invoke("bean-browser:print"),
   preconnect: (input) => ipcRenderer.invoke("bean-browser:preconnect", input),
   reload: () => ipcRenderer.invoke("bean-browser:reload"),
+  savePassword: (payload) => ipcRenderer.invoke("bean-browser:save-password", payload),
   saveModelProvider: (payload) => ipcRenderer.invoke("bean-browser:save-model-provider", payload),
   startSearch: (payload) => ipcRenderer.invoke("bean-browser:start-search", payload),
   cancelSearch: (searchId) => ipcRenderer.invoke("bean-browser:cancel-search", searchId),
   searchVane: (payload) => ipcRenderer.invoke("bean-browser:search-vane", payload),
   suggestQueries: (input) => ipcRenderer.invoke("bean-browser:suggest-queries", input),
+  syncSmartBookmarks: (payload) => ipcRenderer.invoke("bean-browser:smart-bookmarks-sync", payload),
   setDefaultModelProvider: (id) => ipcRenderer.invoke("bean-browser:set-default-model-provider", id),
   setDownloadDirectory: (directory) => ipcRenderer.invoke("bean-browser:set-download-directory", directory),
+  setPageZoom: (factor) => ipcRenderer.invoke("bean-browser:set-page-zoom", factor),
+  copyPassword: (id) => ipcRenderer.invoke("bean-browser:copy-password", id),
+  deletePassword: (id) => ipcRenderer.invoke("bean-browser:delete-password", id),
   deleteModelProvider: (id) => ipcRenderer.invoke("bean-browser:delete-model-provider", id),
   setBounds: (bounds) => ipcRenderer.send("bean-browser:set-bounds", bounds),
   setVisible: (visible) => ipcRenderer.send("bean-browser:set-visible", visible),

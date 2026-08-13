@@ -43,6 +43,7 @@ function previewSources(seed = 0) {
     snippet: "来自权威媒体与官方机构的公开报道；桌面版会通过 Serper News 实时检索并综合原始来源。",
     title,
     url,
+    authorityLabel: index === 0 ? "一线权威来源" : "权威媒体",
     }));
 }
 
@@ -52,10 +53,12 @@ function makePreviewStory({ headline, id, index, region, summary, topicId, topic
     headline,
     id,
     imageUrl: PREVIEW_IMAGES[index % PREVIEW_IMAGES.length],
+    importance: Math.max(0.62, 0.92 - index * 0.015),
     publishedAt: new Date(Date.now() - (index + 1) * 18 * 60_000).toISOString(),
     region,
     score: 1 - index * 0.02,
     sources,
+    sourceCount: sources.length,
     summary,
     topicId,
     topicLabel,
@@ -348,9 +351,12 @@ function storyRank(story, edition, preferences) {
   const pinned = preferences?.pinnedTopicIds?.includes(story.topicId) ? 4 : 0;
   const reduced = preferences?.reducedTopicIds?.includes(story.topicId) ? -2 : 0;
   const sourceAdapter = story.sources?.[0]?.sourceAdapter;
-  const professionalRetrieval = sourceAdapter === "serper-news" ? 1.5 : sourceAdapter === "bocha-news" ? 0.75 : 0;
+  const professionalRetrieval = sourceAdapter === "serper-news" ? 0.2 : sourceAdapter === "bocha-news" ? 0.12 : 0;
   const freshness = Math.max(0, 1 - ((Date.now() - Date.parse(story.publishedAt || 0)) / 86_400_000)) * 0.2;
-  return pinned + reduced + professionalRetrieval + topicWeight * 3 + (Number(story.score) || 0) + freshness;
+  const importance = Number(story.importance) || 0;
+  const verification = Math.min(3, Number(story.sourceCount) || story.sources?.length || 1) * 0.15;
+  return pinned + reduced + professionalRetrieval + topicWeight * 3
+    + (Number(story.score) || 0) + importance * 2.4 + verification + freshness;
 }
 
 function StorySources({ story }) {
@@ -377,6 +383,9 @@ function StreamStoryCard({ story, layout = "card", onOpenStory }) {
   const storyFooter = (
     <footer className="brief-stream-story-footer">
       <StorySources story={story} />
+      {(story.sourceCount || story.sources?.length || 0) >= 2 && (
+        <span className="brief-event-verified"><ShieldCheck size={13} /> 已核验</span>
+      )}
       {layout === "card" && <StoryMeta story={story} />}
       <span className="brief-stream-story-actions" aria-hidden="true">
         <Heart size={17} />
@@ -530,10 +539,38 @@ function ReportOverlay({ loading, onClose, onOpenRelated, onOpenSource, relatedS
           <div className="brief-report-meta-row">
             <StoryMeta story={story} />
             <StorySources story={{ ...story, sources: report?.sources || story.sources }} />
+            <span className={`brief-report-verification${(report?.sourceCount || story.sourceCount || 0) >= 2 ? " is-cross-checked" : ""}`}>
+              <ShieldCheck size={14} />
+              {report?.verificationLabel || ((story.sourceCount || story.sources?.length || 0) >= 2
+                ? `已交叉核验 ${story.sourceCount || story.sources.length} 个独立来源`
+                : "单一权威来源")}
+            </span>
           </div>
           <p className="brief-report-lead">
             <CitationText text={report?.lead || story.summary} sources={report?.sources || story.sources || []} onOpenSource={onOpenSource} />
           </p>
+          {(report?.keyPoints?.length || report?.whyItMatters || report?.whatToWatch) && (
+            <section className="brief-report-distill" aria-label="新闻提炼">
+              <div className="brief-report-key-points">
+                <h2>关键事实</h2>
+                <ol>
+                  {(report?.keyPoints || []).map((point, index) => (
+                    <li key={`${index}-${point.slice(0, 20)}`}>
+                      <CitationText text={point} sources={report?.sources || story.sources || []} onOpenSource={onOpenSource} />
+                    </li>
+                  ))}
+                </ol>
+              </div>
+              <div>
+                <h2>为什么重要</h2>
+                <p><CitationText text={report?.whyItMatters} sources={report?.sources || story.sources || []} onOpenSource={onOpenSource} /></p>
+              </div>
+              <div>
+                <h2>接下来关注</h2>
+                <p><CitationText text={report?.whatToWatch} sources={report?.sources || story.sources || []} onOpenSource={onOpenSource} /></p>
+              </div>
+            </section>
+          )}
           <StoryImage className="brief-report-image" story={{ ...story, imageUrl: report?.imageUrl || story.imageUrl }} />
           <div className="brief-report-body is-article-body">
             {(report?.body || [report?.lead || story.summary]).map((text, index) => (
@@ -553,7 +590,10 @@ function ReportOverlay({ loading, onClose, onOpenRelated, onOpenSource, relatedS
               <button key={`${source.url}-${index}`} type="button" onClick={() => onOpenSource(source.url)}>
                 <span>{index + 1}</span>
                 <strong>{source.title}</strong>
-                <small>{source.domain}</small>
+                <small>
+                  <b>{source.authorityLabel || "权威来源"}</b>
+                  {source.domain}{source.publishedAt ? ` · ${relativeTime(source.publishedAt)}` : ""}
+                </small>
                 <LinkSimple size={13} />
               </button>
             ))}
@@ -654,18 +694,18 @@ export function BriefPage({
 
   useEffect(() => {
     const incoming = editionStories(edition);
-    if (!incoming.length) return;
-    setStoryArchive((current) => {
-      const merged = new Map(current.map((story) => [storyKey(story), story]));
-      incoming.forEach((story) => merged.set(storyKey(story), story));
-      return [...merged.values()].slice(-240);
-    });
+    setStoryArchive(incoming);
   }, [edition]);
 
   const rankedStories = useMemo(() => {
+    if (!edition?.preview && (Number(edition?.contentVersion) || 0) < 22 && !edition?.staleReason) return [];
     const muted = new Set(preferences?.mutedTopicIds || []);
     return storyArchive
-      .filter((story) => !muted.has(story.topicId) && matchesCategory(story, activeCategory))
+      .filter((story) => {
+        const timestamp = Date.parse(story.publishedAt || "");
+        const currentEnough = !Number.isFinite(timestamp) || Date.now() - timestamp <= 120 * 3_600_000;
+        return currentEnough && !muted.has(story.topicId) && matchesCategory(story, activeCategory);
+      })
       .sort((left, right) => {
         const rankDelta = storyRank(right, edition, preferences) - storyRank(left, edition, preferences);
         if (rankDelta) return rankDelta;
@@ -710,6 +750,13 @@ export function BriefPage({
         headline: story.headline,
         imageUrl: story.imageUrl,
         lead: story.summary,
+        keyPoints: [
+          `${story.summary} [1]`,
+          "多家独立来源正在从政策、产业和执行层面交叉确认事件影响。[1][2]",
+          "部分长期影响仍取决于后续公开数据与相关机构的正式披露。[2][3]",
+        ],
+        whyItMatters: "这项进展可能改变相关产业的成本、竞争格局和监管要求，因此值得持续关注。[1][2]",
+        whatToWatch: "接下来重点观察正式政策文本、核心经营数据以及主要参与方的后续行动。[2][3]",
         body: [
           story.summary,
           `根据上述权威来源的公开报道，${story.headline} 正引发产业界与相关机构的广泛讨论。多方信息显示，这项发展可能对技术演进、商业化落地与监管合规产生持续影响。[1]`,
@@ -718,7 +765,9 @@ export function BriefPage({
           `综合多方观察，未来半年内的市场表现与核心指标将成为检验这一趋势的关键。各方将持续关注后续的技术演进、战略并购及政策落地细节。[1][2]`,
         ],
         sources: story.sources,
+        sourceCount: story.sources.length,
         status: "success",
+        verificationLabel: `已交叉核验 ${story.sources.length} 个独立来源`,
       });
       return;
     }

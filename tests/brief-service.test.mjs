@@ -5,6 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import {
   allocateStorySlots,
+  briefEventImportance,
+  briefEventSimilarity,
   briefSourcePriority,
   buildSupplementalFeeds,
   createExtractiveSummary,
@@ -13,8 +15,11 @@ import {
   groundModelTopics,
   inferTopicsFromSignals,
   isAllowedBriefSource,
+  isHighValueBriefEvent,
   isLowQualityBriefResult,
   isLikelyArticleUrl,
+  parseEmmEventSignals,
+  parseOpenNewswireArticles,
   scoreBriefSignals,
   selectFrontStories,
   selectTopics,
@@ -32,6 +37,7 @@ function createRssFetchFixture({ chinese = true } = {}) {
   ];
   let feedCalls = 0;
   let articleCalls = 0;
+  const publishedAt = new Date(Date.now() - 6 * 60 * 60_000).toUTCString();
   const fetch = async (input) => {
     const url = String(input);
     if (/rss-article-/i.test(url)) {
@@ -45,11 +51,11 @@ function createRssFetchFixture({ chinese = true } = {}) {
     const items = Array.from({ length: 4 }, (_, index) => {
       const domain = domains[(feedCalls + index) % domains.length];
       const id = `${feedCalls}-${index}`;
-      const title = chinese ? `微软公司发布 RSS 产品更新 ${id}` : `Microsoft releases RSS product update ${id}`;
+      const title = chinese ? `微软公司发布人工智能芯片重大产品更新 ${id}` : `Microsoft releases artificial intelligence chip update ${id}`;
       const body = chinese
         ? `微软公司通过出版商 RSS 发布产品更新 ${id}，正文包含具体公司、发布时间和功能变化。`
         : `Microsoft published product update ${id} through its publisher RSS feed with release timing and feature details.`;
-      return `<item><title>${title}</title><link>https://www.${domain}/world/rss-article-${id}-2026-08-03/</link><description><![CDATA[${body}]]></description><pubDate>Mon, 03 Aug 2026 06:00:00 GMT</pubDate><enclosure type="image/jpeg" url="https://images.example/${id}.jpg" /></item>`;
+      return `<item><title>${title}</title><link>https://www.${domain}/world/rss-article-${id}-2026-08-03/</link><description><![CDATA[${body}]]></description><pubDate>${publishedAt}</pubDate><enclosure type="image/jpeg" url="https://images.example/${id}.jpg" /></item>`;
     }).join("");
     return new Response(`<?xml version="1.0"?><rss><channel>${items}</channel></rss>`, {
       headers: { "content-type": "application/rss+xml" },
@@ -66,14 +72,36 @@ test("edition boundaries follow local 09:00 and 18:00 schedule", () => {
   assert.equal(getEditionDescriptor(localTime(2026, 8, 2, 18, 0)).kind, "evening");
 });
 
-test("supplemental feeds include Horizon presets and only accept local HTTP or HTTPS RSSHub bases", () => {
-  const local = buildSupplementalFeeds({ BRIZO_RSSHUB_BASE_URL: "http://127.0.0.1:1200/" });
-  assert.ok(local.some((feed) => feed.sourceAdapter === "horizon-preset"));
-  assert.ok(local.some((feed) => feed.url === "http://127.0.0.1:1200/reuters/world" && feed.sourceAdapter === "rsshub"));
-  const remote = buildSupplementalFeeds({ BRIZO_RSSHUB_BASE_URL: "https://rsshub.example.com/base/" });
-  assert.ok(remote.some((feed) => feed.url === "https://rsshub.example.com/base/reuters/world"));
-  const rejected = buildSupplementalFeeds({ BRIZO_RSSHUB_BASE_URL: "http://rsshub.example.com" });
-  assert.equal(rejected.some((feed) => feed.sourceAdapter === "rsshub"), false);
+test("supplemental feeds contain only openly licensed Conversation editions", () => {
+  const feeds = buildSupplementalFeeds({ BRIZO_RSSHUB_BASE_URL: "https://rsshub.example.com" });
+  assert.ok(feeds.length >= 5);
+  assert.equal(feeds.every((feed) => feed.sourceAdapter === "the-conversation"), true);
+  assert.equal(feeds.some((feed) => /rsshub|bloomberg|reuters/i.test(feed.url)), false);
+  assert.ok(feeds.some((feed) => feed.url === "https://theconversation.com/africa/business/articles.atom"));
+});
+
+test("EMM parser preserves cross-country reach and merges duplicate event signals", () => {
+  const signals = parseEmmEventSignals({
+    topStories: [{ title: "US employment falls sharply", totalCount: 271 }],
+    trendingStories: [{ title: "US employment falls sharply", sourceCountries: { US: 10, GB: 4 }, speedOfGrowth: 0.05 }],
+    topSources: [{ title: "Boeing aircraft face crack inspections", numberOfSources: 13 }],
+  });
+  assert.equal(signals.length, 2);
+  assert.equal(signals[0].countryCount, 2);
+  assert.equal(signals[0].totalCount, 271);
+  assert.equal(signals[1].sourceCount, 13);
+});
+
+test("Open Newswire parser accepts explicit commercial licenses and rejects NC or uncertain attribution", () => {
+  const article = (license, id) => ({
+    feed: { license: { slug: license }, title: "Open publisher" },
+    link: `https://www.voanews.com/a/global-economy-report-${id}.html`,
+    title: `Global economy report ${id}`,
+  });
+  const results = parseOpenNewswireArticles({
+    results: [article("pd", 1), article("cc-by", 2), article("cc-by-nc-nd", 3), article("attr", 4)],
+  }, { id: "business-finance", region: "国际" });
+  assert.deepEqual(results.map((item) => item.license), ["pd", "cc-by"]);
 });
 
 test("signal scoring favors bookmarks and recent question intent", () => {
@@ -201,20 +229,21 @@ test("front page keeps domestic and international balance", () => {
   assert.ok(selected.filter((story) => story.region === "国际").length >= 2);
 });
 
-test("front page prioritizes Serper stories over RSS fallback", () => {
+test("front page prioritizes event importance before retrieval provider", () => {
   const stories = [
-    { id: "rss-cn", region: "国内", score: 1, sources: [{ sourceAdapter: "publisher-rss" }] },
-    { id: "bocha-cn", region: "国内", score: 0.7, sources: [{ sourceAdapter: "bocha-news" }] },
-    { id: "rss-world", region: "国际", score: 0.98, sources: [{ sourceAdapter: "publisher-rss" }] },
-    { id: "serper-world", region: "国际", score: 0.65, sources: [{ sourceAdapter: "serper-news" }] },
+    { id: "rss-cn", importance: 0.92, region: "国内", score: 1, sources: [{ sourceAdapter: "publisher-rss" }] },
+    { id: "bocha-cn", importance: 0.7, region: "国内", score: 0.7, sources: [{ sourceAdapter: "bocha-news" }] },
+    { id: "rss-world", importance: 0.9, region: "国际", score: 0.98, sources: [{ sourceAdapter: "publisher-rss" }] },
+    { id: "serper-world", importance: 0.68, region: "国际", score: 0.65, sources: [{ sourceAdapter: "serper-news" }] },
   ];
   const selected = selectFrontStories(stories, 4);
-  assert.deepEqual(selected.slice(0, 2).map((story) => story.id), ["serper-world", "bocha-cn"]);
+  assert.deepEqual(selected.slice(0, 2).map((story) => story.id), ["rss-cn", "rss-world"]);
 });
 
 test("Brief source priority keeps Serper primary and RSS as fallback", () => {
   assert.ok(briefSourcePriority("serper-news") > briefSourcePriority("bocha-news"));
-  assert.ok(briefSourcePriority("bocha-news") > briefSourcePriority("publisher-rss"));
+  assert.ok(briefSourcePriority("bocha-news") > briefSourcePriority("open-newswire"));
+  assert.ok(briefSourcePriority("open-newswire") > briefSourcePriority("the-conversation"));
 });
 
 test("brief sources allow authoritative newsrooms and reject wiki/zhihu hubs", () => {
@@ -236,6 +265,66 @@ test("Brief filters roundup and daily-digest headlines instead of treating them 
   assert.equal(isLowQualityBriefResult({ title: "导读" }), true);
   assert.equal(isLowQualityBriefResult({ title: "认识自我_标签_网易出品" }), true);
   assert.equal(isLowQualityBriefResult({ title: "三星与SK海力士测试中国芯片设备" }), false);
+  assert.equal(isLowQualityBriefResult({ title: "明星穿搭引发粉丝热议，神仙颜值冲上热搜" }), true);
+  assert.equal(isLowQualityBriefResult({ title: "国务院发布人工智能产业监管新规" }), false);
+});
+
+test("event similarity joins paraphrased coverage but separates numerically distinct events", () => {
+  const first = {
+    publishedAt: "2026-08-07T04:00:00.000Z",
+    snippet: "美联储在会议后宣布将基准利率下调25个基点。",
+    title: "美联储宣布降息25个基点",
+  };
+  const paraphrase = {
+    publishedAt: "2026-08-07T05:00:00.000Z",
+    snippet: "美国央行决定降低政策利率，幅度为25基点。",
+    title: "美国央行下调政策利率25基点",
+  };
+  const different = {
+    publishedAt: "2026-08-07T05:00:00.000Z",
+    snippet: "欧洲央行宣布将利率下调50个基点。",
+    title: "欧洲央行降息50个基点",
+  };
+  assert.ok(briefEventSimilarity(first, paraphrase) > briefEventSimilarity(first, different));
+});
+
+test("high-value gate rewards impact and independent confirmation", () => {
+  const now = Date.parse("2026-08-07T06:00:00.000Z");
+  const cluster = [
+    {
+      domain: "reuters.com",
+      publishedAt: "2026-08-07T05:00:00.000Z",
+      snippet: "The central bank announced a rate cut after its policy meeting.",
+      title: "Central bank announces major interest-rate cut",
+      url: "https://www.reuters.com/world/central-bank-rate-cut-2026-08-07/",
+    },
+    {
+      domain: "apnews.com",
+      publishedAt: "2026-08-07T05:10:00.000Z",
+      snippet: "The policy rate was lowered following the latest meeting.",
+      title: "Policy rate lowered after central bank meeting",
+      url: "https://apnews.com/article/central-bank-rate-cut-policy",
+    },
+  ];
+  const topic = { label: "商业与金融", query: "央行 利率 金融市场" };
+  assert.ok(briefEventImportance(cluster[0], { cluster, now, topic }) >= 0.5);
+  assert.equal(isHighValueBriefEvent(cluster, topic, now), true);
+  const staleCluster = cluster.map((item) => ({ ...item, publishedAt: "2026-07-01T05:00:00.000Z" }));
+  assert.equal(isHighValueBriefEvent(staleCluster, topic, now), false);
+  const celebrityCluster = cluster.map((item, index) => ({
+    ...item,
+    domain: index ? "bbc.com" : "reuters.com",
+    snippet: "A music producer known for several pop records has died.",
+    title: "Pop producer dies aged 69",
+  }));
+  assert.equal(isHighValueBriefEvent(celebrityCluster, { label: "艺术与文化", query: "文化 娱乐" }, now), false);
+  const productReviewCluster = cluster.map((item, index) => ({
+    ...item,
+    domain: index ? "theverge.com" : "cnet.com",
+    snippet: "Samsung's foldable phone is more of the same with a better camera and battery.",
+    title: "Samsung Z Fold review: more of the same",
+  }));
+  assert.equal(isHighValueBriefEvent(productReviewCluster, { label: "科技与技术", query: "科技" }, now), false);
 });
 
 test("signal persistence enforces limits, excludes private records, and stores no sensitive payload fields", async (t) => {
@@ -349,6 +438,11 @@ test("report synthesizes multiple sources and returns five related image stories
   assert.equal(report.status, "success");
   assert.equal(report.synthesisState, "model");
   assert.equal(report.sources.length, 2);
+  assert.equal(report.sourceCount, 2);
+  assert.match(report.verificationLabel, /交叉核验 2 个独立来源/);
+  assert.ok(report.keyPoints.length >= 1);
+  assert.match(report.whyItMatters, /\[1\]/);
+  assert.match(report.whatToWatch, /\[1\]/);
   assert.equal(report.relatedStories.length, 5);
   assert.match(report.lead, /\[1\]\[2\]/);
   assert.match(report.body.join(" "), /\[1\].*\[2\]/);
@@ -380,7 +474,7 @@ test("generation failure keeps the latest successful cached edition", async (t) 
   });
   const result = await service.getEdition({ at: localTime(2026, 8, 2, 12, 0) });
   assert.equal(result.id, cached.id);
-  assert.match(result.staleReason, /专业新闻检索与 RSS/);
+  assert.match(result.staleReason, /重大事件信号与开放新闻来源/);
 });
 
 test("Chinese RSS items publish without any AI call", async (t) => {
@@ -397,7 +491,7 @@ test("Chinese RSS items publish without any AI call", async (t) => {
     userDataPath,
   });
   const edition = await service.getEdition({ at: localTime(2026, 8, 3, 12, 0), force: true });
-  assert.equal(edition.status, "success");
+  assert.equal(edition.status, "success", edition.message || edition.staleReason || "open-feed edition failed");
   assert.equal(edition.pages.length, 4);
   assert.equal(modelCalls, 0);
   assert.ok(edition.generationMetrics.rssCandidateCount > 0);

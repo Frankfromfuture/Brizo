@@ -5,10 +5,128 @@ import {
   safeText,
 } from "../../shared/search-text.mjs";
 import { FRESHNESS_TO_BOCHA } from "./bocha-client.mjs";
-import { fuseResults, isEntityOfficialSource } from "./fusion.mjs";
+import { fuseResults, isEntityOfficialSource, sourceAuthorityTier } from "./fusion.mjs";
 import { FRESHNESS_TO_TBS } from "./serper-client.mjs";
 
 const DEPTH_SCRAPE_COUNT = { fast: 0, balanced: 3, deep: 7 };
+const TRUSTED_ENTITY_IMAGE_DOMAINS = new Set([
+  "wikimedia.org", "wikipedia.org", "britannica.com", "loc.gov",
+  "si.edu", "metmuseum.org", "nationalgeographic.com",
+]);
+const INVALID_ENTITY_IMAGE_HINTS = /(?:二维码|qr(?:[-_ ]?code)?|barcode|条码|captcha|验证码|screenshot|截图|placeholder|占位|not[-_ ]?found|404|error|错误|sprite|icon|图标|avatar|头像|logo|标志|banner|横幅|watermark|水印)/iu;
+
+function domainMatches(domain, candidate) {
+  const host = String(domain || "").toLowerCase().replace(/^www\./, "");
+  const expected = String(candidate || "").toLowerCase().replace(/^www\./, "");
+  return Boolean(host && expected && (host === expected || host.endsWith(`.${expected}`)));
+}
+
+function normalizedEntityText(value) {
+  return safeText(value, 300).toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+export function isEntityVisualEligible(entity) {
+  return Boolean(
+    safeText(entity?.name, 100)
+    && entity?.kind !== "none"
+    && Number(entity?.confidence) >= 0.72,
+  );
+}
+
+export function selectEntityImages(items, { entity, query, ranked = [] } = {}) {
+  if (!isEntityVisualEligible(entity)) return [];
+  const entityKey = normalizedEntityText(entity.name);
+  const officialDomains = ranked
+    .filter((source) => sourceAuthorityTier(source, query || entity.name) === 0)
+    .map((source) => source.domain)
+    .filter(Boolean);
+  const seen = new Set();
+  return (Array.isArray(items) ? items : [])
+    .map((item, index) => {
+      const imageUrl = safeText(item?.imageUrl || item?.thumbnailUrl, 4_000);
+      const url = safeText(item?.url, 4_000);
+      const domain = safeText(item?.domain, 240);
+      const titleKey = normalizedEntityText(`${item?.title || ""} ${item?.source || ""}`);
+      const imageHint = `${item?.title || ""} ${item?.source || ""} ${item?.url || ""} ${item?.imageUrl || ""}`;
+      const official = officialDomains.some((candidate) => domainMatches(domain, candidate));
+      const institutional = sourceAuthorityTier(item, entity.name) === 0;
+      const trustedReference = [...TRUSTED_ENTITY_IMAGE_DOMAINS].some((candidate) => domainMatches(domain, candidate));
+      const authoritativeMedia = sourceAuthorityTier(item, entity.name) === 1;
+      const namesEntity = Boolean(entityKey && titleKey.includes(entityKey));
+      const usableSize = !(Number(item?.width) > 0 && Number(item?.width) < 240)
+        && !(Number(item?.height) > 0 && Number(item?.height) < 140)
+        && (!(Number(item?.width) > 0 && Number(item?.height) > 0)
+          || (Number(item.width) / Number(item.height) <= 4 && Number(item.width) / Number(item.height) >= 0.25));
+      if (!/^https?:\/\//i.test(imageUrl) || !/^https?:\/\//i.test(url) || !usableSize) return null;
+      if (INVALID_ENTITY_IMAGE_HINTS.test(imageHint) || /\.(?:svg|ico)(?:[?#]|$)/iu.test(imageUrl)) return null;
+      if (!official && !(namesEntity && (institutional || trustedReference || authoritativeMedia))) return null;
+      const key = imageUrl.replace(/[?#].*$/, "");
+      if (seen.has(key)) return null;
+      seen.add(key);
+      return {
+        title: safeText(item?.title || entity.name, 180),
+        imageUrl,
+        thumbnailUrl: safeText(item?.thumbnailUrl, 4_000),
+        url,
+        domain,
+        source: safeText(item?.source || domain, 120),
+        authority: official ? "official" : institutional || trustedReference ? "reference" : "media",
+        score: (official ? 100 : institutional ? 82 : trustedReference ? 72 : 52)
+          + (namesEntity ? 16 : 0)
+          + (Number(item?.width) >= 800 ? 4 : 0)
+          - index * 0.01,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 3)
+    .map(({ score: _score, ...item }) => item);
+}
+
+async function imageUrlIsReadable(url, signal) {
+  if (!/^https?:\/\//i.test(url)) return false;
+  const controller = new AbortController();
+  const abort = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(() => controller.abort(), 4_000);
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "image/*", Range: "bytes=0-4095" },
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    if (!response.ok || !contentType.startsWith("image/")) return false;
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength < 256) return false;
+    const prefix = new TextDecoder().decode(bytes.slice(0, 64)).trim().toLowerCase();
+    return !prefix.startsWith("<html") && !prefix.startsWith("<!doctype");
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
+export async function validateEntityImages(items, { signal } = {}) {
+  const output = [];
+  for (const item of Array.isArray(items) ? items : []) {
+    const imageUrl = item?.imageUrl || item?.thumbnailUrl;
+    if (await imageUrlIsReadable(imageUrl, signal)) output.push(item);
+    if (output.length >= 3) break;
+  }
+  return output;
+}
+
+function entityImageQuery(entity, language) {
+  if (!isEntityVisualEligible(entity)) return "";
+  if (language === "zh") return `${entity.name} 官方 图片`;
+  if (language === "ja") return `${entity.name} 公式 画像`;
+  if (language === "ko") return `${entity.name} 공식 이미지`;
+  return `${entity.name} official image`;
+}
 
 function publicSource(result) {
   return {
@@ -181,6 +299,17 @@ export function createSearchService({
         }));
         emit({ type: "notice", level: "warning", message: "未配置专业检索服务，正在使用公开网页检索，覆盖与时效性会受限。" });
       }
+      const visualEntity = isEntityVisualEligible(plan.visualEntity) ? plan.visualEntity : null;
+      const entityImagesPromise = visualEntity && serperConfigured
+        ? serper.vertical("images", entityImageQuery(visualEntity, requestedLanguage), {
+          ...locale,
+          num: 12,
+          signal: retrievalSignal,
+        }).then((value) => value?.items || []).catch((error) => {
+          logger.warn?.("[search-entity-images]", error?.message || error);
+          return [];
+        })
+        : Promise.resolve([]);
       const localPromise = getLocalResults(payload, plan, retrievalSignal).catch(() => []);
       const settled = await Promise.allSettled(tasks);
       clearTimeout(retrievalTimeout);
@@ -218,6 +347,13 @@ export function createSearchService({
         limit: plan.depth === "deep" ? 12 : 10,
       }).map((result, index) => ({ ...result, displayRank: index }));
       if (!ranked.length) throw new Error("没有找到可用于回答的真实网页结果。");
+
+      const selectedEntityImages = selectEntityImages([
+        ...await entityImagesPromise,
+        ...(bochaResult?.images || []),
+      ], { entity: visualEntity, query, ranked });
+      const entityImages = await validateEntityImages(selectedEntityImages, { signal });
+      if (entityImages.length) emit({ type: "entity-images", entity: visualEntity, images: entityImages });
 
       const cards = [];
       if (serperConfigured && plan.vertical !== "web") {
@@ -325,6 +461,8 @@ export function createSearchService({
         message: cleanedAnswer,
         sources,
         relatedQuestions,
+        visualEntity,
+        entityImages,
         cards,
         depth: plan.depth,
         plan,

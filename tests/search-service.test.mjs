@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { makeResult } from "../electron/search/normalize.mjs";
-import { createSearchService, officialIntentQuery } from "../electron/search/search-service.mjs";
+import {
+  createSearchService,
+  isEntityVisualEligible,
+  officialIntentQuery,
+  selectEntityImages,
+  validateEntityImages,
+} from "../electron/search/search-service.mjs";
 
 const result = (provider, rank, url, title) => makeResult({
   url,
@@ -114,6 +120,78 @@ test("navigational community queries reserve an official-site retrieval query", 
   assert.equal(officialIntentQuery("v0 社区"), "v0 社区 官方网站");
   assert.equal(officialIntentQuery("OpenAI docs"), "OpenAI docs official website");
   assert.equal(officialIntentQuery("深圳市的产业结构是什么"), "");
+});
+
+test("entity images keep at most three verified official or authoritative sources", () => {
+  const entity = { name: "联影", kind: "organization", confidence: 0.95 };
+  assert.equal(isEntityVisualEligible(entity), true);
+  const ranked = [{
+    title: "联影医疗官方网站",
+    domain: "united-imaging.com",
+    url: "https://www.united-imaging.com/",
+  }];
+  const images = selectEntityImages([
+    {
+      title: "联影医疗设备",
+      imageUrl: "https://cdn.united-imaging.com/one.jpg",
+      url: "https://www.united-imaging.com/products/one",
+      domain: "united-imaging.com",
+      width: 1200,
+      height: 800,
+    },
+    {
+      title: "联影总部",
+      imageUrl: "https://cdn.united-imaging.com/two.jpg",
+      url: "https://www.united-imaging.com/about",
+      domain: "united-imaging.com",
+      width: 1000,
+      height: 700,
+    },
+    {
+      title: "联影公司资料图",
+      imageUrl: "https://upload.wikimedia.org/three.jpg",
+      url: "https://commons.wikimedia.org/wiki/File:United_Imaging.jpg",
+      domain: "wikimedia.org",
+      width: 900,
+      height: 600,
+    },
+    {
+      title: "联影二维码下载",
+      imageUrl: "https://cdn.united-imaging.com/qr-code.png",
+      url: "https://www.united-imaging.com/download",
+      domain: "united-imaging.com",
+      width: 1200,
+      height: 800,
+    },
+    {
+      title: "联影图片收藏",
+      imageUrl: "https://i.pinimg.com/unverified.jpg",
+      url: "https://pinterest.com/pin/example",
+      domain: "pinterest.com",
+      width: 900,
+      height: 600,
+    },
+  ], { entity, query: "联影", ranked });
+  assert.equal(images.length, 3);
+  assert.ok(images.every((item) => item.domain !== "pinterest.com"));
+  assert.equal(images[0].authority, "official");
+});
+
+test("entity image URL validation rejects HTML error pages and non-image responses", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => new Response(
+    String(url).includes("bad") ? "<html>404</html>" : new Uint8Array(512),
+    { headers: { "content-type": String(url).includes("bad") ? "text/html" : "image/jpeg" } },
+  );
+  try {
+    const valid = await validateEntityImages([
+      { imageUrl: "https://images.example/bad", url: "https://example.com/bad" },
+      { imageUrl: "https://images.example/good", url: "https://example.com/good" },
+    ]);
+    assert.deepEqual(valid.map((item) => item.imageUrl), ["https://images.example/good"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("manual depth overrides the planner and controls scraping", async () => {

@@ -197,6 +197,17 @@ export const ORIGINAL_BOOKMARK_ICON_IDS = [
 ];
 
 const iconById = new Map(BOOKMARK_ICON_LIBRARY.map((definition) => [definition.id, definition]));
+const localBookmarkIconAssets = import.meta.glob("./bookmark-icons/*.svg", {
+  eager: true,
+  import: "default",
+  query: "?url&no-inline",
+});
+
+function localBookmarkIconUrl(id, state) {
+  return localBookmarkIconAssets[`./bookmark-icons/${id}-${state}.svg`]
+    || localBookmarkIconAssets[`./bookmark-icons/folder-${state}.svg`]
+    || "";
+}
 
 export function getBookmarkIconDefinition(id) {
   return iconById.get(id) || iconById.get("folder");
@@ -218,15 +229,21 @@ export function findBookmarkIcons(query) {
 
 export function BookmarkSemanticIcon({ active = false, id, size = 18 }) {
   const definition = getBookmarkIconDefinition(id);
-  const Icon = definition.Icon;
   return (
     <span
       className={`bookmark-semantic-icon ${active ? "is-active" : ""}`}
       aria-hidden="true"
       data-icon-id={definition.id}
+      style={{ height: size, width: size }}
     >
-      <Icon className="bookmark-icon-outline" size={size} weight="regular" />
-      <Icon className="bookmark-icon-fill" size={size} weight="fill" />
+      <span
+        className="bookmark-icon-outline"
+        style={{ "--bookmark-icon-url": `url("${localBookmarkIconUrl(definition.id, "default")}")` }}
+      />
+      <span
+        className="bookmark-icon-fill"
+        style={{ "--bookmark-icon-url": `url("${localBookmarkIconUrl(definition.id, "active")}")` }}
+      />
     </span>
   );
 }

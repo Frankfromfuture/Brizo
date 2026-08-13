@@ -2,6 +2,7 @@ import { load } from "cheerio";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  canonicalizeUrl,
   clamp,
   domainFor,
   mapWithConcurrency,
@@ -21,8 +22,12 @@ const METADATA_FETCH_TIMEOUT_MS = 2_800;
 const METADATA_CACHE_TTL_MS = 30 * 60_000;
 const TOPIC_PROFILE_TTL_MS = 7 * DAY_MS;
 const TOPIC_PROFILE_VERSION = 5;
-const EDITION_CONTENT_VERSION = 20;
-const REPORT_CONTENT_VERSION = 4;
+const EDITION_CONTENT_VERSION = 24;
+const REPORT_CONTENT_VERSION = 5;
+const EMM_TOP_STORIES_URL = "https://media-monitor.europa.eu/api/stories/top-stories";
+const OPEN_NEWSWIRE_ARTICLES_URL = "https://feed.opennewswire.org/api/articles";
+const EVENT_SIGNAL_CACHE_TTL_MS = 10 * 60_000;
+const OPEN_NEWSWIRE_COMMERCIAL_LICENSES = new Set(["pd", "cc-by", "cc-by-sa"]);
 const SIGNAL_KIND_SHARES = { bookmark: 0.45, search: 0.35, history: 0.2 };
 const DEFAULT_TOPICS = [
   { id: "technology", label: "AI 与科技产业", weight: 0.34 },
@@ -33,12 +38,12 @@ const DEFAULT_TOPICS = [
 ];
 
 const EDITORIAL_SECTIONS = [
-  { id: "technology", label: "科技与技术", page: 2, query: "今天 人工智能 芯片 科技产业 重大进展 权威媒体", serperGl: "cn", serperHl: "zh-cn", region: "国际", slots: 3, weight: 0.17 },
-  { id: "business-finance", label: "商业与金融", page: 2, query: "今天 财经 公司 金融市场 重要新闻 界面 财新 第一财经", serperGl: "cn", serperHl: "zh-cn", region: "国际", slots: 3, weight: 0.16 },
-  { id: "international", label: "国际重要新闻", page: 3, query: "今天 国际重大新闻 全球热点", serperQuery: "top world news today Reuters AP BBC", serperGl: "us", serperHl: "en", region: "国际", slots: 4, weight: 0.24 },
-  { id: "domestic", label: "国内重要新闻", page: 3, query: "今天 中国 重大新闻 政策 社会 新华社 人民日报 中新网", serperGl: "cn", serperHl: "zh-cn", region: "国内", slots: 2, weight: 0.14 },
-  { id: "arts-culture", label: "艺术与文化", page: 4, query: "今天 艺术 文化 设计 文学 电影 重要新闻 澎湃 界面", serperGl: "cn", serperHl: "zh-cn", region: "国际", slots: 3, weight: 0.15 },
-  { id: "sports-entertainment", label: "体育与娱乐", page: 4, query: "今天 体育 赛事 娱乐 电影 重要新闻 中新网", serperGl: "cn", serperHl: "zh-cn", region: "国际", slots: 3, weight: 0.14 },
+  { id: "technology", label: "科技与技术", page: 2, query: "global technology science AI semiconductor major event", openNewswireQuery: "technology", serperGl: "us", serperHl: "en", region: "国际", slots: 3, weight: 0.17 },
+  { id: "business-finance", label: "商业与金融", page: 2, query: "global business economy companies markets major event", openNewswireQuery: "economy", serperGl: "us", serperHl: "en", region: "国际", slots: 3, weight: 0.16 },
+  { id: "international", label: "国际重要新闻", page: 3, query: "今天 国际重大新闻 全球热点", openNewswireQuery: "international", serperQuery: "top world news today Reuters AP BBC", serperGl: "us", serperHl: "en", region: "国际", slots: 4, weight: 0.24 },
+  { id: "domestic", label: "国内重要新闻", page: 3, query: "今天 中国 重大新闻 政策 社会 新华社 人民日报 中新网", openNewswireQuery: "China", serperGl: "cn", serperHl: "zh-cn", region: "国内", slots: 2, weight: 0.14 },
+  { id: "arts-culture", label: "艺术与文化", page: 4, query: "今天 艺术 文化 设计 文学 电影 重要新闻 澎湃 界面", openNewswireQuery: "culture", serperGl: "cn", serperHl: "zh-cn", region: "国际", slots: 3, weight: 0.15 },
+  { id: "sports-entertainment", label: "体育与娱乐", page: 4, query: "今天 体育 赛事 娱乐 电影 重要新闻 中新网", openNewswireQuery: "sport", serperGl: "cn", serperHl: "zh-cn", region: "国际", slots: 3, weight: 0.14 },
 ];
 
 // Hard allowlist: Brief stories and citations may only come from these news domains.
@@ -67,6 +72,7 @@ const SOURCE_AUTHORITY = new Map([
   ["gov.cn", 1],
   // Tech / science
   ["techcrunch.com", 0.9], ["theverge.com", 0.88], ["wired.com", 0.88],
+  ["sifted.eu", 0.86], ["restofworld.org", 0.88], ["fortune.com", 0.86],
   ["arstechnica.com", 0.88], ["technologyreview.com", 0.92],
   ["cnet.com", 0.82], ["engadget.com", 0.82], ["zdnet.com", 0.8],
   ["nature.com", 0.96], ["science.org", 0.95], ["scientificamerican.com", 0.9],
@@ -81,6 +87,18 @@ const SOURCE_AUTHORITY = new Map([
   ["variety.com", 0.86], ["hollywoodreporter.com", 0.86], ["deadline.com", 0.84],
   ["rollingstone.com", 0.82], ["billboard.com", 0.82],
   ["artnews.com", 0.84], ["artforum.com", 0.82], ["theartnewspaper.com", 0.84],
+  // Openly licensed reporting and analysis. These are discovery/context sources;
+  // a major Brief event still needs EMM reach or independent authoritative confirmation.
+  ["theconversation.com", 0.84], ["voanews.com", 0.86], ["meduza.io", 0.82],
+  ["agenciabrasil.ebc.com.br", 0.84], ["propublica.org", 0.9],
+  ["insideclimatenews.org", 0.84], ["africaisacountry.com", 0.8],
+]);
+
+const MAJOR_BUSINESS_CONFIRMATION_DOMAINS = new Set([
+  "reuters.com", "apnews.com", "afp.com", "bbc.com", "bbc.co.uk",
+  "bloomberg.com", "ft.com", "wsj.com", "cnbc.com", "economist.com",
+  "nytimes.com", "nikkei.com", "asia.nikkei.com", "channelnewsasia.com",
+  "techcrunch.com", "sifted.eu", "restofworld.org", "fortune.com",
 ]);
 
 const BLOCKED_SOURCE_PATTERNS = [
@@ -106,6 +124,14 @@ const BLOCKED_SOURCE_PATTERNS = [
 
 const LOW_QUALITY_BRIEF_HEADLINE = /(?:今日|每日|早间|午间|晚间|盘前|盘后).{0,14}(?:早报|晚报|简报|快讯|热点|要闻|新闻)|(?:早报|晚报|简报|一览|汇总|盘点).{0,18}(?:\d+[条个]|美股|天下事|热点)|\d+[条个].{0,10}(?:国际热点|新闻简报|每日热点)|(?:^|[_|｜])标签(?:[_|｜]|$)|网易出品$/i;
 
+// Brief is intentionally an importance-filtered event feed, not a firehose. These
+// patterns only demote obvious lifestyle filler, promotional copy and curiosity
+// bait; emergencies, public safety and material local policy remain eligible.
+const LOW_VALUE_NEWS_PATTERN = /(?:网红|明星穿搭|恋情曝光|粉丝热议|网友笑称|看哭了|太好笑|萌宠|星座运势|生活妙招|必看攻略|打卡圣地|探店|优惠券|促销|限时秒杀|新品种草|又美又飒|颜值爆表|神仙颜值|剧透|花絮|票房破\d|综艺路透|手游礼包|抽奖|奇闻趣事|冷知识|你不知道的|盘点\d|top\s*\d|震惊[！!]?|竟然|万万没想到)/i;
+const HIGH_IMPACT_NEWS_PATTERN = /(?:国务院|中央政府|全国人大|最高人民法院|最高人民检察院|央行|人民银行|财政部|证监会|国家统计局|联合国|世界卫生组织|欧盟委员会|白宫|国会|美联储|欧洲央行|政府|监管|法院|议会|总统|总理|首相|政策|法案|法规|裁决|处罚|罚款|反垄断|儿童安全|数据保护|制裁|关税|利率|通胀|就业|失业|GDP|经济增长|财政|货币政策|并购|收购|破产|上市|退市|裁员|召回|财报|芯片|人工智能|半导体|能源|气候|地震|洪水|台风|火灾|事故|疫情|战争|停火|选举|外交|贸易|供应链|数据泄露|网络攻击|科研突破|临床试验|航天|卫星|世界杯|奥运会|Reuters|Associated Press|Federal Reserve|central bank|rate cut|rate hike|White House|Congress|European Union|\bWHO\b|\bUN\b|court ruling|regulator|regulation|fine|penalty|antitrust|child safety|data protection|jobs|employment|unemployment|election|war|ceasefire|sanction|tariff|inflation|interest rate|merger|acquisition|bankruptcy|layoff|recall|earnings|semiconductor|artificial intelligence|cyberattack|earthquake|wildfire|flood|climate|clinical trial|World Cup|Olympic)/i;
+const EVENT_ACTION_PATTERN = /(?:发布|宣布|通过|批准|否决|启动|暂停|停止|签署|达成|上调|下调|增长|下降|突破|发现|调查|起诉|判决|逮捕|撤离|袭击|爆炸|关闭|开放|收购|合并|裁员|召回|警告|确认|回应|公布|实施|生效|launch|announce|approve|reject|sign|agree|raise|cut|grow|fall|discover|investigate|charge|rule|arrest|attack|explode|close|open|acquire|merge|lay off|recall|warn|confirm|release|report)/i;
+const CLUSTER_NOISE_TOKENS = new Set(["今天", "今日", "最新", "消息", "新闻", "报道", "记者", "表示", "the", "and", "for", "with", "from", "news", "says", "said"]);
+
 const SECTION_HUB_PATHS = new Set([
   "news", "world", "sports", "tech", "technology", "business", "finance",
   "entertainment", "culture", "science", "ai", "opinion", "politics", "china",
@@ -123,91 +149,25 @@ const LOCAL_TOPIC_TAXONOMY = [
   { id: "finance", label: "金融与投资", query: "金融 投资 资本市场 最新", patterns: /投资|金融|股票|基金|估值|资本|利率|债券|并购|融资/i },
 ];
 
-const AUTHORITY_FEEDS = [
-  { url: "https://feeds.bbci.co.uk/news/technology/rss.xml", sections: ["technology"], region: "国际" },
-  { url: "https://feeds.bbci.co.uk/news/business/rss.xml", sections: ["business-finance"], region: "国际" },
-  { url: "https://feeds.bbci.co.uk/news/world/rss.xml", sections: ["international"], region: "国际" },
-  { url: "https://feeds.bbci.co.uk/news/world/asia/rss.xml", sections: ["international", "domestic"], region: "国际" },
-  { url: "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml", sections: ["technology"], region: "国际" },
-  { url: "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml", sections: ["arts-culture", "sports-entertainment"], region: "国际" },
-  { url: "https://feeds.bbci.co.uk/sport/rss.xml", sections: ["sports-entertainment"], region: "国际" },
-  { url: "https://www.theguardian.com/world/rss", sections: ["international"], region: "国际" },
-  { url: "https://www.theguardian.com/technology/rss", sections: ["technology"], region: "国际" },
-  { url: "https://www.theguardian.com/business/rss", sections: ["business-finance"], region: "国际" },
-  { url: "https://www.theguardian.com/culture/rss", sections: ["arts-culture"], region: "国际" },
-  { url: "https://www.theguardian.com/sport/rss", sections: ["sports-entertainment"], region: "国际" },
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml", sections: ["technology"], region: "国际" },
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml", sections: ["business-finance"], region: "国际" },
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", sections: ["international"], region: "国际" },
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/Arts.xml", sections: ["arts-culture"], region: "国际" },
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/Sports.xml", sections: ["sports-entertainment"], region: "国际" },
-  { url: "https://www.aljazeera.com/xml/rss/all.xml", sections: ["international"], region: "国际" },
-  { url: "https://www.npr.org/rss/rss.php?id=1001", sections: ["international"], region: "国际" },
-  { url: "https://www.chinanews.com.cn/rss/scroll-news.xml", sections: ["domestic", "international", "business-finance"], region: "国内" },
-  { url: "http://www.people.com.cn/rss/politics.xml", sections: ["domestic"], region: "国内" },
-  { url: "http://www.people.com.cn/rss/society.xml", sections: ["domestic"], region: "国内" },
-  { url: "http://www.people.com.cn/rss/finance.xml", sections: ["business-finance", "domestic"], region: "国内" },
-  { url: "https://www.espn.com/espn/rss/news", sections: ["sports-entertainment"], region: "国际" },
-];
-
-// Curated direct RSS sources published in Horizon's MIT-licensed example and preset configs.
-// Brizo consumes the original feeds directly and runs them through its own allowlist and editorial pipeline.
-const HORIZON_CURATED_FEEDS = [
-  { url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664", sections: ["business-finance"], region: "国际", sourceAdapter: "horizon-preset" },
-  { url: "https://developer.nvidia.com/blog/tag/cuda/feed/", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
-  { url: "https://lwn.net/headlines/rss", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
-  { url: "https://krebsonsecurity.com/feed/", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
-  { url: "https://www.nature.com/nature.rss", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
-  { url: "https://api.quantamagazine.org/feed/", sections: ["technology", "arts-culture"], region: "国际", sourceAdapter: "horizon-preset" },
-  { url: "https://feeds.feedburner.com/TechCrunch/", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
-  { url: "https://www.theverge.com/rss/index.xml", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", sections: ["international"], region: "国际", sourceAdapter: "horizon-preset" },
-  { url: "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml", sections: ["technology"], region: "国际", sourceAdapter: "horizon-preset" },
-];
-
-const RSSHUB_ROUTES = [
-  { path: "/reuters/world", sections: ["international"], region: "国际" },
-  { path: "/reuters/world/china", sections: ["international", "domestic"], region: "国际" },
-  { path: "/reuters/business", sections: ["business-finance"], region: "国际" },
-  { path: "/reuters/technology", sections: ["technology"], region: "国际" },
-  { path: "/bloomberg/business", sections: ["business-finance"], region: "国际" },
-  { path: "/thepaper/featured", sections: ["domestic", "international"], region: "国内" },
-  { path: "/36kr/newsflashes", sections: ["technology", "business-finance"], region: "国内" },
-  { path: "/caixin/latest", sections: ["business-finance", "domestic"], region: "国内" },
-  { path: "/jiemian/lists/65", sections: ["technology"], region: "国内" },
-  { path: "/jiemian/lists/800", sections: ["business-finance"], region: "国内" },
-  { path: "/huxiu/moment", sections: ["technology", "business-finance"], region: "国内" },
-  { path: "/wallstreetcn/news/global", sections: ["business-finance"], region: "国内" },
-  { path: "/cls/telegraph", sections: ["business-finance"], region: "国内" },
-  { path: "/zaobao/realtime/china", sections: ["domestic", "international"], region: "国际" },
-  { path: "/zaobao/realtime/world", sections: ["international"], region: "国际" },
-  { path: "/bbc/chinese", sections: ["international"], region: "国际" },
-  { path: "/ithome/ranking/24h", sections: ["technology"], region: "国内" },
-  { path: "/jiqizhixin", sections: ["technology"], region: "国内" },
+const OPEN_LICENSE_FEEDS = [
+  { url: "https://theconversation.com/us/business/articles.atom", sections: ["business-finance"], region: "国际", sourceAdapter: "the-conversation" },
+  { url: "https://theconversation.com/uk/business/articles.atom", sections: ["business-finance"], region: "国际", sourceAdapter: "the-conversation" },
+  { url: "https://theconversation.com/au/business/articles.atom", sections: ["business-finance"], region: "国际", sourceAdapter: "the-conversation" },
+  { url: "https://theconversation.com/africa/business/articles.atom", sections: ["business-finance", "international"], region: "国际", sourceAdapter: "the-conversation" },
+  { url: "https://theconversation.com/ca/business/articles.atom", sections: ["business-finance"], region: "国际", sourceAdapter: "the-conversation" },
+  { url: "https://theconversation.com/us/technology/articles.atom", sections: ["technology"], region: "国际", sourceAdapter: "the-conversation" },
+  { url: "https://theconversation.com/us/science/articles.atom", sections: ["technology"], region: "国际", sourceAdapter: "the-conversation" },
+  { url: "https://theconversation.com/us/arts/articles.atom", sections: ["arts-culture"], region: "国际", sourceAdapter: "the-conversation" },
 ];
 
 export function buildSupplementalFeeds(env = process.env) {
-  const configured = safeText(env?.BRIZO_RSSHUB_BASE_URL, 500);
-  const baseCandidate = configured || "http://127.0.0.1:1200";
-  let rssHubBaseUrl = "";
-  try {
-    const parsed = new URL(baseCandidate);
-    if (parsed.protocol === "https:" || (parsed.protocol === "http:" && ["127.0.0.1", "localhost", "::1"].includes(parsed.hostname))) {
-      rssHubBaseUrl = parsed.href.replace(/\/$/, "");
-    }
-  } catch {
-    rssHubBaseUrl = "";
-  }
-  const rssHubFeeds = rssHubBaseUrl ? RSSHUB_ROUTES.map((route) => ({
-    ...route,
-    sourceAdapter: "rsshub",
-    url: `${rssHubBaseUrl}${route.path}`,
-  })) : [];
-  return [...HORIZON_CURATED_FEEDS, ...rssHubFeeds];
+  void env;
+  return [...OPEN_LICENSE_FEEDS];
 }
 
 const FEED_CACHE_TTL_MS = 20 * 60_000;
 const feedCache = new Map();
+const eventSignalCache = new Map();
 const PERSONAL_TOPIC_FEED_SECTIONS = {
   technology: ["technology"],
   science: ["technology"],
@@ -540,11 +500,118 @@ export function isAllowedBriefSource(rawUrl, domain = "") {
 
 export function isLowQualityBriefResult(result) {
   const title = safeText(result?.title || result?.name, 400);
-  return title.replace(/[\s\p{P}\p{S}]/gu, "").length < 8 || LOW_QUALITY_BRIEF_HEADLINE.test(title);
+  const text = `${title} ${safeText(result?.snippet || result?.summary, 1_000)}`;
+  return title.replace(/[\s\p{P}\p{S}]/gu, "").length < 8
+    || LOW_QUALITY_BRIEF_HEADLINE.test(title)
+    || (LOW_VALUE_NEWS_PATTERN.test(text) && !HIGH_IMPACT_NEWS_PATTERN.test(text));
 }
 
 function sourceAuthority(domain) {
   return matchedAuthority(domain) || 0;
+}
+
+function isMajorBusinessConfirmationDomain(domain) {
+  const host = String(domain || "").toLowerCase();
+  return [...MAJOR_BUSINESS_CONFIRMATION_DOMAINS].some((known) => matchesDomainEntry(host, known));
+}
+
+function countryBreadth(value) {
+  if (Array.isArray(value)) return value.length;
+  if (value && typeof value === "object") return Object.keys(value).length;
+  return Math.max(0, Number(value) || 0);
+}
+
+export function parseEmmEventSignals(payload) {
+  const candidates = [
+    ...(Array.isArray(payload?.topStories) ? payload.topStories.map((item) => ({ ...item, signalType: "top" })) : []),
+    ...(Array.isArray(payload?.trendingStories) ? payload.trendingStories.map((item) => ({ ...item, signalType: "trending" })) : []),
+    ...(Array.isArray(payload?.topSources) ? payload.topSources.map((item) => ({ ...item, signalType: "sources" })) : []),
+  ];
+  const signals = [];
+  for (const item of candidates) {
+    const title = safeText(item?.title, 400);
+    if (!title || isLowQualityBriefResult({ title })) continue;
+    const signal = {
+      id: `emm-${slugify(title, fastFingerprint(title))}`,
+      countryCount: countryBreadth(item?.sourceCountries),
+      growth: Math.max(0, Number(item?.speedOfGrowth) || 0),
+      liveArticles: Math.max(0, Number(item?.liveArticles) || 0),
+      signalType: item.signalType,
+      sourceCount: Math.max(0, Number(item?.numberOfSources) || 0),
+      title,
+      totalCount: Math.max(0, Number(item?.totalCount) || 0),
+    };
+    const duplicate = signals.find((existing) => tokenSimilarity(existing.title, title) >= 0.66);
+    if (!duplicate) signals.push(signal);
+    else {
+      duplicate.countryCount = Math.max(duplicate.countryCount, signal.countryCount);
+      duplicate.growth = Math.max(duplicate.growth, signal.growth);
+      duplicate.liveArticles = Math.max(duplicate.liveArticles, signal.liveArticles);
+      duplicate.sourceCount = Math.max(duplicate.sourceCount, signal.sourceCount);
+      duplicate.totalCount = Math.max(duplicate.totalCount, signal.totalCount);
+      if (signal.signalType === "top") duplicate.signalType = "top";
+    }
+  }
+  return signals.slice(0, 15);
+}
+
+function emmSignalStrength(signal) {
+  if (!signal) return 0;
+  const breadth = clamp((Number(signal.countryCount) || 0) / 20, 0, 1);
+  const sources = clamp((Number(signal.sourceCount) || 0) / 20, 0, 1);
+  const volume = clamp((Number(signal.totalCount) || 0) / 500, 0, 1);
+  const growth = clamp((Number(signal.growth) || 0) / 0.08, 0, 1);
+  const placement = signal.signalType === "top" ? 1 : signal.signalType === "trending" ? 0.82 : 0.68;
+  return clamp(placement * 0.35 + breadth * 0.25 + sources * 0.18 + volume * 0.14 + growth * 0.08, 0, 1);
+}
+
+function isStrongEmmSignal(signal) {
+  return Boolean(signal) && (
+    signal.countryCount >= 8
+    || signal.sourceCount >= 10
+    || signal.totalCount >= 200
+    || (signal.signalType === "top" && signal.totalCount >= 80)
+  );
+}
+
+function emmSignalsForTopic(signals, topic) {
+  const id = topic?.id || "";
+  const pattern = id === "business-finance"
+    ? /business|company|companies|econom|market|trade|tariff|jobs?|employment|unemployment|bank|finance|merger|acquisition|industry|export|import|boeing|meta|tesla|apple|microsoft|amazon|google|nvidia/i
+    : id === "technology"
+      ? /technology|science|research|AI|artificial intelligence|chip|semiconductor|space|software|cyber|data|robot/i
+      : id === "arts-culture"
+        ? /culture|art|film|music|museum|book|literature|heritage/i
+        : id === "sports-entertainment"
+          ? /sport|football|soccer|basketball|olympic|world cup|film|music|entertainment/i
+          : id === "domestic"
+            ? /中国|China|Chinese|Beijing|Shanghai|中国香港|Hong Kong/i
+            : null;
+  return signals.map((signal) => ({
+    ...signal,
+    topicMatch: Math.max(
+      pattern?.test(signal.title) ? 0.72 : 0,
+      tokenSimilarity(`${topic?.label || ""} ${topic?.query || ""}`, signal.title),
+    ),
+  })).filter((signal) => id === "international" || signal.topicMatch >= 0.12)
+    .sort((left, right) => (emmSignalStrength(right) + right.topicMatch * 0.3)
+      - (emmSignalStrength(left) + left.topicMatch * 0.3));
+}
+
+function attachEmmSignal(result, signals) {
+  let best = null;
+  let bestMatch = 0;
+  for (const signal of signals) {
+    const match = tokenSimilarity(
+      normalizeEventText(`${result?.title || ""} ${safeText(result?.snippet, 260)}`),
+      normalizeEventText(signal.title),
+    );
+    if (match > bestMatch) {
+      best = signal;
+      bestMatch = match;
+    }
+  }
+  return bestMatch >= 0.16 ? { ...result, emmMatch: bestMatch, emmSignal: best } : result;
 }
 
 function publishedRecency(publishedAt, now) {
@@ -554,30 +621,153 @@ function publishedRecency(publishedAt, now) {
   return clamp(1 - hours / 72, 0.08, 1);
 }
 
-function resultScore(result, topic, resultIndex, groupSize, now) {
+function publishedAgeHours(publishedAt, now = Date.now()) {
+  const timestamp = Date.parse(publishedAt || "");
+  if (!Number.isFinite(timestamp)) return null;
+  return Math.max(0, now - timestamp) / 3_600_000;
+}
+
+function distinctSourceCount(results = []) {
+  return new Set(results.map((result) => result?.domain || domainFor(result?.url)).filter(Boolean)).size;
+}
+
+function normalizeEventText(value) {
+  return safeText(value, 2_000)
+    .replace(/(?:美联储|Federal Reserve|\bFed\b)/gi, "美国央行")
+    .replace(/(?:欧洲央行|European Central Bank|\bECB\b)/gi, "欧洲央行")
+    .replace(/(?:世卫组织|World Health Organization|\bWHO\b)/gi, "世界卫生组织")
+    .replace(/(?:联合国|United Nations|\bUN\b)/gi, "联合国")
+    .replace(/(?:人工智能|Artificial Intelligence|生成式AI|generative AI)/gi, "AI")
+    .replace(/(?:基点|basis points?|\bbps\b)/gi, "基点");
+}
+
+function eventKeyTokens(result) {
+  return tokenize(normalizeEventText(`${result?.title || ""} ${safeText(result?.snippet, 260)}`))
+    .filter((token) => !CLUSTER_NOISE_TOKENS.has(token));
+}
+
+function eventNumbers(result) {
+  return new Set(`${result?.title || ""} ${result?.snippet || ""}`.match(/\d+(?:\.\d+)?%?|\b[A-Z]{2,8}\b/g) || []);
+}
+
+function eventTimeDistanceHours(left, right) {
+  const a = Date.parse(left?.publishedAt || "");
+  const b = Date.parse(right?.publishedAt || "");
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return 0;
+  return Math.abs(a - b) / 3_600_000;
+}
+
+export function briefEventSimilarity(left, right) {
+  if (!left || !right) return 0;
+  if (eventTimeDistanceHours(left, right) > 96) return 0;
+  const titleScore = tokenSimilarity(normalizeEventText(left.title), normalizeEventText(right.title));
+  const contextScore = tokenSimilarity(
+    normalizeEventText(`${left.title} ${safeText(left.snippet, 260)}`),
+    normalizeEventText(`${right.title} ${safeText(right.snippet, 260)}`),
+  );
+  const leftTokens = new Set(eventKeyTokens(left));
+  const rightTokens = new Set(eventKeyTokens(right));
+  let shared = 0;
+  for (const token of leftTokens) if (rightTokens.has(token)) shared += 1;
+  const entitySupport = clamp(shared / 4, 0, 1);
+  const leftNumbers = eventNumbers(left);
+  const rightNumbers = eventNumbers(right);
+  const numberConflict = leftNumbers.size && rightNumbers.size
+    && ![...leftNumbers].some((number) => rightNumbers.has(number));
+  const score = titleScore * 0.5 + contextScore * 0.3 + entitySupport * 0.2;
+  return clamp(score - (numberConflict ? 0.12 : 0), 0, 1);
+}
+
+export function clusterBriefEvents(results) {
+  const ordered = [...results].sort((left, right) =>
+    Date.parse(right.publishedAt || 0) - Date.parse(left.publishedAt || 0)
+      || sourceAuthority(right.domain) - sourceAuthority(left.domain)
+  );
+  const clusters = [];
+  for (const result of ordered) {
+    let bestCluster = null;
+    let bestScore = 0;
+    for (const cluster of clusters) {
+      const score = Math.max(...cluster.slice(0, 4).map((candidate) => briefEventSimilarity(candidate, result)));
+      if (score > bestScore) {
+        bestCluster = cluster;
+        bestScore = score;
+      }
+    }
+    if (bestCluster && bestScore >= 0.46) bestCluster.push(result);
+    else clusters.push([result]);
+  }
+  return clusters.map((cluster) => cluster.sort((left, right) =>
+    sourceAuthority(right.domain) - sourceAuthority(left.domain)
+      || publishedRecency(right.publishedAt, Date.now()) - publishedRecency(left.publishedAt, Date.now())
+  ));
+}
+
+export function briefEventImportance(result, { cluster = [result], now = Date.now(), topic } = {}) {
+  const text = `${result?.title || ""} ${result?.snippet || ""} ${result?.bodyExcerpt || ""}`;
+  const authority = sourceAuthority(result?.domain || domainFor(result?.url));
+  const recency = publishedRecency(result?.publishedAt, now);
+  const sourceCount = distinctSourceCount(cluster);
+  const crossSource = clamp((sourceCount - 1) / 3, 0, 1);
+  const impact = HIGH_IMPACT_NEWS_PATTERN.test(text) ? 1 : EVENT_ACTION_PATTERN.test(text) ? 0.58 : 0.18;
+  const relevance = topic ? Math.max(0.1, tokenSimilarity(topic.query || topic.label, text)) : 0.5;
+  const detail = clamp((safeText(result?.snippet || result?.bodyExcerpt, 1_000).length - 45) / 260, 0, 1);
+  const eventSignal = emmSignalStrength(result?.emmSignal);
+  const lowValuePenalty = LOW_VALUE_NEWS_PATTERN.test(text) && !HIGH_IMPACT_NEWS_PATTERN.test(text) ? 0.52 : 0;
+  return clamp(
+    authority * 0.22 + recency * 0.14 + crossSource * 0.18 + impact * 0.2
+      + eventSignal * 0.14 + relevance * 0.07 + detail * 0.05 - lowValuePenalty,
+    0,
+    1,
+  );
+}
+
+export function isHighValueBriefEvent(cluster, topic, now = Date.now()) {
+  if (!Array.isArray(cluster) || !cluster.length) return false;
+  const primary = cluster[0];
+  const importance = briefEventImportance(primary, { cluster, now, topic });
+  const ageHours = publishedAgeHours(primary.publishedAt, now);
+  if (ageHours != null && ageHours > 120) return false;
+  const hasMaterialImpact = HIGH_IMPACT_NEWS_PATTERN.test(
+    `${primary.title || ""} ${primary.snippet || ""} ${primary.bodyExcerpt || ""}`,
+  );
+  if (!hasMaterialImpact) return false;
+  const independentlyReported = distinctSourceCount(cluster) >= 2;
+  const strongGlobalSignal = isStrongEmmSignal(primary?.emmSignal);
+  const authoritativeMajorEvent = sourceAuthority(primary.domain) >= 0.92
+    && HIGH_IMPACT_NEWS_PATTERN.test(`${primary.title} ${primary.snippet}`);
+  if (topic?.id === "business-finance" || /商业|金融|business|finance/i.test(topic?.label || "")) {
+    const threeIndependentSources = distinctSourceCount(cluster) >= 3;
+    const confirmedByMajorBusinessDesk = cluster.some((item) => isMajorBusinessConfirmationDomain(item.domain));
+    return importance >= 0.5 && (
+      threeIndependentSources
+      || (confirmedByMajorBusinessDesk && independentlyReported)
+      || (confirmedByMajorBusinessDesk && strongGlobalSignal)
+    );
+  }
+  return importance >= 0.5 && (
+    independentlyReported || authoritativeMajorEvent || strongGlobalSignal || importance >= 0.68
+  );
+}
+
+function resultScore(result, topic, resultIndex, cluster, now) {
   const title = `${result.title} ${result.snippet}`;
   const relevance = Math.max(0.12, tokenSimilarity(topic.query || topic.label, title));
-  const attention = clamp(groupSize / 4, 0.2, 1);
+  const independentCoverage = clamp(distinctSourceCount(cluster) / 4, 0.15, 1);
   const recency = publishedRecency(result.publishedAt, now);
   const authority = sourceAuthority(result.domain);
+  const importance = briefEventImportance(result, { cluster, now, topic });
   if (!authority) return 0;
-  return relevance * 0.35 + attention * 0.25 + recency * 0.25 + authority * 0.15 - resultIndex * 0.002;
+  return importance * 0.35 + authority * 0.22 + independentCoverage * 0.18
+    + recency * 0.15 + relevance * 0.1 - resultIndex * 0.001;
 }
 
 export function briefSourcePriority(sourceAdapter) {
-  if (sourceAdapter === "serper-news") return 2;
-  if (sourceAdapter === "bocha-news") return 1;
+  if (sourceAdapter === "serper-news") return 4;
+  if (sourceAdapter === "bocha-news") return 3;
+  if (sourceAdapter === "open-newswire") return 2;
+  if (sourceAdapter === "the-conversation") return 1;
   return 0;
-}
-
-function clusterResults(results) {
-  const clusters = [];
-  for (const result of results) {
-    const match = clusters.find((cluster) => tokenSimilarity(cluster[0].title, result.title) >= 0.42);
-    if (match) match.push(result);
-    else clusters.push([result]);
-  }
-  return clusters;
 }
 
 function readMetaContent($, selectors) {
@@ -761,9 +951,107 @@ async function fetchAuthorityFeed(feedMeta, force = false) {
   return promise;
 }
 
+async function fetchEmmEventSignals(force = false) {
+  const cacheKey = "emm-top-stories";
+  const cached = eventSignalCache.get(cacheKey);
+  if (!force && cached?.value && cached.expiresAt > Date.now()) return cached.value;
+  if (cached?.promise) return cached.promise;
+  const promise = (async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7_000);
+    try {
+      const response = await fetch(EMM_TOP_STORIES_URL, {
+        headers: { Accept: "application/json", "User-Agent": "Brizo Brief/1.0" },
+        redirect: "follow",
+        signal: controller.signal,
+      });
+      if (!response.ok) return [];
+      const signals = parseEmmEventSignals(await response.json());
+      eventSignalCache.set(cacheKey, { expiresAt: Date.now() + EVENT_SIGNAL_CACHE_TTL_MS, value: signals });
+      return signals;
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timeout);
+    }
+  })().catch((error) => {
+    eventSignalCache.delete(cacheKey);
+    throw error;
+  });
+  eventSignalCache.set(cacheKey, { promise });
+  return promise;
+}
+
+export function parseOpenNewswireArticles(payload, topic = {}) {
+  const items = Array.isArray(payload?.results) ? payload.results : [];
+  return items.flatMap((item) => {
+    const license = safeText(item?.feed?.license?.slug, 40).toLowerCase();
+    if (!OPEN_NEWSWIRE_COMMERCIAL_LICENSES.has(license)) return [];
+    const url = normalizeUrl(item?.link || item?.url);
+    const domain = domainFor(url);
+    if (!url || !isAllowedBriefSource(url, domain)) return [];
+    const title = safeText(item?.title, 400);
+    if (!title || isLowQualityBriefResult({ title })) return [];
+    return [{
+      author: safeText(item?.author, 140),
+      bodyExcerpt: safeText(item?.description || item?.summary, 6_000),
+      domain,
+      imageUrl: normalizeUrl(item?.imageUrl),
+      license,
+      licenseUrl: normalizeUrl(item?.feed?.licenseUrl),
+      publishedAt: safeText(item?.publishedAt || item?.published || item?.date, 100),
+      region: topic.region || "国际",
+      sections: [topic.id].filter(Boolean),
+      snippet: safeText(item?.description || item?.summary || title, 1_000),
+      sourceAdapter: "open-newswire",
+      sourceName: safeText(item?.feed?.title, 140),
+      title,
+      url,
+    }];
+  });
+}
+
+async function fetchOpenNewswireResults(topic, force = false) {
+  const query = safeText(topic?.openNewswireQuery || topic?.query || topic?.label, 180);
+  if (!query) return [];
+  const cacheKey = `open-newswire:${query}`;
+  const cached = eventSignalCache.get(cacheKey);
+  if (!force && cached?.value && cached.expiresAt > Date.now()) return cached.value;
+  if (cached?.promise) return cached.promise;
+  const promise = (async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7_000);
+    try {
+      const url = new URL(OPEN_NEWSWIRE_ARTICLES_URL);
+      url.searchParams.set("search", query);
+      url.searchParams.set("languages", "en");
+      url.searchParams.set("licenses", [...OPEN_NEWSWIRE_COMMERCIAL_LICENSES].join(","));
+      url.searchParams.set("page", "1");
+      const response = await fetch(url, {
+        headers: { Accept: "application/json", "User-Agent": "Brizo Brief/1.0" },
+        redirect: "follow",
+        signal: controller.signal,
+      });
+      if (!response.ok) return [];
+      const items = parseOpenNewswireArticles(await response.json(), topic);
+      eventSignalCache.set(cacheKey, { expiresAt: Date.now() + FEED_CACHE_TTL_MS, value: items });
+      return items;
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timeout);
+    }
+  })().catch((error) => {
+    eventSignalCache.delete(cacheKey);
+    throw error;
+  });
+  eventSignalCache.set(cacheKey, { promise });
+  return promise;
+}
+
 async function collectAuthorityFeedResults(topic, force = false) {
   const sectionIds = new Set(feedSectionIdsForTopic(topic));
-  const feeds = [...AUTHORITY_FEEDS, ...buildSupplementalFeeds()]
+  const feeds = buildSupplementalFeeds()
     .filter((feed) => feed.sections.some((section) => sectionIds.has(section)));
   const groups = await mapWithConcurrency(feeds, 6, (feed) => fetchAuthorityFeed(feed, force));
   const deduped = [];
@@ -783,7 +1071,7 @@ function sourcesForCluster(cluster, allResults, limit = 12) {
     if (combined.length >= limit) break;
     if (!isAllowedBriefSource(candidate.url, candidate.domain)) continue;
     if (seenDomains.has(candidate.domain)) continue;
-    if (tokenSimilarity(cluster[0]?.title, `${candidate.title} ${candidate.snippet}`) < 0.24) continue;
+    if (briefEventSimilarity(cluster[0], candidate) < 0.46) continue;
     combined.push(candidate);
     seenDomains.add(candidate.domain);
   }
@@ -794,9 +1082,12 @@ function sourcesForCluster(cluster, allResults, limit = 12) {
     domain: source.domain,
     imageUrl: normalizeUrl(source.imageUrl),
     faviconUrl: normalizeUrl(source.faviconUrl),
+    license: safeText(source.license, 40),
+    licenseUrl: normalizeUrl(source.licenseUrl),
     publishedAt: source.publishedAt || "",
     snippet: safeText(source.snippet, 1_000),
     sourceAdapter: safeText(source.sourceAdapter, 40),
+    sourceName: safeText(source.sourceName, 140),
     title: safeText(source.title, 400),
     url: normalizeUrl(source.url),
   })).filter((source) => source.url);
@@ -925,6 +1216,7 @@ function buildStoriesForTopic({ results, topic, allResults, now }) {
     };
     return {
       id: `story-${index + 1}`,
+      importance: result.importance || result.primary.importance || 0,
       primary,
       region: result.region,
       sources: sourcesForCluster([{ ...primary }, ...result.cluster.slice(1)], allResults, 12),
@@ -937,9 +1229,18 @@ function buildStoriesForTopic({ results, topic, allResults, now }) {
       author: safeText(item.primary.author, 120),
       headline: cleanBriefHeadline(item.primary.title),
       imageUrl: normalizeUrl(item.primary.imageUrl),
+      importance: Number(item.importance) || 0,
+      eventSignal: item.primary.emmSignal ? {
+        countryCount: item.primary.emmSignal.countryCount,
+        signalType: item.primary.emmSignal.signalType,
+        sourceCount: item.primary.emmSignal.sourceCount,
+        title: item.primary.emmSignal.title,
+        totalCount: item.primary.emmSignal.totalCount,
+      } : null,
       publishedAt: item.primary.publishedAt || new Date(now).toISOString(),
       region: item.region,
       score: Number(item.primary.score) || 0,
+      sourceCount: distinctSourceCount(item.sources),
       sources: item.sources,
       summary: safeText(summary, 1_000),
       topicId: topic.id,
@@ -962,18 +1263,19 @@ function packTopicPages(sections) {
 
 export function selectFrontStories(stories, limit = 8) {
   const compareStories = (left, right) => {
+    const qualityDelta = (right.importance || right.score || 0) - (left.importance || left.score || 0);
     const providerDelta = briefSourcePriority(right.sources?.[0]?.sourceAdapter)
       - briefSourcePriority(left.sources?.[0]?.sourceAdapter);
-    return providerDelta || (right.score || 0) - (left.score || 0);
+    return qualityDelta || providerDelta || (right.score || 0) - (left.score || 0);
   };
   const ranked = [...stories].sort(compareStories);
   const selected = [];
   const topicCounts = new Map();
   const topicCount = new Set(ranked.map((story) => story.topicId).filter(Boolean)).size;
   const topicCap = topicCount ? Math.max(2, Math.ceil(limit / topicCount)) : Number.POSITIVE_INFINITY;
-  const add = (story) => {
+  const add = (story, enforceCap = true) => {
     if (!story || selected.some((item) => item.id === story.id)) return;
-    if (story.topicId && (topicCounts.get(story.topicId) || 0) >= topicCap) return;
+    if (enforceCap && story.topicId && (topicCounts.get(story.topicId) || 0) >= topicCap) return;
     selected.push(story);
     if (story.topicId) topicCounts.set(story.topicId, (topicCounts.get(story.topicId) || 0) + 1);
   };
@@ -985,7 +1287,25 @@ export function selectFrontStories(stories, limit = 8) {
   };
   addRegion("国内");
   addRegion("国际");
-  ranked.forEach((story) => { if (selected.length < limit) add(story); });
+  while (selected.length < limit) {
+    const candidates = ranked.filter((story) => !selected.some((item) => item.id === story.id)
+      && (!story.topicId || (topicCounts.get(story.topicId) || 0) < topicCap));
+    if (!candidates.length) break;
+    const next = candidates.map((story) => {
+      const nearest = selected.length
+        ? Math.max(...selected.map((chosen) => tokenSimilarity(
+          `${chosen.headline} ${chosen.summary}`,
+          `${story.headline} ${story.summary}`,
+        )))
+        : 0;
+      const samePublisher = selected.some((chosen) => chosen.sources?.[0]?.domain
+        && chosen.sources[0].domain === story.sources?.[0]?.domain);
+      const base = story.importance || story.score || 0;
+      return { story, value: base - nearest * 0.24 - (samePublisher ? 0.06 : 0) };
+    }).sort((left, right) => right.value - left.value || compareStories(left.story, right.story))[0]?.story;
+    add(next);
+  }
+  ranked.forEach((story) => { if (selected.length < limit) add(story, false); });
   return selected.slice(0, limit).sort(compareStories);
 }
 
@@ -1015,6 +1335,29 @@ function sanitizeSignals(payload) {
 
 function emptyStore() {
   return { editions: {}, preferences: { mutedTopicIds: [], pinnedTopicIds: [], reducedTopicIds: [] }, reports: {} };
+}
+
+function filterCachedEditionForDisplay(edition, now = Date.now()) {
+  if (!edition) return null;
+  const keepStory = (story) => {
+    const ageHours = publishedAgeHours(story?.publishedAt, now);
+    if (ageHours != null && ageHours > 120) return false;
+    if (isLowQualityBriefResult({ title: story?.headline, snippet: story?.summary })) return false;
+    const sources = Array.isArray(story?.sources) ? story.sources : [];
+    const text = `${story?.headline || ""} ${story?.summary || ""}`;
+    if (!HIGH_IMPACT_NEWS_PATTERN.test(text)) return false;
+    return distinctSourceCount(sources) >= 2
+      || sourceAuthority(sources[0]?.domain || domainFor(story?.url)) >= 0.9;
+  };
+  const pages = (edition.pages || []).map((page) => ({
+    ...page,
+    stories: (page.stories || []).filter(keepStory),
+    sections: (page.sections || []).map((section) => ({
+      ...section,
+      stories: (section.stories || []).filter(keepStory),
+    })),
+  }));
+  return { ...edition, pages };
 }
 
 export function normalizeBriefNewsResult(item, { adapter, region } = {}) {
@@ -1086,44 +1429,63 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
   };
 
   const collectTopicResults = async (topic, slots, descriptor, now, force) => {
+    void descriptor;
     const searchResults = [];
     const searchFailures = [];
-    if (typeof search?.serper === "function") {
-      try {
-        const items = await search.serper(topic.serperQuery || topic.query, {
-          count: Math.max(12, slots + 6),
+    const allEmmSignals = await fetchEmmEventSignals(force);
+    const topicEmmSignals = emmSignalsForTopic(allEmmSignals, topic).slice(0, 3);
+    const seedTitle = safeText(topicEmmSignals[0]?.title, 220);
+    const retrievalQuery = seedTitle
+      ? `${topic.serperQuery || topic.query} "${seedTitle.replace(/"/g, "")}"`
+      : topic.serperQuery || topic.query;
+    const bochaQuery = seedTitle ? `${topic.query} ${seedTitle}` : topic.query;
+    const [serperOutcome, bochaOutcome, feedOutcome, openNewswireOutcome] = await Promise.allSettled([
+      typeof search?.serper === "function"
+        ? search.serper(retrievalQuery, {
+          count: Math.max(16, slots + 10),
           gl: topic.serperGl || "cn",
           hl: topic.serperHl || "zh-cn",
-        });
-        searchResults.push(...(Array.isArray(items) ? items : []).map((item) => normalizeBriefNewsResult(item, {
-          adapter: "serper-news",
-          region: topic.region,
-        })));
-      } catch (error) {
-        searchFailures.push(`Serper：${safeText(error?.message || "新闻检索失败", 120)}`);
-      }
+        })
+        : [],
+      typeof search?.bocha === "function"
+        ? search.bocha(bochaQuery, { count: Math.max(16, slots + 10), freshness: "oneDay" })
+        : [],
+      // Openly licensed analysis provides context; it cannot by itself make a
+      // story eligible for Brief's major-event stream.
+      collectAuthorityFeedResults(topic, force),
+      fetchOpenNewswireResults(topic, force),
+    ]);
+    if (serperOutcome.status === "fulfilled") {
+      searchResults.push(...(Array.isArray(serperOutcome.value) ? serperOutcome.value : []).map((item) => normalizeBriefNewsResult(item, {
+        adapter: "serper-news",
+        region: topic.region,
+      })));
+    } else {
+      searchFailures.push(`Serper：${safeText(serperOutcome.reason?.message || "新闻检索失败", 120)}`);
     }
-
-    // Publisher RSS remains a resilient fallback and source supplement, but the
-    // discovery feed is driven primarily by the professional news search calls.
-    let feedResults = [];
-    const usableProfessionalResultCount = searchResults.filter((result) => {
-      const url = normalizeUrl(result.url);
-      return url && !isLowQualityBriefResult(result)
-        && isAllowedBriefSource(url, result.domain || domainFor(url));
-    }).length;
-    if (usableProfessionalResultCount < Math.max(4, (topic.slots || 0) + 2)) {
-      feedResults = await collectAuthorityFeedResults(topic, force);
+    if (bochaOutcome.status === "fulfilled") {
+      searchResults.push(...(Array.isArray(bochaOutcome.value) ? bochaOutcome.value : []).map((item) => normalizeBriefNewsResult(item, {
+        adapter: "bocha-news",
+        region: topic.region,
+      })));
+    } else {
+      searchFailures.push(`博查：${safeText(bochaOutcome.reason?.message || "新闻检索失败", 120)}`);
     }
-    const combinedResults = [...searchResults, ...feedResults];
+    const feedResults = feedOutcome.status === "fulfilled" ? feedOutcome.value : [];
+    const openNewswireResults = openNewswireOutcome.status === "fulfilled" ? openNewswireOutcome.value : [];
+    const combinedResults = [...searchResults, ...openNewswireResults, ...feedResults]
+      .map((result) => attachEmmSignal(result, topicEmmSignals));
     const deduped = [];
     const seen = new Set();
     for (const result of combinedResults) {
       const url = normalizeUrl(result.url);
-      if (!url || seen.has(url) || isLowQualityBriefResult(result)) continue;
+      const canonicalUrl = canonicalizeUrl(url);
+      if (!url || !canonicalUrl || seen.has(canonicalUrl) || isLowQualityBriefResult(result)) continue;
+      const ageHours = publishedAgeHours(result.publishedAt, now);
+      if (ageHours != null && ageHours > 168) continue;
       const domain = result.domain || domainFor(url);
       if (!isAllowedBriefSource(url, domain)) continue;
-      seen.add(url);
+      seen.add(canonicalUrl);
       deduped.push({
         ...result,
         domain,
@@ -1132,26 +1494,29 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       });
     }
     if (!deduped.length) {
-      throw new Error(searchFailures.join("；") || "专业新闻检索与 RSS 暂时没有返回可用条目");
+      throw new Error(searchFailures.join("；") || "重大事件信号与开放新闻来源暂时没有返回可用条目");
     }
-    const clusters = clusterResults(deduped);
+    let clusters = clusterBriefEvents(deduped)
+      .filter((cluster) => isHighValueBriefEvent(cluster, topic, now));
+    // A sparse cycle stays sparse: never pad the edition with lower-value items.
     return clusters.map((cluster, index) => {
       const primary = cluster[0];
       const region = topic.region || primary.region || (index % 3 === 0 ? "国内" : "国际");
+      const importance = briefEventImportance(primary, { cluster, now, topic });
       return {
         cluster,
+        importance,
         primary: {
           ...primary,
           domain: primary.domain,
-          score: resultScore(primary, topic, index, cluster.length, now),
+          importance,
+          score: resultScore(primary, topic, index, cluster, now),
         },
         region,
       };
-    }).sort((left, right) => {
-      const providerDelta = briefSourcePriority(right.primary.sourceAdapter)
-        - briefSourcePriority(left.primary.sourceAdapter);
-      return providerDelta || right.primary.score - left.primary.score;
-    }).slice(0, slots);
+    }).sort((left, right) => right.primary.score - left.primary.score
+      || briefSourcePriority(right.primary.sourceAdapter) - briefSourcePriority(left.primary.sourceAdapter)
+    ).slice(0, slots);
   };
 
   const generateEdition = async (descriptor, force = false) => {
@@ -1249,22 +1614,6 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       story.url && isAllowedBriefSource(story.url, domainFor(story.url))
         && list.findIndex((candidate) => candidate.url === story.url) === index,
     );
-    if (descriptor.kind === "overnight") {
-      const previous = new Date(now);
-      previous.setDate(previous.getDate() - 1);
-      const previousEvening = store.editions?.[`${localDateKey(previous)}:evening`];
-      const carried = (previousEvening?.pages?.[0]?.stories || []).slice(0, 2)
-        .filter((story) => story.sources?.[0]?.sourceAdapter !== "bocha-news"
-          && isAllowedBriefSource(story.url, domainFor(story.url)))
-        .map((story) => ({ ...story, carriedOver: true }));
-      const seen = new Set();
-      frontCandidates = [...carried, ...editorialCandidates].filter((story) => {
-        const key = story.url || story.id;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    }
     const frontStories = selectFrontStories(frontCandidates, 8);
     const frontUrls = new Set(frontStories.map((story) => story.url));
     const usedUrls = new Set(frontUrls);
@@ -1279,23 +1628,6 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       }
       return { ...section, stories };
     });
-    const previousEditions = Object.values(store.editions || {})
-      .filter((edition) => edition?.status === "success")
-      .sort((left, right) => Date.parse(right.updatedAt || 0) - Date.parse(left.updatedAt || 0));
-    for (const section of topicSections) {
-      if (section.stories.length >= section.targetSlots) continue;
-      const previousStories = previousEditions.flatMap((edition) => (edition.pages || [])
-        .flatMap((page) => page.sections || [])
-        .filter((candidate) => candidate.id === section.id)
-        .flatMap((candidate) => candidate.stories || []));
-      for (const story of previousStories) {
-        if (!story.url || usedUrls.has(story.url)) continue;
-        if (!isAllowedBriefSource(story.url, domainFor(story.url))) continue;
-        usedUrls.add(story.url);
-        section.stories.push({ ...story, carriedOver: true });
-        if (section.stories.length >= section.targetSlots) break;
-      }
-    }
     const displayedStories = [
       ...frontStories,
       ...topicSections.flatMap((section) => section.stories),
@@ -1307,10 +1639,10 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       section.stories = section.stories.filter((story) => chineseStoryIds.has(story.url || story.id));
     }
     const sectionStoryCount = topicSections.reduce((sum, section) => sum + section.stories.length, 0);
-    if (!frontStories.length && !sectionStoryCount) throw new Error("新闻检索已返回结果，但外文内容暂时无法翻译；已保留上一期 Brief。");
+    if (!frontStories.length && !sectionStoryCount) throw new Error("新闻检索已返回结果，但没有条目通过本期重大性、来源与翻译门槛；已保留上一期 Brief。");
     const publishedStoryCount = frontStories.length + sectionStoryCount;
     const contentNotice = sectionStoryCount < 18 || frontStories.length < 8
-      ? `${searchFailures.length ? "部分专业新闻源暂时不可用" : "部分外文新闻暂时无法翻译"}；本期已更新 ${publishedStoryCount} 条新闻。`
+      ? `${searchFailures.length ? "部分新闻源暂时不可用" : "本期仅保留通过重大性与来源门槛的事件"}；共更新 ${publishedStoryCount} 条。`
       : "";
     const edition = {
       id: descriptor.id,
@@ -1329,7 +1661,10 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
         enrichedUrlCount: primaryByUrl.size,
         directChineseStoryCount: translationResult.directChineseCount,
         newsCandidateCount: translationResult.candidateCount,
-        rssCandidateCount: displayedStories.filter((story) => story.sources?.[0]?.sourceAdapter?.includes("rss")).length,
+        rssCandidateCount: displayedStories.filter((story) => ["the-conversation", "publisher-rss"].includes(story.sources?.[0]?.sourceAdapter)).length,
+        emmBackedStoryCount: displayedStories.filter((story) => story.eventSignal).length,
+        openNewswireStoryCount: displayedStories.filter((story) => story.sources?.some((source) => source.sourceAdapter === "open-newswire")).length,
+        conversationStoryCount: displayedStories.filter((story) => story.sources?.some((source) => source.sourceAdapter === "the-conversation")).length,
         bochaStoryCount: displayedStories.filter((story) => story.sources?.[0]?.sourceAdapter === "bocha-news").length,
         serperStoryCount: displayedStories.filter((story) => story.sources?.[0]?.sourceAdapter === "serper-news").length,
         translatedStoryCount: translationResult.translatedCount,
@@ -1369,7 +1704,12 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       .filter((edition) => edition?.status === "success")
       .sort((left, right) => Date.parse(right.updatedAt || 0) - Date.parse(left.updatedAt || 0))[0];
     generationPromise = generateEdition(descriptor, force).catch((error) => {
-      if (existing || latestSuccessful) return { ...(existing || latestSuccessful), staleReason: error.message };
+      if (existing || latestSuccessful) {
+        return {
+          ...filterCachedEditionForDisplay(existing || latestSuccessful),
+          staleReason: `实时来源更新失败，已隐藏过期与低价值条目：${error.message}`,
+        };
+      }
       return {
         id: descriptor.id,
         kind: descriptor.kind,
@@ -1438,7 +1778,15 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       return { status: "error", message: "这些来源暂时没有可用于整理的正文内容。" };
     }
 
-    const sourcePayload = usableSources.map((source, index) => ({
+    const verifiedSources = usableSources.map((source) => {
+      const authority = sourceAuthority(source.domain || domainFor(source.url));
+      return {
+        ...source,
+        authority,
+        authorityLabel: authority >= 0.96 ? "一线权威来源" : authority >= 0.9 ? "权威媒体" : "可信新闻来源",
+      };
+    });
+    const sourcePayload = verifiedSources.map((source, index) => ({
       id: index + 1,
       excerpt: safeText(source.bodyExcerpt || source.snippet || source.title, 3_200),
       publisher: source.domain,
@@ -1450,7 +1798,8 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
         "你是 Brizo Brief 的快速新闻编辑。只依据给定来源，把同一事件整理成一篇简体中文综合报道。",
         "直接输出结果，不展示思考过程。先交代发生了什么，再写关键事实、各方说法、背景与仍待确认的信息；来源冲突必须明确指出，不得补造事实。",
         "每一段事实都必须带对应编号引用，例如 [1] 或 [2][4]；编号只能引用输入中的来源。",
-        "返回严格 JSON：{\"headline\":\"中文标题\",\"lead\":\"2到3句导语，含引用\",\"body\":[\"段落1，含引用\",\"段落2，含引用\"]}。正文写5到8段，不要 markdown。",
+        "提炼3到5条最关键事实，并分别说明这件事为什么重要、下一步值得关注什么；所有内容都必须带引用。",
+        "返回严格 JSON：{\"headline\":\"中文标题\",\"lead\":\"2到3句导语，含引用\",\"keyPoints\":[\"关键事实1，含引用\"],\"whyItMatters\":\"重要性，含引用\",\"whatToWatch\":\"后续观察，含引用\",\"body\":[\"段落1，含引用\",\"段落2，含引用\"]}。正文写4到7段，不要 markdown。",
       ].join("\n"),
       query: JSON.stringify({ originalHeadline: story.headline, sources: sourcePayload }),
       timeoutMs: 45_000,
@@ -1460,10 +1809,10 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       response = await callEditorialModel(synthesisPayload);
     }
     const synthesized = response?.status === "success" ? parseModelJson(response.message) : null;
-    const validCitation = new RegExp(`\\[(?:${usableSources.map((_, index) => index + 1).join("|")})\\]`);
+    const validCitation = new RegExp(`\\[(?:${verifiedSources.map((_, index) => index + 1).join("|")})\\]`);
     const cleanCitations = (value) => safeText(value, 2_400).replace(/\[(\d+)\]/g, (match, raw) => {
       const index = Number(raw);
-      return index >= 1 && index <= usableSources.length ? match : "";
+      return index >= 1 && index <= verifiedSources.length ? match : "";
     });
     let body = (Array.isArray(synthesized?.body) ? synthesized.body : [])
       .map(cleanCitations)
@@ -1471,16 +1820,29 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       .slice(0, 8);
     let lead = cleanCitations(synthesized?.lead);
     let headline = safeText(synthesized?.headline || story.headline, 220);
+    let keyPoints = (Array.isArray(synthesized?.keyPoints) ? synthesized.keyPoints : [])
+      .map(cleanCitations)
+      .filter((point) => containsChinese(point) && validCitation.test(point))
+      .slice(0, 5);
+    let whyItMatters = cleanCitations(synthesized?.whyItMatters);
+    let whatToWatch = cleanCitations(synthesized?.whatToWatch);
     let synthesisState = "model";
     if (!containsChinese(headline) || !body.length || !validCitation.test(lead)) {
       synthesisState = "extractive-fallback";
       headline = story.headline;
-      const fallbackParagraphs = usableSources.slice(0, 4).map((source, index) => {
+      const fallbackParagraphs = verifiedSources.slice(0, 4).map((source, index) => {
         const excerpt = safeText(source.bodyExcerpt || source.snippet || source.title, 800);
         return excerpt ? `${excerpt.replace(/\s*\[\d+\]\s*$/g, "")} [${index + 1}]` : "";
       }).filter((paragraph) => containsChinese(paragraph));
       body = fallbackParagraphs.length ? fallbackParagraphs : [`${safeText(story.summary, 1_200)} [1]`];
       lead = `${safeText(story.summary || body[0], 1_200).replace(/\s*\[\d+\]\s*$/g, "")} [1]`;
+    }
+    if (!keyPoints.length) keyPoints = body.slice(0, 3);
+    if (!validCitation.test(whyItMatters)) {
+      whyItMatters = `这是一项经过权威来源报道、可能影响公共政策、产业或社会运行的重要进展，实际影响仍取决于后续执行与各方回应。[1]`;
+    }
+    if (!validCitation.test(whatToWatch)) {
+      whatToWatch = `后续应关注官方文件、关键数据和事件相关方的进一步披露，避免把尚未确认的细节当作既定事实。[1]`;
     }
 
     const relatedStories = stories
@@ -1496,7 +1858,7 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       .map(({ relatedScore: _relatedScore, ...candidate }) => candidate);
     const images = [...new Set([
       story.imageUrl,
-      ...usableSources.map((source) => source.imageUrl),
+      ...verifiedSources.map((source) => source.imageUrl),
     ].filter(Boolean))].slice(0, 3);
     const report = {
       contentVersion: REPORT_CONTENT_VERSION,
@@ -1505,13 +1867,20 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
       headline,
       imageUrl: images[0] || story.imageUrl,
       images,
+      keyPoints,
       lead: safeText(lead, 1_500),
       body,
       relatedStories,
-      sources: usableSources,
+      sourceCount: distinctSourceCount(verifiedSources),
+      sources: verifiedSources,
       status: "success",
       storyId,
       synthesisState,
+      verificationLabel: distinctSourceCount(verifiedSources) >= 2
+        ? `已交叉核验 ${distinctSourceCount(verifiedSources)} 个独立来源`
+        : "单一权威来源，尚待更多独立报道",
+      whatToWatch: safeText(whatToWatch, 1_500),
+      whyItMatters: safeText(whyItMatters, 1_500),
     };
     store.reports ||= {};
     store.reports[cacheKey] = report;
@@ -1531,7 +1900,10 @@ export function createBriefService({ callModel, callEditorialModel = callModel, 
     const cached = store.editions?.[descriptor.id] || Object.values(store.editions || {})
       .filter((edition) => edition?.status === "success")
       .sort((left, right) => Date.parse(right.updatedAt || 0) - Date.parse(left.updatedAt || 0))[0];
-    if (!cached) return getEdition({ at, force });
+    const cacheMatchesCurrentPipeline = cached?.id === descriptor.id
+      && cached?.contentVersion === EDITION_CONTENT_VERSION
+      && cached?.topicProfileVersion === TOPIC_PROFILE_VERSION;
+    if (!cacheMatchesCurrentPipeline) return getEdition({ at, force: true });
     getEdition({ at, force }).then((edition) => {
       if (edition?.staleReason) notify?.(edition);
     }).catch(() => {});
