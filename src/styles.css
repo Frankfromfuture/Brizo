@@ -7619,7 +7619,7 @@ kbd {
   transition: transform 120ms ease, color 120ms ease;
 }
 
-.new-tab-submit-button.is-ask {
+.new-tab-submit-button.is-primary {
   bottom: 3px;
   width: 36px;
   height: 36px;
@@ -7637,6 +7637,37 @@ kbd {
   width: 20.4px;
   height: 20.4px;
   overflow: visible;
+}
+
+.new-tab-submit-button > .new-tab-submit-monitor {
+  width: 20.4px;
+  height: 20.4px;
+  overflow: visible;
+}
+
+.new-tab-submit-monitor :where(.remocn-monitor-screen path, .remocn-monitor-base, .remocn-monitor-neck) {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: new-tab-monitor-draw 420ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+.new-tab-submit-monitor .remocn-monitor-base {
+  animation-delay: 45ms;
+}
+
+.new-tab-submit-monitor .remocn-monitor-neck {
+  animation-delay: 90ms;
+}
+
+.new-tab-submit-monitor .remocn-monitor-screen {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: new-tab-monitor-settle 520ms cubic-bezier(0.22, 1, 0.36, 1) 360ms both;
+}
+
+.new-tab-submit-button:hover .new-tab-submit-monitor .remocn-monitor-screen,
+.new-tab-submit-button:focus-visible .new-tab-submit-monitor .remocn-monitor-screen {
+  animation: new-tab-monitor-hover 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .new-tab-submit-sparkles .remocn-sparkles-main {
@@ -7684,6 +7715,22 @@ kbd {
 @keyframes new-tab-sparkles-twinkle {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.45; transform: scale(0.72); }
+}
+
+@keyframes new-tab-monitor-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes new-tab-monitor-settle {
+  0% { transform: scale(0.9, 0.82); }
+  55% { transform: scale(1.02, 1.05); }
+  100% { transform: scale(1); }
+}
+
+@keyframes new-tab-monitor-hover {
+  0%, 100% { transform: scale(1); }
+  45% { transform: scale(0.94, 0.86); }
+  72% { transform: scale(1.02, 1.04); }
 }
 
 .new-tab-submit-visual {
@@ -7789,6 +7836,15 @@ kbd {
     opacity: 1;
     stroke-dashoffset: 0;
     transform: none;
+  }
+
+  .new-tab-submit-monitor :where(.remocn-monitor-screen, .remocn-monitor-screen path, .remocn-monitor-base, .remocn-monitor-neck) {
+    animation: none;
+    transform: none;
+  }
+
+  .new-tab-submit-monitor :where(.remocn-monitor-screen path, .remocn-monitor-base, .remocn-monitor-neck) {
+    stroke-dashoffset: 0;
   }
 }
 

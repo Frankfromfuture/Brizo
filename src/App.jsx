@@ -11,7 +11,6 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowSquareOut,
-  ArrowUp,
   ArrowsOut,
   ArrowsClockwise,
   BellSimple,
@@ -73,6 +72,7 @@ import { BookmarkIcon } from "./components/remocn/icon-bookmark";
 import { DownloadIcon } from "./components/remocn/icon-download";
 import { FileTextIcon } from "./components/remocn/icon-file-text";
 import { MoreHorizontalIcon } from "./components/remocn/icon-more-horizontal";
+import { MonitorIcon } from "./components/remocn/icon-monitor";
 import { PlusIcon } from "./components/remocn/icon-plus";
 import { RefreshCwIcon } from "./components/remocn/icon-refresh-cw";
 import { SparklesIcon } from "./components/remocn/icon-sparkles";
@@ -1837,7 +1837,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
                 </>
               )}
               <button
-                className={`new-tab-submit-button${commandMode === "ask" ? " is-ask" : ""}${commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? " is-pause" : ""}`}
+                className={`new-tab-submit-button is-primary${commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? " is-pause" : ""}`}
                 type="submit"
                 aria-label={commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? `${usePaused ? "继续" : "暂停"} BrowserSkill` : commandMode === "ask" ? "确认" : "执行 Use"}
                 disabled={commandMode === "ask" && (searchState === "loading" || searchState === "streaming")}
@@ -1851,7 +1851,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
                   ? (usePaused ? <Play size={18} weight="fill" /> : <Pause size={18} weight="fill" />)
                   : commandMode === "ask"
                     ? <SparklesIcon className="new-tab-submit-sparkles" size={20.4} strokeWidth={1.9} />
-                    : <ArrowUp size={21} />}
+                    : <MonitorIcon className="new-tab-submit-monitor" size={20.4} strokeWidth={1.9} />}
               </button>
             </div>
           </div>
