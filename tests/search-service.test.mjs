@@ -177,6 +177,28 @@ test("entity images keep at most three verified official or authoritative source
   assert.equal(images[0].authority, "official");
 });
 
+test("person image matching accepts a one-character search correction from an authoritative source", () => {
+  const entity = { name: "渡边美波", kind: "person", confidence: 0.95 };
+  const images = selectEntityImages([{
+    title: "滨边美波出席电影发布会",
+    imageUrl: "https://images.example.com/minami.jpg",
+    url: "https://news.sina.com.cn/minami.html",
+    domain: "news.sina.com.cn",
+    width: 900,
+    height: 1200,
+  }], {
+    entity,
+    query: "渡边美波",
+    ranked: [{
+      title: "滨边美波人物资料",
+      domain: "news.sina.com.cn",
+      url: "https://news.sina.com.cn/minami.html",
+    }],
+  });
+  assert.equal(images.length, 1);
+  assert.equal(images[0].authority, "media");
+});
+
 test("entity image URL validation rejects HTML error pages and non-image responses", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => new Response(

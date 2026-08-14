@@ -2,10 +2,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("beanBrowser", {
   back: () => ipcRenderer.invoke("bean-browser:back"),
-  askCurrentPage: (payload) => ipcRenderer.invoke("bean-browser:ask-current-page", payload),
-  runBrowserCommand: (payload) => ipcRenderer.invoke("bean-browser:run-browser-command", payload),
   runBrizoUseCommand: (payload) => ipcRenderer.invoke("bean-browser:run-brizo-use-command", payload),
   pauseBrizoUseCommand: (sessionId) => ipcRenderer.invoke("bean-browser:pause-brizo-use-command", sessionId),
+  resumeBrizoUseCommand: (sessionId) => ipcRenderer.invoke("bean-browser:resume-brizo-use-command", sessionId),
   setBrizoUseSandboxLayout: (payload) => ipcRenderer.send("bean-browser:set-brizo-use-sandbox-layout", payload),
   getBriefEdition: (payload) => ipcRenderer.invoke("bean-browser:brief-get-edition", payload),
   getBriefReport: (payload) => ipcRenderer.invoke("bean-browser:brief-get-report", payload),
@@ -27,6 +26,12 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   importBookmarksFromHtml: () =>
     ipcRenderer.invoke("bean-browser:import-bookmarks-html"),
   listDownloads: () => ipcRenderer.invoke("bean-browser:list-downloads"),
+  openDownloadsDirectory: () => ipcRenderer.invoke("bean-browser:open-downloads-directory"),
+  setDownloadPaused: (id, paused) =>
+    ipcRenderer.invoke("bean-browser:set-download-paused", id, paused),
+  cancelDownload: (id) => ipcRenderer.invoke("bean-browser:cancel-download", id),
+  openDownloadedFile: (id) => ipcRenderer.invoke("bean-browser:open-downloaded-file", id),
+  deleteDownloadedFile: (id) => ipcRenderer.invoke("bean-browser:delete-downloaded-file", id),
   listPasswords: () => ipcRenderer.invoke("bean-browser:list-passwords"),
   listBookmarkSources: () =>
     ipcRenderer.invoke("bean-browser:list-bookmark-sources"),
@@ -68,6 +73,11 @@ contextBridge.exposeInMainWorld("beanBrowser", {
     ipcRenderer.on("bean-browser:ask-selection", listener);
     return () => ipcRenderer.removeListener("bean-browser:ask-selection", listener);
   },
+  onRendererContextAction: (callback) => {
+    const listener = (_event, action) => callback(action);
+    ipcRenderer.on("bean-browser:renderer-context-action", listener);
+    return () => ipcRenderer.removeListener("bean-browser:renderer-context-action", listener);
+  },
   onBriefEditionUpdated: (callback) => {
     const listener = (_event, edition) => callback(edition);
     ipcRenderer.on("bean-browser:brief-edition-updated", listener);
@@ -97,6 +107,8 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   reload: () => ipcRenderer.invoke("bean-browser:reload"),
   savePassword: (payload) => ipcRenderer.invoke("bean-browser:save-password", payload),
   saveModelProvider: (payload) => ipcRenderer.invoke("bean-browser:save-model-provider", payload),
+  showRendererContextMenu: (payload) =>
+    ipcRenderer.invoke("bean-browser:show-renderer-context-menu", payload),
   startSearch: (payload) => ipcRenderer.invoke("bean-browser:start-search", payload),
   cancelSearch: (searchId) => ipcRenderer.invoke("bean-browser:cancel-search", searchId),
   searchVane: (payload) => ipcRenderer.invoke("bean-browser:search-vane", payload),

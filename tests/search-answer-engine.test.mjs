@@ -121,6 +121,14 @@ test("visual entity planning covers a keyword and one concrete sentence answer",
   assert.deepEqual(sentencePlan.visualEntity, { name: "珠穆朗玛峰", kind: "place", confidence: 0.96 });
 });
 
+test("fallback planning recognizes a person query for portrait images", async () => {
+  const engine = createAnswerEngine({
+    llm: { async callChat() { throw new Error("planner unavailable"); } },
+  });
+  const plan = await engine.plan("马斯克是谁");
+  assert.deepEqual(plan.visualEntity, { name: "马斯克", kind: "person", confidence: 0.78 });
+});
+
 test("an explicit abstract-topic plan stays text-only even when the query is short", async () => {
   const engine = createAnswerEngine({
     llm: {

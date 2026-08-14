@@ -106,6 +106,7 @@ const headlessTest = shellSmokeTest
   || startupBenchmark
   || searchSmokeTest
   || configureSearchKeys;
+
 const hasSingleInstanceLock = headlessTest || app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.exit(0);
 
@@ -171,7 +172,6 @@ const browserViews = new Map();
 const browserTabSleepDelayMs = 10 * 60 * 1000;
 const browserContentBorderRadius = 15;
 const browserFrameInset = 2;
-const browserCornerMaskSize = browserContentBorderRadius + browserFrameInset;
 const pdfReaderBackgroundColor = "rgb(63, 63, 63)";
 let browserBounds = { x: 0, y: 72, width: 800, height: 600 };
 let browserVisible = true;
@@ -190,6 +190,7 @@ let exampleLoadingPageUrlPromise;
 let browserErrorPageActive = false;
 let browserSessionHandlersInstalled = false;
 let downloadRecords = [];
+const activeDownloads = new Map();
 const searchSuggestionCache = new Map();
 let searchSuggestionCooldownUntil = 0;
 const SEARCH_SUGGESTION_CACHE_TTL = 5 * 60 * 1000;
@@ -202,6 +203,7 @@ let userLocalePromise = Promise.resolve({ country: "", language: "zh-CN", label:
 const downloadThumbnailCache = new Map();
 const downloadThumbnailCacheLimit = 96;
 const incognitoContexts = new Map();
+const linkBrowserWindows = new Set();
 const scrollbarCssKeys = new Map();
 const modelGuardPath = () => path.join(app.getPath("userData"), "model-guard.json");
 const modelGuard = createModelGuard({ storePath: modelGuardPath, safeStorage, env: process.env });
@@ -212,6 +214,58 @@ const sanitizeModelProviders = modelGuard.sanitizeProviders;
 const activeSearchControllers = new Map();
 const brizoUseSandboxes = new Map();
 const brizoUseControllers = new Map();
+let appQuitRequested = false;
+
+app.on("before-quit", () => {
+  appQuitRequested = true;
+});
+
+function createBrizoUseRunControl() {
+  const controller = new AbortController();
+  const waiters = new Set();
+  let paused = false;
+  let stateListener = () => {};
+  const releaseWaiters = () => {
+    for (const resolve of waiters) resolve();
+    waiters.clear();
+  };
+  return {
+    get paused() { return paused; },
+    get signal() { return controller.signal; },
+    abort(reason = new DOMException("Stopped", "AbortError")) {
+      paused = false;
+      controller.abort(reason);
+      releaseWaiters();
+    },
+    pause() {
+      if (controller.signal.aborted) return false;
+      if (!paused) {
+        paused = true;
+        stateListener(true);
+      }
+      return true;
+    },
+    resume() {
+      if (controller.signal.aborted) return false;
+      if (paused) {
+        paused = false;
+        releaseWaiters();
+        stateListener(false);
+      }
+      return true;
+    },
+    setStateListener(listener) {
+      stateListener = typeof listener === "function" ? listener : () => {};
+    },
+    async waitIfPaused() {
+      controller.signal.throwIfAborted();
+      while (paused) {
+        await new Promise((resolve) => waiters.add(resolve));
+        controller.signal.throwIfAborted();
+      }
+    },
+  };
+}
 const faviconCacheDirectory = () => path.join(app.getPath("appData"), "bean", "favicon-cache");
 const faviconCacheManifestPath = () => path.join(faviconCacheDirectory(), "manifest.json");
 let faviconCacheManifestPromise;
@@ -514,140 +568,173 @@ function filenameForPdfSource(input, fallback = "document.pdf") {
 }
 
 const imageContextMenuItems = [
-  { action: "open", label: "新标签页中打开图片" },
-  { action: "download", label: "下载该图片" },
-  { action: "copy-image", label: "复制该图片", separatorBefore: true },
+  { action: "download", label: "下载图片" },
+  { action: "copy-image", label: "复制图片" },
   { action: "copy-address", label: "复制图片地址" },
+  { action: "open", label: "在新标签页中打开图片" },
 ];
 const linkContextMenuItems = [
-  { action: "open-link", label: "在新标签页打开链接" },
   { action: "copy-link", label: "复制链接地址" },
+  { action: "open-link-tab", label: "在新标签页中打开链接" },
+  { action: "open-link-window", label: "新窗口打开链接" },
+];
+const imageLinkContextMenuItems = [
+  ...imageContextMenuItems,
+  ...linkContextMenuItems.map((item, index) => ({
+    ...item,
+    separatorBefore: index === 0,
+  })),
 ];
 const selectionContextMenuItems = [
   { action: "copy-text", label: "复制文字" },
   { action: "ask-brizo", label: "向 Brizo 询问" },
   { action: "translate", label: "翻译" },
 ];
+const pageContextMenuItems = [
+  { action: "back", label: "返回上一页" },
+  { action: "reload", label: "重新加载网页" },
+  { action: "copy-page-address", label: "复制网页地址", separatorBefore: true },
+];
+const searchResultContextMenuItems = [
+  { action: "copy-search-result", label: "复制搜索结果" },
+];
+const copyFeedbackContextActions = new Set([
+  "copy-address",
+  "copy-image",
+  "copy-link",
+  "copy-page-address",
+  "copy-search-result",
+  "copy-text",
+]);
 
 function menuTypographyCss() {
   if (menuTypographyCssCache !== undefined) return menuTypographyCssCache;
   const directFontPath = path.join(
     projectRoot,
-    "node_modules",
-    "@fontsource",
-    "eb-garamond",
-    "files",
-    "eb-garamond-latin-400-normal.woff2",
+    "src",
+    "assets",
+    "fonts",
+    "HarmonyOS_Sans_SC_Regular.ttf",
   );
   let fontPath = existsSync(directFontPath) ? directFontPath : "";
   if (!fontPath) {
     try {
       const assetsPath = path.join(projectRoot, "dist", "client", "assets");
       const bundledName = readdirSync(assetsPath).find((name) =>
-        /^eb-garamond-latin-400-normal-.*\.woff2$/i.test(name),
+        /^HarmonyOS_Sans_SC_Regular-.*\.ttf$/i.test(name),
       );
       if (bundledName) fontPath = path.join(assetsPath, bundledName);
     } catch {
-      // Local EB Garamond remains available as a final fallback.
+      // The system-installed HarmonyOS Sans remains the final fallback.
     }
   }
-  let source = 'local("EB Garamond")';
-  if (fontPath) {
-    source = `url(data:font/woff2;base64,${readFileSync(fontPath).toString("base64")}) format("woff2")`;
-  }
+  const source = fontPath
+    ? `url("${pathToFileURL(fontPath).href}") format("truetype")`
+    : 'local("HarmonyOS Sans SC")';
   menuTypographyCssCache = `
     @font-face {
-      font-family: "Brizo Menu Latin";
+      font-family: "Brizo HarmonyOS Sans";
       src: ${source};
       font-style: normal;
-      font-weight: 400 700;
-      size-adjust: 112%;
-      unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+      font-weight: 400;
     }
   `;
   return menuTypographyCssCache;
 }
 
-function createWebContextMenuPageUrl(items, ariaLabel) {
+function createWebContextMenuPageHtml(items, ariaLabel) {
   const links = items.map(({ action, label, separatorBefore }) => `
     ${separatorBefore ? '<span class="separator" aria-hidden="true"></span>' : ""}
-    <a href="brizo-context-menu://${action}" role="menuitem">${label}</a>
+    <a href="brizo-context-menu://${action}" data-action="${escapeHtml(action)}" role="menuitem">${label}</a>
   `).join("");
   const html = `<!doctype html>
     <html lang="zh-CN">
       <head>
         <meta charset="utf-8">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; font-src file:">
         <style>
           ${menuTypographyCss()}
           * { box-sizing: border-box; }
-          html, body { min-width: 0; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+          html, body { min-width: 0; min-height: 0; height: auto; margin: 0; overflow: hidden; background: transparent; }
           body {
             width: max-content;
-            padding: 6px;
-            color: #283029;
-            font-family: "Brizo Menu Latin", "Source Han Serif SC VF", "Source Han Serif SC", "思源宋体 VF", "思源宋体", serif;
+            padding: 16px;
+            color: #272727;
+            font-family: "Brizo HarmonyOS Sans", "HarmonyOS Sans SC", sans-serif;
+            font-size: 12px;
+            font-style: normal;
+            outline: none;
             -webkit-font-smoothing: antialiased;
           }
           main {
             width: max-content;
-            height: calc(100% - 12px);
-            padding: 5px;
-            border: 0;
+            height: auto;
+            padding: 8px 5px 8px 7px;
+            border: 1px solid rgba(0,0,0,.16);
             border-radius: 10px;
-            background: #f0e8e2;
+            background: #f8f8f8;
             box-shadow:
-              0 1px 3px rgba(120,80,40,.08),
-              0 4px 16px rgba(120,80,40,.05),
-              0 0 0 1px rgba(120,80,40,.04);
+              0 4px 10px rgba(0,0,0,.13),
+              0 1px 4px rgba(0,0,0,.08);
             transform-origin: top left;
-            animation: image-menu-reveal 180ms cubic-bezier(.2, .82, .24, 1) both;
+            animation: soft-blur-surface-in 300ms cubic-bezier(.22, 1, .36, 1) both;
           }
-          a { height: 35px; padding: 0 10px; display: flex; align-items: center; border-radius: 8px; color: inherit; font-size: 13px; font-weight: 400; text-decoration: none; white-space: nowrap; }
-          a:hover, a:focus-visible { outline: none; background: rgba(95, 102, 95, 0.1); }
-          .separator { height: 1px; margin: 4px 5px; display: block; background: #e4e7e3; }
-          @keyframes image-menu-reveal {
-            from {
-              clip-path: inset(0 100% 100% 0 round 10px);
-              transform: scale(.82);
-            }
-            to {
-              clip-path: inset(0 0 0 0 round 10px);
-              transform: scale(1);
-            }
+          a { position: relative; height: 29px; padding: 0 28px 0 12px; display: flex; align-items: center; border-radius: 8px; color: inherit; font-size: 12px; font-weight: 400; line-height: 29px; text-decoration: none; white-space: nowrap; transition: background-color 120ms ease; animation: soft-blur-item-in 300ms cubic-bezier(.22, 1, .36, 1) both; }
+          a::after { content: ""; position: absolute; top: 8px; right: 11px; width: 5px; height: 9px; border-right: 1.5px solid rgba(255,255,255,.96); border-bottom: 1.5px solid rgba(255,255,255,.96); opacity: 0; filter: drop-shadow(0 1px 1px rgba(0,0,0,.12)); transform: rotate(45deg) scale(.55); transform-origin: center; }
+          a:nth-of-type(2) { animation-delay: 12ms; }
+          a:nth-of-type(3) { animation-delay: 24ms; }
+          a:nth-of-type(4) { animation-delay: 36ms; }
+          a:nth-of-type(5) { animation-delay: 48ms; }
+          a:nth-of-type(n+6) { animation-delay: 60ms; }
+          a:hover, a:focus-visible { outline: none; background: rgba(0,0,0,.035); }
+          a.is-copy-confirmed { background: rgba(84,91,86,.18); }
+          a.is-copy-confirmed::after { animation: copy-check-in 420ms cubic-bezier(.22,1,.36,1) both; }
+          .separator { height: 1px; margin: 4px 10px; display: block; background: #d8d8d8; }
+          @keyframes soft-blur-surface-in {
+            from { opacity: 0; filter: blur(6px); transform: translate3d(0, 8px, 0); }
+            to { opacity: 1; filter: blur(0); transform: translate3d(0, 0, 0); }
+          }
+          @keyframes soft-blur-item-in {
+            from { opacity: 0; filter: blur(4px); transform: translate3d(0, 4px, 0); }
+            to { opacity: 1; filter: blur(0); transform: translate3d(0, 0, 0); }
+          }
+          @keyframes copy-check-in {
+            0% { opacity: 0; transform: rotate(45deg) scale(.45) translate3d(1px,1px,0); }
+            55% { opacity: 1; transform: rotate(45deg) scale(1.08) translate3d(0,0,0); }
+            100% { opacity: .92; transform: rotate(45deg) scale(1) translate3d(0,0,0); }
           }
           @media (prefers-reduced-motion: reduce) {
-            main { animation: none; }
+            main, a, a.is-copy-confirmed::after { animation: none; }
+            a.is-copy-confirmed::after { opacity: .92; transform: rotate(45deg) scale(1); }
           }
         </style>
       </head>
-      <body><main role="menu" aria-label="${escapeHtml(ariaLabel)}">${links}</main></body>
+      <body tabindex="-1"><main role="menu" aria-label="${escapeHtml(ariaLabel)}">${links}</main></body>
     </html>`;
-  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+  return html;
 }
 
-function showWebContextMenu({ actions, ariaLabel, items, params, window }) {
+function showWebContextMenu({ actions, ariaLabel, contentOffset = browserBounds, items, params, window }) {
   webContextMenuWindow?.close();
-  const initialWidth = 360;
-  const separatorCount = items.filter((item) => item.separatorBefore).length;
-  const height = items.length * 35 + separatorCount * 9 + 28;
+  const initialWidth = 480;
+  const initialHeight = 360;
   const parentBounds = window.getContentBounds();
   const point = {
-    x: parentBounds.x + browserBounds.x + params.x,
-    y: parentBounds.y + browserBounds.y + params.y,
+    x: parentBounds.x + contentOffset.x + params.x,
+    y: parentBounds.y + contentOffset.y + params.y,
   };
   const workArea = screen.getDisplayNearestPoint(point).workArea;
   const popup = new BrowserWindow({
     parent: window,
     width: initialWidth,
-    height,
+    height: initialHeight,
     x: Math.min(Math.max(point.x, workArea.x + 8), workArea.x + workArea.width - initialWidth - 8),
-    y: Math.min(Math.max(point.y, workArea.y + 8), workArea.y + workArea.height - height - 8),
+    y: Math.min(Math.max(point.y, workArea.y + 8), workArea.y + workArea.height - initialHeight - 8),
     frame: false,
     hasShadow: false,
     opacity: 1,
     resizable: false,
-    roundedCorners: true,
+    roundedCorners: false,
     show: false,
     skipTaskbar: true,
     transparent: true,
@@ -664,22 +751,44 @@ function showWebContextMenu({ actions, ariaLabel, items, params, window }) {
     event.preventDefault();
     let action = "";
     try { action = new URL(url).hostname; } catch { action = ""; }
-    popup.close();
     actions[action]?.();
+    if (copyFeedbackContextActions.has(action)) {
+      void popup.webContents.executeJavaScript(`
+        document.querySelector('[data-action=${JSON.stringify(action)}]')?.classList.add('is-copy-confirmed')
+      `).catch(() => {});
+      setTimeout(() => {
+        if (!popup.isDestroyed()) popup.close();
+      }, 480);
+      return;
+    }
+    popup.close();
   });
   popup.webContents.on("before-input-event", (_event, input) => {
     if (input.type === "keyDown" && input.key === "Escape") popup.close();
   });
-  popup.on("blur", () => popup.close());
+  const closeFromParentFocus = () => {
+    if (!popup.isDestroyed()) popup.close();
+  };
   popup.on("closed", () => {
+    window.removeListener("focus", closeFromParentFocus);
     if (webContextMenuWindow === popup) webContextMenuWindow = undefined;
   });
-  popup.loadURL(createWebContextMenuPageUrl(items, ariaLabel))
+  const menuDocumentPath = path.join(app.getPath("temp"), "brizo-context-menu.html");
+  writeFile(menuDocumentPath, createWebContextMenuPageHtml(items, ariaLabel), "utf8")
+    .then(() => popup.loadFile(menuDocumentPath))
     .then(async () => {
-      const measuredWidth = await popup.webContents.executeJavaScript(
-        'Math.ceil(document.documentElement.scrollWidth || document.body.scrollWidth || 0)',
+      const measuredSize = await popup.webContents.executeJavaScript(`(() => ({
+        width: Math.ceil(document.body.offsetWidth || document.body.scrollWidth || 0),
+        height: Math.ceil(document.body.offsetHeight || document.body.scrollHeight || 0),
+      }))()`);
+      const width = Math.min(
+        Math.max(120, workArea.width - 16),
+        Math.max(120, Number(measuredSize?.width) || 120),
       );
-      const width = Math.min(360, Math.max(96, Number(measuredWidth) || 96));
+      const height = Math.min(
+        Math.max(72, workArea.height - 16),
+        Math.max(72, Number(measuredSize?.height) || 72),
+      );
       popup.setBounds({
         x: Math.min(Math.max(point.x, workArea.x + 8), workArea.x + workArea.width - width - 8),
         y: Math.min(Math.max(point.y, workArea.y + 8), workArea.y + workArea.height - height - 8),
@@ -687,6 +796,13 @@ function showWebContextMenu({ actions, ariaLabel, items, params, window }) {
         height,
       });
       popup.show();
+      popup.focus();
+      void popup.webContents.executeJavaScript(
+        "document.activeElement?.blur(); document.body.focus({ preventScroll: true })",
+      ).catch(() => {});
+      setTimeout(() => {
+        if (!popup.isDestroyed() && popup.isVisible()) window.once("focus", closeFromParentFocus);
+      }, 200);
     })
     .catch(() => popup.close());
 }
@@ -725,11 +841,12 @@ async function showTranslationBelowSelection(
       const style = document.createElement("style");
       style.textContent = ${safeScriptValue(`${menuTypographyCss()}
         .translation-card {
-          font-family: "Brizo Menu Latin", "Source Han Serif SC VF", "Source Han Serif SC", "思源宋体 VF", "思源宋体", serif;
+          font-family: "Brizo HarmonyOS Sans", "HarmonyOS Sans SC", sans-serif;
+          font-style: normal;
         }
         .translation-original {
           color: #6f776f;
-          font-style: italic;
+          font-style: normal;
         }
         .translation-result {
           margin-top: 8px;
@@ -786,7 +903,13 @@ async function translateSelectedText(webContents, selectedText) {
   );
 }
 
-function installWebContextMenus(webContents, window, onOpenInNewTab, onAskBrizo) {
+function installWebContextMenus(
+  webContents,
+  window,
+  onOpenInNewTab,
+  onAskBrizo,
+  contentOffset = browserBounds,
+) {
   webContents.on("context-menu", (event, params) => {
     const imageUrl = params.mediaType === "image"
       ? normalizeImageSourceUrl(params.srcURL)
@@ -798,20 +921,24 @@ function installWebContextMenus(webContents, window, onOpenInNewTab, onAskBrizo)
     let actions;
 
     if (imageUrl) {
-      items = imageContextMenuItems;
-      ariaLabel = "图片操作";
+      items = linkUrl ? imageLinkContextMenuItems : imageContextMenuItems;
+      ariaLabel = linkUrl ? "图片与链接操作" : "图片操作";
       actions = {
         open: () => onOpenInNewTab(imageUrl),
         download: () => webContents.downloadURL(imageUrl),
         "copy-image": () => webContents.copyImageAt(params.x, params.y),
         "copy-address": () => clipboard.writeText(imageUrl),
+        "copy-link": () => clipboard.writeText(linkUrl),
+        "open-link-tab": () => onOpenInNewTab(linkUrl),
+        "open-link-window": () => createBrowserLinkWindow(linkUrl),
       };
     } else if (linkUrl) {
       items = linkContextMenuItems;
       ariaLabel = "链接操作";
       actions = {
-        "open-link": () => onOpenInNewTab(linkUrl),
         "copy-link": () => clipboard.writeText(linkUrl),
+        "open-link-tab": () => onOpenInNewTab(linkUrl),
+        "open-link-window": () => createBrowserLinkWindow(linkUrl),
       };
     } else if (selectedText) {
       items = selectionContextMenuItems;
@@ -822,11 +949,21 @@ function installWebContextMenus(webContents, window, onOpenInNewTab, onAskBrizo)
         translate: () => { void translateSelectedText(webContents, selectedText); },
       };
     } else {
-      return;
+      const pageUrl = normalizeBrowserInput(params.pageURL || webContents.getURL());
+      items = pageContextMenuItems.filter((item) => item.action !== "back"
+        || webContents.navigationHistory.canGoBack());
+      ariaLabel = "网页操作";
+      actions = {
+        back: () => webContents.navigationHistory.goBack(),
+        reload: () => webContents.reload(),
+        "copy-page-address": () => {
+          if (pageUrl) clipboard.writeText(pageUrl);
+        },
+      };
     }
 
     event.preventDefault();
-    showWebContextMenu({ actions, ariaLabel, items, params, window });
+    showWebContextMenu({ actions, ariaLabel, contentOffset, items, params, window });
   });
 }
 
@@ -906,9 +1043,14 @@ async function getDownloadRecords() {
 }
 
 function publishDownloads() {
-  if (!downloadsWindow || downloadsWindow.isDestroyed()) return;
+  const hasDownloadsWindow = downloadsWindow && !downloadsWindow.isDestroyed();
+  const hasMainWindow = mainWindow && !mainWindow.isDestroyed();
+  if (!hasDownloadsWindow && !hasMainWindow) return;
   getDownloadRecords()
     .then((records) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("bean-browser:downloads", records);
+      }
       if (downloadsWindow && !downloadsWindow.isDestroyed()) {
         downloadsWindow.loadURL(createDownloadsPageUrl(records)).catch(() => {});
       }
@@ -990,7 +1132,7 @@ function createDownloadsPageUrl(records) {
           ${menuTypographyCss()}
           * { box-sizing: border-box; }
           html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #f0e8e2; }
-          body { border: 0; border-radius: 10px; background: #f0e8e2; color: #1d211e; font-family: "Brizo Menu Latin", "Source Han Serif SC VF", "Source Han Serif SC", "思源宋体 VF", "思源宋体", serif; -webkit-font-smoothing: antialiased; }
+          body { border: 0; border-radius: 10px; background: #f0e8e2; color: #1d211e; font-family: "Brizo HarmonyOS Sans", "HarmonyOS Sans SC", sans-serif; font-style: normal; -webkit-font-smoothing: antialiased; }
           header { height: 35px; margin-bottom: 3px; padding: 0 8px 0 12px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(134,141,135,.2); }
           header strong, header a { font-size: 13px; font-weight: 500; }
           header a { padding: 4px 7px; border-radius: 7px; color: #747c75; text-decoration: none; }
@@ -1175,8 +1317,10 @@ function trackDownload(item) {
   const recordReady = loadDownloadRecords().then(() => {
     downloadRecords = [record, ...downloadRecords.filter((entry) => entry.id !== record.id)].slice(0, 500);
   });
+  activeDownloads.set(record.id, { item, record, recordReady });
   const update = async (state) => {
     await recordReady;
+    if (record.state === state) return;
     record.state = state;
     await saveDownloadRecords();
     publishDownloads();
@@ -1191,14 +1335,77 @@ function trackDownload(item) {
   };
 
   item.on("updated", (_event, state) => {
-    if (state === "interrupted") void update("interrupted");
+    if (state === "interrupted") {
+      void update("interrupted");
+      return;
+    }
+    void update(item.isPaused() ? "paused" : "downloading");
   });
-  item.once("done", (_event, state) => { void update(state); });
+  item.once("done", (_event, state) => {
+    activeDownloads.delete(record.id);
+    void update(state);
+  });
 
   void recordReady.then(() => {
     void saveDownloadRecords();
     publishDownloads();
   });
+}
+
+async function openDownloadsDirectory() {
+  const directory = app.getPath("downloads");
+  const error = await shell.openPath(directory);
+  return { error, opened: !error };
+}
+
+async function setDownloadPaused(id, paused) {
+  const activeDownload = activeDownloads.get(String(id || ""));
+  if (!activeDownload) return { status: "unavailable" };
+  const { item, record, recordReady } = activeDownload;
+  if (item.isDestroyed?.()) return { status: "unavailable" };
+  if (paused) item.pause();
+  else item.resume();
+  await recordReady;
+  record.state = paused ? "paused" : "downloading";
+  await saveDownloadRecords();
+  publishDownloads();
+  return { status: record.state };
+}
+
+async function cancelDownload(id) {
+  const downloadId = String(id || "");
+  const activeDownload = activeDownloads.get(downloadId);
+  if (!activeDownload) return { status: "unavailable" };
+  activeDownload.item.cancel();
+  await activeDownload.recordReady;
+  activeDownloads.delete(downloadId);
+  downloadRecords = downloadRecords.filter((record) => record.id !== downloadId);
+  await saveDownloadRecords();
+  publishDownloads();
+  return { status: "cancelled" };
+}
+
+async function openDownloadedFile(id) {
+  await loadDownloadRecords();
+  const record = downloadRecords.find((entry) => entry.id === String(id || ""));
+  if (!record || record.state !== "completed") return { status: "unavailable" };
+  const error = await shell.openPath(record.savePath);
+  return { error, status: error ? "failed" : "opened" };
+}
+
+async function deleteDownloadedFile(id) {
+  const downloadId = String(id || "");
+  await loadDownloadRecords();
+  const record = downloadRecords.find((entry) => entry.id === downloadId);
+  if (!record) return { status: "unavailable" };
+  if (record.state === "completed" && existsSync(record.savePath)) {
+    await shell.trashItem(record.savePath);
+  }
+  downloadThumbnailCache.delete(record.savePath);
+  downloadRecords = downloadRecords.filter((entry) => entry.id !== downloadId);
+  await saveDownloadRecords();
+  publishDownloads();
+  return { status: "deleted" };
 }
 
 function isExampleLoadingUrl(url) {
@@ -1279,7 +1486,7 @@ async function writeBrowserErrorPage(failure) {
         <style>
           * { box-sizing: border-box; }
           html, body { width: 100%; height: 100%; margin: 0; background: #fff; }
-          body { overflow: hidden; color: #252a26; font-family: "Source Han Serif SC", "思源宋体", serif; -webkit-font-smoothing: antialiased; }
+          body { overflow: hidden; color: #252a26; font-family: "HarmonyOS Sans SC", sans-serif; font-style: normal; -webkit-font-smoothing: antialiased; }
           body::before { content: ""; position: fixed; inset: 0; background: url("${backgroundUrl}") center / cover no-repeat; opacity: .2; pointer-events: none; }
           main { position: absolute; z-index: 1; top: 50%; left: 50%; width: min(560px, calc(100% - 48px)); transform: translate(-50%, calc(-50% - 7.5vh)); text-align: center; }
           img { width: 116px; height: 116px; object-fit: contain; }
@@ -1314,6 +1521,35 @@ function isInternalBrowserErrorUrl(value) {
 function clearBrowserNavigationTimeout(view = browserView) {
   if (view?.__brizoNavigationTimeout) clearTimeout(view.__brizoNavigationTimeout);
   if (view) view.__brizoNavigationTimeout = undefined;
+}
+
+function navigationLogUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    for (const key of [...parsed.searchParams.keys()]) {
+      parsed.searchParams.set(key, "[redacted]");
+    }
+    return parsed.toString();
+  } catch {
+    return String(value || "").slice(0, 240);
+  }
+}
+
+function standardBrowserUserAgent(browserSession) {
+  const userAgent = browserSession?.getUserAgent?.() || "";
+  return userAgent
+    .replace(/\sElectron\/[^\s]+/gi, "")
+    .replace(/\sBrizo\/[^\s]+/gi, "")
+    .trim();
+}
+
+function logBrowserNavigation(eventName, view, url, details = {}) {
+  console.info("[browser-navigation]", eventName, {
+    tabId: view?.__brizoOwnerTabId || "",
+    generation: view?.__brizoNavigationGeneration ?? -1,
+    url: navigationLogUrl(url),
+    ...details,
+  });
 }
 
 function getLiveViewWebContents(view) {
@@ -1522,6 +1758,7 @@ function getBrowserState() {
       isPdf: false,
       isLoading: false,
       navigationPreview: "",
+      pagePreview: "",
       pageBackgroundColor,
       pageFaviconUrl,
       title: "",
@@ -1551,6 +1788,11 @@ function getBrowserState() {
     // late analytics/image request a site may keep open indefinitely.
     isLoading: Boolean(browserView.__brizoNavigationPending),
     navigationPreview: browserView.__brizoNavigationPreview || "",
+    // Keep the last compositor-confirmed page bitmap behind the native view.
+    // The native surface needs one uniform macOS radius for its real bottom
+    // corners; this underlay fills only the two top cut-outs, while the renderer
+    // host's bottom-only clip continues to expose the warm shell below.
+    pagePreview: browserView.__brizoLastPaintPreview || "",
     pageBackgroundColor,
     pageFaviconUrl,
     title: webContents.getTitle(),
@@ -1740,14 +1982,17 @@ function setBrowserViewVisible(visible) {
       && browserVisible
       && Boolean(view.__brizoNavigationPending);
     const frameView = view.__brizoFrameView;
-    const cornerMaskViews = view.__brizoCornerMaskViews || [];
     const layoutBounds = view.__brizoNavigationViewport || browserBounds;
     const frameTopOverlap = Math.min(browserContentBorderRadius, layoutBounds.y);
     const frameBounds = {
       x: Math.max(0, layoutBounds.x - browserFrameInset),
       y: layoutBounds.y - frameTopOverlap,
-      width: layoutBounds.width + browserFrameInset * 2,
-      height: layoutBounds.height + frameTopOverlap + browserFrameInset,
+      // The native frame may overlap the content on its left/top to preserve
+      // rounded clipping, but it must never cover the renderer-owned 6 px
+      // warm shell gutters on the right or bottom. Transparent native Views
+      // composite as gray under macOS vibrancy instead of revealing the CSS.
+      width: layoutBounds.width + browserFrameInset,
+      height: layoutBounds.height + frameTopOverlap,
     };
     const contentBounds = {
       x: browserFrameInset,
@@ -1755,25 +2000,8 @@ function setBrowserViewVisible(visible) {
       width: layoutBounds.width,
       height: layoutBounds.height,
     };
-    const frameWidth = layoutBounds.width + browserFrameInset * 2;
-    const cornerMaskY = frameTopOverlap + layoutBounds.height - browserContentBorderRadius;
-    const cornerMaskBounds = [
-      {
-        x: 0,
-        y: cornerMaskY,
-        width: browserCornerMaskSize,
-        height: browserCornerMaskSize,
-      },
-      {
-        x: Math.max(0, frameWidth - browserCornerMaskSize),
-        y: cornerMaskY,
-        width: browserCornerMaskSize,
-        height: browserCornerMaskSize,
-      },
-    ];
     const shouldShowFrame = isPaintReady || isPreparingReplacement;
     const snapshotVisible = isPreparingReplacement
-      && Boolean(view.__brizoNavigationPreview)
       && Boolean(view.__brizoSnapshotReady);
 
     // Keep every native webpage at its real viewport size while overlays or
@@ -1782,13 +2010,10 @@ function setBrowserViewVisible(visible) {
     webContents.setBackgroundThrottling(!(isSelected || (browserVisible && view.__brizoNavigationPending)));
     frameView?.setBounds(frameBounds);
     view.setBounds(contentBounds);
-    cornerMaskViews[0]?.setBounds(cornerMaskBounds[0]);
-    cornerMaskViews[1]?.setBounds(cornerMaskBounds[1]);
     view.__brizoSnapshotView?.setBounds(contentBounds);
 
     view.setVisible(shouldShowFrame);
     view.__brizoSnapshotView?.setVisible(snapshotVisible);
-    for (const maskView of cornerMaskViews) maskView.setVisible(shouldShowFrame);
     frameView?.setVisible(shouldShowFrame);
   }
 }
@@ -1840,31 +2065,6 @@ function meaningfulPaintPreview(image) {
   return "";
 }
 
-function createBrowserCornerMask(side) {
-  const maskView = new WebContentsView({
-    webPreferences: {
-      backgroundThrottling: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  const curve = side === "left"
-    ? "M .75 .75 L 0 .75 L 0 14 L 14 14 L 14 13.25 L 13.25 13.25 C 6.623 13.25 .75 7.377 .75 .75 Z"
-    : "M 13.25 .75 L 14 .75 L 14 14 L 0 14 L 0 13.25 L .75 13.25 C 7.377 13.25 13.25 7.377 13.25 .75 Z";
-  const html = `<!doctype html>
-    <meta charset="utf-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
-    <style>html,body{width:100%;height:100%;margin:0;overflow:hidden;background:transparent}svg{display:block;width:100%;height:100%}</style>
-    <svg viewBox="0 0 14 14" preserveAspectRatio="none" aria-hidden="true">
-      <path d="${curve}" fill="rgba(250,249,246,0.25)"/>
-    </svg>`;
-  maskView.setBackgroundColor("#00000000");
-  maskView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-  maskView.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => {});
-  return maskView;
-}
-
 async function prepareBrowserSnapshotOverlay(view, preview) {
   const overlayWebContents = getLiveViewWebContents(view?.__brizoSnapshotView);
   if (!overlayWebContents || !preview) return false;
@@ -1882,12 +2082,99 @@ async function prepareBrowserSnapshotOverlay(view, preview) {
   }
 }
 
-async function captureMeaningfulPreview(webContents) {
+async function prepareBrowserLoadingOverlay(view) {
+  const overlayWebContents = getLiveViewWebContents(view?.__brizoSnapshotView);
+  if (!overlayWebContents) return false;
+  const loadingPreview = "brizo-loading";
+  if (view.__brizoSnapshotPreview === loadingPreview && view.__brizoSnapshotReady) return true;
+  view.__brizoSnapshotPreview = loadingPreview;
+  view.__brizoSnapshotReady = false;
+  const html = `<!doctype html>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+    <style>
+      html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#fcfafa}
+      body{display:grid;place-items:center}
+      i{width:22px;height:22px;border:1px solid rgba(165,140,94,.22);border-top-color:#a58c5e;border-radius:50%;animation:spin .8s linear infinite}
+      @keyframes spin{to{transform:rotate(360deg)}}
+      @media(prefers-reduced-motion:reduce){i{animation:none;border-color:rgba(165,140,94,.5)}}
+    </style>
+    <i aria-label="网页加载中"></i>`;
+  try {
+    await overlayWebContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    if (view.__brizoSnapshotPreview !== loadingPreview || overlayWebContents.isDestroyed()) return false;
+    view.__brizoSnapshotReady = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function captureMeaningfulPreview(webContents, trustVisualPaint = false) {
   if (!webContents || webContents.isDestroyed()) return "";
   try {
-    return meaningfulPaintPreview(await webContents.capturePage());
+    const image = await webContents.capturePage();
+    const meaningfulPreview = meaningfulPaintPreview(image);
+    if (meaningfulPreview) return meaningfulPreview;
+    // Chromium's visual-paint event is a stronger signal than Brizo's generic
+    // near-white bitmap heuristic for sparse pages such as Bing results.
+    return trustVisualPaint && !image.isEmpty() ? image.toDataURL() : "";
   } catch {
     return "";
+  }
+}
+
+async function hasRenderablePageStructure(webContents) {
+  if (!webContents || webContents.isDestroyed()) return false;
+  try {
+    return Boolean(await webContents.executeJavaScript(`
+      (() => {
+        const body = document.body;
+        if (!body || document.readyState === "loading") return false;
+        const rect = body.getBoundingClientRect();
+        if (rect.width < 2 || rect.height < 2) return false;
+        const text = (body.innerText || "").trim();
+        const visibleContent = [...body.querySelectorAll(
+          "main, form, input, button, a[href], h1, h2, p, img, svg, canvas, video, iframe"
+        )].some((element) => {
+          const elementRect = element.getBoundingClientRect();
+          if (elementRect.width < 2 || elementRect.height < 2) return false;
+          const style = getComputedStyle(element);
+          return style.display !== "none"
+            && style.visibility !== "hidden"
+            && Number.parseFloat(style.opacity || "1") > 0.02;
+        });
+        return visibleContent && (
+          text.length >= 8
+          || Boolean(body.querySelector("img, svg, canvas, video, iframe"))
+        );
+      })()
+    `));
+  } catch {
+    return false;
+  }
+}
+
+async function waitForPageAnimationFrames(webContents, frameCount = 2) {
+  if (!webContents || webContents.isDestroyed()) return false;
+  try {
+    return Boolean(await webContents.executeJavaScript(`
+      new Promise((resolve) => {
+        let remaining = ${Math.max(1, Number(frameCount) || 1)};
+        const timeout = setTimeout(() => resolve(false), 750);
+        const next = () => {
+          remaining -= 1;
+          if (remaining <= 0) {
+            clearTimeout(timeout);
+            resolve(true);
+          }
+          else requestAnimationFrame(next);
+        };
+        requestAnimationFrame(next);
+      })
+    `));
+  } catch {
+    return false;
   }
 }
 
@@ -1896,20 +2183,59 @@ function revealBrowserViewAfterFirstFrame(view, navigationGeneration) {
   if (!webContents) return;
   if (view.__brizoRevealGeneration === navigationGeneration) return;
   view.__brizoRevealGeneration = navigationGeneration;
-  const waitForMeaningfulPaint = async () => {
-    const deadline = Date.now() + 4_000;
+  const waitForLivePageReady = async () => {
+    const deadline = Date.now() + 20_000;
+    let stableDomFrames = 0;
     while (!webContents.isDestroyed() && Date.now() < deadline) {
-      const preview = await captureMeaningfulPreview(webContents);
-      if (preview) return preview;
+      const visuallyPainted = view.__brizoVisualPaintGeneration === navigationGeneration;
+      const domLifecycleReady = view.__brizoDomReadyGeneration === navigationGeneration
+        || view.__brizoFinishedGeneration === navigationGeneration;
+      const renderableDom = domLifecycleReady && await hasRenderablePageStructure(webContents);
+      if (renderableDom) stableDomFrames += 1;
+      else stableDomFrames = 0;
+      if (visuallyPainted || renderableDom) {
+        await waitForPageAnimationFrames(webContents, 2);
+        const firstPaintPreview = await captureMeaningfulPreview(webContents, visuallyPainted);
+        if (!firstPaintPreview) {
+          // Some animation-heavy pages have a fully laid-out, visible DOM while
+          // an overlapping native loading surface prevents capturePage() from
+          // returning the live compositor bitmap. Two consecutive observations
+          // plus two page animation frames are sufficient to reveal that page;
+          // blank or hidden documents never satisfy hasRenderablePageStructure.
+          if (
+            stableDomFrames >= 2
+            && view.__brizoNavigationGeneration === navigationGeneration
+            && await hasRenderablePageStructure(webContents)
+          ) return "stable-renderable-dom-two-frames";
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          continue;
+        }
+        // A completed DOM is not the same thing as a compositor-ready page.
+        // Require a second real bitmap after another pair of page frames so a
+        // redirecting/search page cannot expose its blank or pre-layout frame.
+        await waitForPageAnimationFrames(webContents, 2);
+        const settledPaintPreview = await captureMeaningfulPreview(webContents, visuallyPainted);
+        if (
+          settledPaintPreview
+          && !webContents.isDestroyed()
+          && view.__brizoNavigationGeneration === navigationGeneration
+          && (visuallyPainted || await hasRenderablePageStructure(webContents))
+        ) {
+          view.__brizoLastPaintPreview = settledPaintPreview;
+          return visuallyPainted
+            ? "chromium-visual-paint-live-view"
+            : "finished-renderable-dom-two-painted-frames";
+        }
+      }
       await new Promise((resolve) => setTimeout(resolve, 80));
     }
     return "";
   };
-  // Verify actual incoming pixels instead of treating DOM readiness or a fixed
-  // delay as visual readiness. A timeout keeps the outgoing frame visible and
-  // routes to Brizo's error page rather than exposing an empty white canvas.
-  waitForMeaningfulPaint().then(async (paintPreview) => {
-    if (!paintPreview) return;
+  // The incoming WebContents is never captured while it is navigating. Chromium
+  // navigation/DOM/paint signals decide readiness; the snapshot is only an
+  // optional frozen image of the outgoing document.
+  waitForLivePageReady().then(async (readySignal) => {
+    if (!readySignal) return;
     if (mainWindow && !mainWindow.isDestroyed()) {
       try {
         await mainWindow.webContents.executeJavaScript(`
@@ -1923,15 +2249,13 @@ function revealBrowserViewAfterFirstFrame(view, navigationGeneration) {
       webContents.isDestroyed()
       || view.__brizoNavigationGeneration !== navigationGeneration
     ) return;
-    view.__brizoLastPaintPreview = paintPreview;
-    await prepareBrowserSnapshotOverlay(view, paintPreview);
-    if (
-      webContents.isDestroyed()
-      || view.__brizoNavigationGeneration !== navigationGeneration
-    ) return;
     view.__brizoContentReady = true;
     view.__brizoNavigationPending = false;
     view.__brizoNavigationPreview = "";
+    clearBrowserNavigationTimeout(view);
+    logBrowserNavigation("paint-ready", view, webContents.getURL(), {
+      signal: readySignal,
+    });
     if (browserView === view) {
       setBrowserViewVisible(browserVisible);
       publishBrowserState();
@@ -1978,7 +2302,8 @@ function beginBrowserNavigation(view, action) {
     view.__brizoContentReady = false;
     if (browserView === view) publishBrowserState();
     if (preview) await prepareBrowserSnapshotOverlay(view, preview);
-    if (preview && mainWindow && !mainWindow.isDestroyed()) {
+    else await prepareBrowserLoadingOverlay(view);
+    if (view.__brizoSnapshotReady && mainWindow && !mainWindow.isDestroyed()) {
       try {
         // Let React paint the frozen outgoing frame underneath the still-visible
         // native page before removing that native layer. This closes the single
@@ -2096,11 +2421,16 @@ function navigateBrowserUrl(url, ownerTabId, { pdfSource = "" } = {}) {
   targetView.__brizoRequestedUrl = url;
   targetView.__brizoError = "";
   targetView.__brizoErrorPageActive = false;
+  logBrowserNavigation("requested", targetView, url);
   return beginBrowserNavigation(targetView, () => {
     const targetWebContents = getLiveViewWebContents(targetView);
     if (!targetWebContents) return;
     targetView.__brizoNavigationTimeout = setTimeout(() => {
       if (targetWebContents.isDestroyed() || targetView.__brizoErrorPageActive) return;
+      logBrowserNavigation("timeout", targetView, url, {
+        currentUrl: navigationLogUrl(targetWebContents.getURL()),
+        contentReady: Boolean(targetView.__brizoContentReady),
+      });
       targetWebContents.stop();
       if (browserView === targetView) void showBrowserErrorPage({ errorCode: -118, url });
       else targetView.__brizoError = "TIMEOUT · 连接超时";
@@ -2111,6 +2441,144 @@ function navigateBrowserUrl(url, ownerTabId, { pdfSource = "" } = {}) {
       }
     });
   });
+}
+
+function createBrowserLinkWindow(input) {
+  const url = normalizeBrowserInput(input);
+  if (!url) return null;
+  const window = new BrowserWindow({
+    title: "Brizo",
+    icon: appIconPath,
+    width: 1280,
+    height: 840,
+    minWidth: 520,
+    minHeight: 360,
+    show: false,
+    backgroundColor: "#f1e7e1",
+    titleBarStyle: "hiddenInset",
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      preload: incognitoPreloadEntry,
+      sandbox: true,
+    },
+  });
+  const view = new WebContentsView({
+    webPreferences: {
+      backgroundThrottling: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition: "persist:bean-browser",
+      plugins: true,
+      sandbox: true,
+    },
+  });
+  const context = { mode: "link", view, window };
+  const shellWebContentsId = window.webContents.id;
+  const viewWebContentsId = view.webContents.id;
+  linkBrowserWindows.add(window);
+  incognitoContexts.set(shellWebContentsId, context);
+  view.webContents.once("destroyed", () => scrollbarCssKeys.delete(viewWebContentsId));
+  window.contentView.addChildView(view);
+  view.setBackgroundColor("#ffffff");
+  applyBrowserPageZoomPolicy(view);
+  const compatibleUserAgent = standardBrowserUserAgent(view.webContents.session);
+  if (compatibleUserAgent) view.webContents.setUserAgent(compatibleUserAgent);
+
+  const updateBounds = () => {
+    if (window.isDestroyed()) return;
+    const bounds = window.getContentBounds();
+    view.setBounds({
+      x: 0,
+      y: 86,
+      width: Math.max(1, bounds.width),
+      height: Math.max(1, bounds.height - 86),
+    });
+  };
+  const publishState = () => {
+    const webContents = getLiveViewWebContents(view);
+    if (window.isDestroyed() || !webContents) return;
+    const { navigationHistory } = webContents;
+    window.webContents.send("bean-incognito:state", {
+      canGoBack: navigationHistory.canGoBack(),
+      canGoForward: navigationHistory.canGoForward(),
+      isLoading: webContents.isLoading(),
+      mode: "link",
+      title: webContents.getTitle(),
+      url: webContents.getURL(),
+    });
+  };
+  const navigate = (value) => {
+    const nextUrl = normalizeBrowserInput(value);
+    if (!nextUrl) return false;
+    loadBrowserUrl(view.webContents, nextUrl).catch(() => {});
+    return true;
+  };
+
+  context.navigate = navigate;
+  const browserSession = view.webContents.session;
+  browserSession.setPermissionCheckHandler(() => false);
+  browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
+    callback(false);
+  });
+  view.webContents.setWindowOpenHandler(({ url: nextUrl }) => {
+    if (nextUrl) createBrowserLinkWindow(nextUrl);
+    return { action: "deny" };
+  });
+  installWebContextMenus(
+    view.webContents,
+    window,
+    (imageUrl) => requestOpenUrlTab(imageUrl, { kind: "image" }),
+    (selectedText) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("bean-browser:ask-selection", selectedText);
+      }
+    },
+    { x: 0, y: 86 },
+  );
+  view.webContents.on("zoom-changed", (event) => {
+    event.preventDefault();
+    applyBrowserPageZoomPolicy(view);
+  });
+  view.webContents.on("before-input-event", (event, keyInput) => {
+    if (!isPageZoomShortcut(keyInput)) return;
+    event.preventDefault();
+    applyBrowserPageZoomPolicy(view);
+  });
+  view.webContents.on("did-navigate", () => applyBrowserPageZoomPolicy(view));
+  for (const eventName of [
+    "did-start-loading",
+    "did-stop-loading",
+    "did-navigate",
+    "did-navigate-in-page",
+    "page-title-updated",
+  ]) {
+    view.webContents.on(eventName, publishState);
+  }
+  view.webContents.on("did-finish-load", () => {
+    installPageScrollbarBehavior(view.webContents).catch(() => {});
+  });
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event, nextUrl) => {
+    if (!nextUrl.startsWith("file://")) event.preventDefault();
+  });
+  window.on("resize", updateBounds);
+  window.once("ready-to-show", () => {
+    if (!window.isDestroyed()) {
+      window.show();
+      window.focus();
+    }
+  });
+  window.on("closed", () => {
+    linkBrowserWindows.delete(window);
+    incognitoContexts.delete(shellWebContentsId);
+    getLiveViewWebContents(view)?.close();
+  });
+  window.webContents.once("did-finish-load", publishState);
+  window.loadFile(incognitoEntry, { query: { mode: "link" } });
+  updateBounds();
+  navigate(url);
+  return window;
 }
 
 function createIncognitoWindow(input, { show = !headlessTest } = {}) {
@@ -2268,14 +2736,19 @@ function createBrowserView(window, ownerTabId = "__default__") {
   view.__brizoLastPaintPreview = "";
   view.__brizoNavigationRequestGeneration = 0;
   view.__brizoRevealGeneration = -1;
+  view.__brizoVisualPaintGeneration = -1;
+  view.__brizoDomReadyGeneration = -1;
+  view.__brizoFinishedGeneration = -1;
+  view.__brizoPaintReadySignal = "";
   view.__brizoSnapshotPreview = "";
   view.__brizoSnapshotReady = false;
   view.__brizoOwnerTabId = ownerTabId;
   view.__brizoSleepTimer = undefined;
   view.__brizoFrameView = frameView;
-  view.__brizoCornerMaskViews = [];
   applyBrowserPageZoomPolicy(view);
   const createdWebContents = view.webContents;
+  const compatibleUserAgent = standardBrowserUserAgent(createdWebContents.session);
+  if (compatibleUserAgent) createdWebContents.setUserAgent(compatibleUserAgent);
   const viewWebContentsId = createdWebContents.id;
   createdWebContents.once("destroyed", () => {
     scrollbarCssKeys.delete(viewWebContentsId);
@@ -2293,13 +2766,13 @@ function createBrowserView(window, ownerTabId = "__default__") {
     const snapshotWebContents = getLiveViewWebContents(snapshotView);
     try { window.contentView.removeChildView(frameView); } catch {}
     snapshotWebContents?.close();
-    for (const maskView of view.__brizoCornerMaskViews || []) {
-      getLiveViewWebContents(maskView)?.close();
-    }
   });
   frameView.setBackgroundColor("#00000000");
-  frameView.setBorderRadius(browserContentBorderRadius);
   window.contentView.addChildView(frameView);
+  // Radius must live on each Chromium compositor surface itself. On macOS a
+  // child WebContentsView can bypass a rounded parent View during compositing,
+  // which leaves rectangular corner pixels even though the parent is rounded.
+  view.setBorderRadius(browserContentBorderRadius);
   frameView.addChildView(view);
   const snapshotView = new WebContentsView({
     webPreferences: {
@@ -2310,12 +2783,10 @@ function createBrowserView(window, ownerTabId = "__default__") {
     },
   });
   snapshotView.setBackgroundColor("#ffffff");
+  snapshotView.setBorderRadius(browserContentBorderRadius);
   snapshotView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
   frameView.addChildView(snapshotView);
   view.__brizoSnapshotView = snapshotView;
-  const cornerMaskViews = [createBrowserCornerMask("left"), createBrowserCornerMask("right")];
-  for (const maskView of cornerMaskViews) frameView.addChildView(maskView);
-  view.__brizoCornerMaskViews = cornerMaskViews;
   view.setBackgroundColor("#ffffff");
   setBrowserViewVisible(browserVisible);
 
@@ -2391,7 +2862,7 @@ function createBrowserView(window, ownerTabId = "__default__") {
     if (isLikelyPdfUrl(url)) {
       requestOpenPdfTab(url, { title: filenameForPdfSource(url) });
     } else {
-      navigateBrowser(url);
+      requestOpenUrlTab(url, { kind: "web" });
     }
     return { action: "deny" };
   });
@@ -2421,11 +2892,13 @@ function createBrowserView(window, ownerTabId = "__default__") {
     event.preventDefault();
     requestOpenPdfTab(url, { title: filenameForPdfSource(url) });
   });
-  view.webContents.on("did-start-navigation", (_event, _url, isSameDocument, isMainFrame) => {
+  view.webContents.on("did-start-navigation", (_event, url, isSameDocument, isMainFrame) => {
     if (!isMainFrame || isSameDocument) return;
     applyBrowserPageZoomPolicy(view);
     view.__brizoNavigationGeneration += 1;
     view.__brizoRevealGeneration = -1;
+    view.__brizoPaintReadySignal = "";
+    logBrowserNavigation("started", view, url);
     // Toolbar/history navigation has already installed a frozen outgoing frame.
     // Site links, script reloads and redirects reuse the last verified painted
     // frame so every main-frame transition follows the same no-white-screen path.
@@ -2444,8 +2917,16 @@ function createBrowserView(window, ownerTabId = "__default__") {
     pageFaviconUrl = "";
     publishBrowserState();
   });
+  view.webContents.on("did-first-visually-non-empty-paint", () => {
+    view.__brizoVisualPaintGeneration = view.__brizoNavigationGeneration;
+    logBrowserNavigation("first-visual-paint", view, view.webContents.getURL());
+    if (!view.__brizoContentReady && view.__brizoNavigationPending) {
+      revealBrowserViewAfterFirstFrame(view, view.__brizoNavigationGeneration);
+    }
+  });
   view.webContents.on("dom-ready", () => {
     applyBrowserPageZoomPolicy(view);
+    view.__brizoDomReadyGeneration = view.__brizoNavigationGeneration;
     if (view.__brizoIsPdf) {
       clearBrowserNavigationTimeout(view);
       view.__brizoContentReady = true;
@@ -2473,6 +2954,8 @@ function createBrowserView(window, ownerTabId = "__default__") {
     revealBrowserViewAfterFirstFrame(view, view.__brizoNavigationGeneration);
   });
   view.webContents.on("did-finish-load", () => {
+    view.__brizoFinishedGeneration = view.__brizoNavigationGeneration;
+    logBrowserNavigation("finished", view, view.webContents.getURL());
     clearBrowserNavigationTimeout(view);
     if (!view.__brizoContentReady) {
       revealBrowserViewAfterFirstFrame(view, view.__brizoNavigationGeneration);
@@ -2497,6 +2980,7 @@ function createBrowserView(window, ownerTabId = "__default__") {
   });
 
   view.webContents.on("did-navigate", async (_event, url, httpResponseCode) => {
+    logBrowserNavigation("committed", view, url, { httpResponseCode });
     applyBrowserPageZoomPolicy(view);
     if (view.__brizoIsPdf && view.__brizoPdfSource) {
       view.__brizoDisplayUrl = view.__brizoPdfSource;
@@ -2561,6 +3045,7 @@ function createBrowserView(window, ownerTabId = "__default__") {
     "did-fail-load",
     (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
       if (!isMainFrame || errorCode === -3) return;
+      logBrowserNavigation("failed", view, validatedUrl, { errorCode, errorDescription });
       if (browserView !== view) {
         view.__brizoError = `${errorDescription} (${errorCode})`;
         return;
@@ -2903,9 +3388,13 @@ function createBrowserView(window, ownerTabId = "__default__") {
           && extractedPdfReader.text.includes("extracts key points");
         result.pdfReaderToolbar = await mainWindow.webContents.executeJavaScript(`
           (() => {
-            const labels = Array.from(document.querySelectorAll(".browser-actions > .icon-button"))
-              .map((button) => button.getAttribute("aria-label"));
-            return labels.join("|") === "总结当前页面|Export clean article PDF"
+            const actions = document.querySelector(".browser-actions");
+            const bookmark = actions?.querySelector(".bookmark-control");
+            const pdf = actions?.querySelector(".pdf-export-button");
+            return Boolean(bookmark && pdf)
+              && Boolean(bookmark.compareDocumentPosition(pdf) & Node.DOCUMENT_POSITION_FOLLOWING)
+              && !actions.querySelector('[aria-label="总结当前页面"]')
+              && !actions.querySelector('[aria-label="BrowserSkill 浏览器命令"]')
               && !document.querySelector('[aria-label="打印 PDF"]');
           })()
         `);
@@ -3486,8 +3975,10 @@ async function runTaobaoPriceCommand({ activeWebContents, intent }) {
 }
 
 async function runBrowserCommandWithBoundModel(payload, options = {}) {
-  const activeWebContents = options.webContents || getLiveViewWebContents(browserView);
-  if (!activeWebContents || browserView?.__brizoIsPdf) {
+  const explicitWebContents = options.webContents;
+  const activeWebContents = explicitWebContents || getLiveViewWebContents(browserView);
+  const usesCurrentBrowserTab = !explicitWebContents;
+  if (!activeWebContents || activeWebContents.isDestroyed() || (usesCurrentBrowserTab && browserView?.__brizoIsPdf)) {
     return { status: "error", message: "请先打开一个普通网页，再运行浏览器命令。" };
   }
   const ctripIntent = options.webContents ? null : parseCtripFlightCommand(payload?.command);
@@ -3553,6 +4044,8 @@ async function runBrowserCommandWithBoundModel(payload, options = {}) {
             "只能使用快照中当前可见的 @eN 引用；页面变化后旧引用失效。先完成目标，确认已完成后立即 done，禁止成功后继续操作。",
             "快照中的 value 是控件当前值，历史中的 result 是动作结果。result 为 already-satisfied 时禁止重复同一动作；如果整个目标已满足必须立即 done，否则规划一个不同的必要动作。",
             "不要为了验证而重复填写、重复导航或重复点击。根据当前 URL、标题、页面文字、控件值和执行历史判断是否完成。",
+            "填写搜索框后，Brizo 会自动点击其右侧搜索键或按 Enter 提交；不要再次填写相同文字，也绝不能把设置、偏好或更多菜单当作搜索按钮反复点击。",
+            "遇到覆盖当前网页的登录或注册弹窗时，优先关闭或取消弹窗后继续原目标；禁止填写账号密码、尝试登录、绕过认证或把整页登录页面误当作弹窗关闭。",
             "不要索取、读取或泄露密码、Cookie、令牌和认证信息。不要绕过验证码、登录、系统确认或网站安全机制。",
             "对于付款、购买、发送、发布、删除、授权等有外部影响的动作，只有用户命令明确要求时才可规划；否则 done 并说明需要用户明确确认。",
             "JSON 格式固定为：{\"action\":\"click|fill|select|press|scroll|navigate|back|forward|reload|done\",\"ref\":\"@e1\",\"value\":\"\",\"url\":\"\",\"key\":\"Enter\",\"amount\":560,\"message\":\"\"}",
@@ -3702,13 +4195,14 @@ async function runBrowserCommandWithBoundModel(payload, options = {}) {
       onProgress: options.onProgress,
       planNextAction,
       signal: options.signal,
+      waitIfPaused: options.waitIfPaused,
       webContents: activeWebContents,
     });
   } catch (error) {
     return {
       status: "error",
       message: error?.name === "AbortError" || options.signal?.aborted
-        ? "BrowserSkill 已暂停并终止当前自动运行。"
+        ? "BrowserSkill 已停止当前自动运行。"
         : `浏览器命令执行失败：${error instanceof Error ? error.message : String(error)}`,
     };
   }
@@ -3836,6 +4330,19 @@ async function installEgoSpaceRunningEffect(webContents, sessionId = "") {
   `).catch(() => {});
 }
 
+async function setEgoSpaceRunningPaused(webContents, paused) {
+  if (!webContents || webContents.isDestroyed()) return;
+  await webContents.executeJavaScript(`
+    (() => {
+      const effect = document.getElementById("brizo-ego-space-running-effect");
+      if (!effect) return;
+      effect.querySelectorAll(".ego-space-base,.ego-space-wave").forEach((node) => {
+        node.style.animationPlayState = ${paused ? '"paused"' : '"running"'};
+      });
+    })()
+  `).catch(() => {});
+}
+
 async function organizeBrizoUseResult({ command, executionSummary, history, modelContext }) {
   const sourceSites = [...new Set((modelContext.sources || []).map((source) => {
     try {
@@ -3942,9 +4449,9 @@ async function runBrizoUseWithBoundModel(payload, onProgress) {
   }
   const sessionId = String(payload?.sessionId || `${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80);
   const partition = `brizo-use-${sessionId}-${Date.now()}`;
-  const runController = new AbortController();
+  const runControl = createBrizoUseRunControl();
   brizoUseControllers.get(sessionId)?.abort(new DOMException("Replaced", "AbortError"));
-  brizoUseControllers.set(sessionId, runController);
+  brizoUseControllers.set(sessionId, runControl);
   const view = new WebContentsView({
     webPreferences: {
       backgroundThrottling: false,
@@ -3968,7 +4475,11 @@ async function runBrizoUseWithBoundModel(payload, onProgress) {
     if (/^https?:/i.test(url)) void webContents.loadURL(url);
     return { action: "deny" };
   });
-  webContents.on("did-finish-load", () => { void installEgoSpaceRunningEffect(webContents, sessionId); });
+  webContents.on("did-finish-load", () => {
+    void installEgoSpaceRunningEffect(webContents, sessionId).then(() =>
+      setEgoSpaceRunningPaused(webContents, runControl.paused)
+    );
+  });
   const processSteps = [];
   const progress = (value) => {
     const event = typeof value === "string" ? {
@@ -3979,16 +4490,30 @@ async function runBrizoUseWithBoundModel(payload, onProgress) {
     if (event?.detail && processSteps.at(-1) !== event.detail) processSteps.push(event.detail);
     onProgress({ ...event, embeddedSandbox: true });
   };
+  runControl.setStateListener((paused) => {
+    void setEgoSpaceRunningPaused(webContents, paused);
+    progress({
+      detail: paused ? "BrowserSkill 已暂停" : "BrowserSkill 已继续",
+      paused,
+      title: webContents.isDestroyed() ? "" : webContents.getTitle(),
+      url: webContents.isDestroyed() ? "" : webContents.getURL(),
+    });
+  });
   try {
     progress("正在创建 Brizo 独立沙箱");
+    await runControl.waitIfPaused();
     await webContents.loadURL("https://www.bing.com/");
     await installEgoSpaceRunningEffect(webContents, sessionId);
+    await setEgoSpaceRunningPaused(webContents, runControl.paused);
+    await runControl.waitIfPaused();
     progress("Brizo 沙箱已创建");
     const result = await runBrowserCommandWithBoundModel(payload, {
       onProgress: progress,
-      signal: runController.signal,
+      signal: runControl.signal,
+      waitIfPaused: () => runControl.waitIfPaused(),
       webContents,
     });
+    await runControl.waitIfPaused();
     const url = webContents.isDestroyed() ? "" : webContents.getURL();
     const title = webContents.isDestroyed() ? "Brizo Use 结果" : webContents.getTitle();
     const finalSnapshot = result?.finalSnapshot || await snapshotBrowserPage(webContents).catch(() => null);
@@ -4005,12 +4530,15 @@ async function runBrizoUseWithBoundModel(payload, onProgress) {
       ? evidenceSources
       : (/^https?:/i.test(url) ? [{ title, url }] : []);
     const organizedMessage = result?.status === "success"
-      ? await organizeBrizoUseResult({
+      ? await (async () => {
+        await runControl.waitIfPaused();
+        return organizeBrizoUseResult({
         command: payload?.command,
         executionSummary: result.message,
         history: result.history || [],
         modelContext: { snapshot, sources },
-      })
+        });
+      })()
       : result?.message;
     return {
       ...result,
@@ -4029,132 +4557,10 @@ async function runBrizoUseWithBoundModel(payload, onProgress) {
       sources: [],
     };
   } finally {
-    if (brizoUseControllers.get(sessionId) === runController) brizoUseControllers.delete(sessionId);
+    if (brizoUseControllers.get(sessionId) === runControl) brizoUseControllers.delete(sessionId);
     brizoUseSandboxes.delete(sessionId);
     try { mainWindow.contentView.removeChildView(view); } catch {}
     if (!webContents.isDestroyed()) webContents.close();
-  }
-}
-
-async function askCurrentPageWithBoundModel(payload) {
-  const activeWebContents = getLiveViewWebContents(browserView);
-  if (!activeWebContents) {
-    return { status: "error", message: "当前没有可以提问的网页。" };
-  }
-  const isPdf = Boolean(browserView?.__brizoIsPdf && browserView.__brizoPdfSource);
-  const question = isPdf
-    ? "请提炼这份 PDF 的核心要点，直接给出最终结果。"
-    : "请快速总结当前页面，直接给出最终结果。";
-
-  const store = await readModelGuardStore();
-  const storedProvider = store.providers.find((provider) => provider.id === store.defaultId)
-    || store.providers[0];
-  const provider = withKnownProviderDefaults(storedProvider);
-  const apiKey = decryptModelKey(storedProvider);
-  if (!provider?.baseUrl || !apiKey) {
-    return { status: "error", message: "请先在“大模型护航”中绑定并选择默认 API。" };
-  }
-  const model = sortFastModels(provider.models || [], provider.name).find((candidate) =>
-    !/(reasoner|reasoning|thinking|(^|[/_.-])r1($|[/_.-])|(^|[/_.-])o[134]($|[/_.-]))/i.test(candidate)
-  ) || "";
-  if (!model) {
-    return {
-      status: "error",
-      message: "默认 API 中没有可用的快速非推理文本模型。",
-      providerLabel: provider.name || "默认 API",
-    };
-  }
-
-  try {
-    const page = isPdf
-      ? {}
-      : await activeWebContents.executeJavaScript(`
-        (() => {
-          const fullText = String(document.body?.innerText || "")
-            .replace(/[ \\t]+/g, " ")
-            .replace(/\\n{3,}/g, "\\n\\n")
-            .trim();
-          return {
-            text: fullText.slice(0, 48000),
-            textTruncated: fullText.length > 48000,
-            title: document.title || "",
-            url: location.href,
-          };
-        })()
-      `);
-    if (isPdf) {
-      const extracted = await extractPdfText(browserView.__brizoPdfSource, activeWebContents.session);
-      page.text = extracted.text;
-      page.textTruncated = extracted.textTruncated;
-      page.title = filenameForPdfSource(browserView.__brizoPdfSource);
-      page.url = browserView.__brizoPdfSource;
-      page.pageCount = extracted.pageCount;
-      page.processedPages = extracted.processedPages;
-    }
-    const pageContext = [
-      `用户问题：${question}`,
-      `${isPdf ? "PDF 文件" : "网页标题"}：${page.title || "未命名文档"}`,
-      `${isPdf ? "PDF 地址" : "网页地址"}：${page.url || browserDisplayUrl}`,
-      isPdf ? `PDF 页数：${page.pageCount}（已读取 ${page.processedPages} 页）` : "",
-      `${isPdf ? "PDF 文字" : "网页文字"}${page.textTruncated ? "（内容过长，已截取前 48000 个字符）" : ""}：\n${page.text || "文档没有可读取的文字；它可能是扫描件。"}`,
-    ].filter(Boolean).join("\n\n");
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 35_000);
-    try {
-      const response = await fetch(`${provider.baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: "system",
-              content: isPdf
-                ? "你是 Brizo 的 PDF 要点提炼助手。只根据提供的 PDF 提取文字，直接输出最终结果，不展示分析、推理、思考过程或模型说明。使用简洁中文，先用一段话给出核心结论，再列出 5 至 8 条关键要点，并标注可确认的页码；若文字缺失或来自扫描件，必须明确说明限制。不要声称看到了未提供的图片或图表。"
-                : "你是 Brizo 的网页快速总结助手。只根据提供的网页文字，直接输出最终总结，不展示分析、推理、思考过程或模型说明。使用简洁中文，先给核心结论，再列出不超过 5 条关键要点；不要声称看到了图片、图表或访问了未提供的外部信息。",
-            },
-            {
-              role: "user",
-              content: pageContext,
-            },
-          ],
-          max_tokens: 900,
-          stream: false,
-          temperature: 0.2,
-        }),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`模型接口返回 HTTP ${response.status}`);
-      const body = await response.json();
-      const message = readAssistantMessage(body);
-      if (!message) throw new Error("模型没有返回文字内容");
-      return {
-        message,
-        mode: isPdf ? "pdf" : "page",
-        modelLabel: model,
-        pageTitle: page.title || "当前网页",
-        pageUrl: page.url || browserDisplayUrl,
-        providerLabel: `${provider.name || "默认 API"} · ${isPdf ? "PDF 要点提炼" : "页面快速总结"}`,
-        status: "success",
-      };
-    } finally {
-      clearTimeout(timeout);
-    }
-  } catch (error) {
-    console.error("[summarize-current-page]", error instanceof Error ? error.message : String(error));
-    return {
-      status: "error",
-      message: error?.name === "AbortError"
-        ? `${isPdf ? "PDF 提炼" : "页面总结"}超时，请稍后再试。`
-        : `无法${isPdf ? "提炼当前 PDF" : "总结当前网页"}：${error.message}`,
-      providerLabel: provider.name || "默认 API",
-      modelLabel: model,
-    };
   }
 }
 
@@ -4299,6 +4705,71 @@ function registerBrowserIpc() {
     });
   });
 
+  ipcMain.handle("bean-browser:show-renderer-context-menu", (event, payload) => {
+    if (!isTrustedSender(event) || !mainWindow || mainWindow.isDestroyed()) return false;
+    const params = {
+      x: Math.max(0, Math.round(Number(payload?.x) || 0)),
+      y: Math.max(0, Math.round(Number(payload?.y) || 0)),
+    };
+    const imageUrl = normalizeImageSourceUrl(payload?.imageUrl);
+    const linkUrl = normalizeBrowserInput(payload?.linkUrl);
+    const selectedText = String(payload?.selectedText || "").trim().slice(0, 12_000);
+    let items;
+    let ariaLabel;
+    let actions;
+
+    if (imageUrl) {
+      items = linkUrl ? imageLinkContextMenuItems : imageContextMenuItems;
+      ariaLabel = linkUrl ? "图片与链接操作" : "图片操作";
+      actions = {
+        open: () => requestOpenUrlTab(imageUrl, { kind: "image" }),
+        download: () => event.sender.downloadURL(imageUrl),
+        "copy-image": () => event.sender.copyImageAt(params.x, params.y),
+        "copy-address": () => clipboard.writeText(imageUrl),
+        "copy-link": () => clipboard.writeText(linkUrl),
+        "open-link-tab": () => requestOpenUrlTab(linkUrl, { kind: "web" }),
+        "open-link-window": () => createBrowserLinkWindow(linkUrl),
+      };
+    } else if (linkUrl) {
+      items = linkContextMenuItems;
+      ariaLabel = "链接操作";
+      actions = {
+        "copy-link": () => clipboard.writeText(linkUrl),
+        "open-link-tab": () => requestOpenUrlTab(linkUrl, { kind: "web" }),
+        "open-link-window": () => createBrowserLinkWindow(linkUrl),
+      };
+    } else if (selectedText) {
+      items = selectionContextMenuItems;
+      ariaLabel = "文字操作";
+      actions = {
+        "copy-text": () => clipboard.writeText(selectedText),
+        "ask-brizo": () => mainWindow.webContents.send("bean-browser:ask-selection", selectedText),
+        translate: () => { void translateSelectedText(event.sender, selectedText); },
+      };
+    } else if (payload?.surface === "search-result") {
+      items = searchResultContextMenuItems;
+      ariaLabel = "搜索结果操作";
+      actions = {
+        "copy-search-result": () => mainWindow.webContents.send(
+          "bean-browser:renderer-context-action",
+          "copy-search-result",
+        ),
+      };
+    } else {
+      return false;
+    }
+
+    showWebContextMenu({
+      actions,
+      ariaLabel,
+      contentOffset: { x: 0, y: 0 },
+      items,
+      params,
+      window: mainWindow,
+    });
+    return true;
+  });
+
   ipcMain.handle("bean-browser:get-state", (event) =>
     isTrustedSender(event) ? getBrowserState() : null,
   );
@@ -4315,8 +4786,10 @@ function registerBrowserIpc() {
   });
   ipcMain.handle("bean-browser:close-tab-view", (event, tabId) => {
     if (!isTrustedSender(event) || typeof tabId !== "string") return false;
+    const useControl = brizoUseControllers.get(tabId);
+    useControl?.abort(new DOMException("Tab closed", "AbortError"));
     const view = browserViews.get(tabId);
-    if (!view) return false;
+    if (!view) return Boolean(useControl);
     const webContents = getLiveViewWebContents(view);
     browserViews.delete(tabId);
     if (view === browserView) browserView = undefined;
@@ -4345,6 +4818,21 @@ function registerBrowserIpc() {
   );
   ipcMain.handle("bean-browser:list-downloads", (event) =>
     isTrustedSender(event) ? getDownloadRecords() : [],
+  );
+  ipcMain.handle("bean-browser:open-downloads-directory", (event) =>
+    isTrustedSender(event) ? openDownloadsDirectory() : { opened: false },
+  );
+  ipcMain.handle("bean-browser:set-download-paused", (event, id, paused) =>
+    isTrustedSender(event) ? setDownloadPaused(id, Boolean(paused)) : { status: "unavailable" },
+  );
+  ipcMain.handle("bean-browser:cancel-download", (event, id) =>
+    isTrustedSender(event) ? cancelDownload(id) : { status: "unavailable" },
+  );
+  ipcMain.handle("bean-browser:open-downloaded-file", (event, id) =>
+    isTrustedSender(event) ? openDownloadedFile(id) : { status: "unavailable" },
+  );
+  ipcMain.handle("bean-browser:delete-downloaded-file", (event, id) =>
+    isTrustedSender(event) ? deleteDownloadedFile(id) : { status: "unavailable" },
   );
   ipcMain.handle("bean-browser:toggle-downloads", (event, anchorBounds) =>
     isTrustedSender(event) ? toggleDownloadsWindow(anchorBounds) : { open: false },
@@ -4465,18 +4953,6 @@ function registerBrowserIpc() {
     if (!isTrustedSender(event)) return { mutedTopicIds: [], pinnedTopicIds: [], reducedTopicIds: [] };
     return await briefService.savePreferences(payload || {});
   });
-  ipcMain.handle("bean-browser:ask-current-page", async (event, payload) => {
-    if (!isTrustedSender(event)) {
-      return { status: "error", message: "页面提问请求未获授权。" };
-    }
-    return await askCurrentPageWithBoundModel(payload);
-  });
-  ipcMain.handle("bean-browser:run-browser-command", async (event, payload) => {
-    if (!isTrustedSender(event)) {
-      return { status: "error", message: "浏览器控制请求未获授权。" };
-    }
-    return await runBrowserCommandWithBoundModel(payload);
-  });
   ipcMain.handle("bean-browser:run-brizo-use-command", async (event, payload) => {
     if (!isTrustedSender(event)) {
       return { status: "error", message: "Use 浏览器控制请求未获授权。" };
@@ -4494,10 +4970,14 @@ function registerBrowserIpc() {
   ipcMain.handle("bean-browser:pause-brizo-use-command", (event, sessionId) => {
     if (!isTrustedSender(event)) return false;
     const key = String(sessionId || "");
-    const controller = brizoUseControllers.get(key);
-    if (!controller) return false;
-    controller.abort(new DOMException("Paused by user", "AbortError"));
-    return true;
+    const control = brizoUseControllers.get(key);
+    return control?.pause() || false;
+  });
+  ipcMain.handle("bean-browser:resume-brizo-use-command", (event, sessionId) => {
+    if (!isTrustedSender(event)) return false;
+    const key = String(sessionId || "");
+    const control = brizoUseControllers.get(key);
+    return control?.resume() || false;
   });
   ipcMain.handle("bean-browser:suggest-queries", async (event, input) =>
     isTrustedSender(event) ? await fetchSearchSuggestions(input) : [],
@@ -4817,8 +5297,6 @@ function createWindow() {
     transparent: true,
     ...(process.platform === "darwin" ? {
       titleBarStyle: "hidden",
-      vibrancy: "under-window",
-      visualEffectState: "active",
       trafficLightPosition: {
         x: initialWindowWidth - windowButtonRightInset,
         y: windowButtonTopInset,
@@ -4832,9 +5310,10 @@ function createWindow() {
     },
   });
 
-  // Electron 43 renders BrowserWindow web contents through a BaseWindow
-  // content View. That intermediate View is opaque by default, so transparent
-  // renderer pixels otherwise flatten to white before reaching macOS vibrancy.
+  // Keep every native layer behind the renderer transparent. The visible
+  // application silhouette is owned by the 22 px rounded `.app-shell`; an
+  // under-window vibrancy layer would reveal macOS's separate native curve in
+  // the renderer's transparent corner pixels and produce two mismatched arcs.
   window.setBackgroundColor("#00000000");
   window.contentView.setBackgroundColor("#00000000");
 
@@ -4850,6 +5329,21 @@ function createWindow() {
   positionMacWindowButtons();
   window.on("resize", positionMacWindowButtons);
   window.on("focus", () => { briefService.maybeGenerateCurrent().catch(() => {}); });
+  window.on("close", (event) => {
+    console.info("[window-close]", {
+      activeSearches: activeSearchControllers.size,
+      appQuitRequested,
+    });
+  });
+  window.webContents.on("render-process-gone", (_event, details) => {
+    console.error("[renderer-process-gone]", {
+      exitCode: details.exitCode,
+      reason: details.reason,
+    });
+  });
+  window.webContents.on("unresponsive", () => {
+    console.error("[renderer-unresponsive]");
+  });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, url) => {
     if (!url.startsWith("file://")) event.preventDefault();
@@ -5083,28 +5577,6 @@ function createWindow() {
           })()
         `);
 
-        result.pageAskTool = await window.webContents.executeJavaScript(`
-          (() => {
-            const trigger = document.querySelector('[aria-label="总结当前页面"]');
-            const disabledOnNewTab = Boolean(trigger?.disabled);
-            const fixture = document.createElement('div');
-            fixture.className = 'settings-dialog-content';
-            fixture.style.cssText = 'position:fixed;left:-10000px;top:0;width:520px';
-            fixture.innerHTML = '<form class="page-ask-form">'
-              + '<article class="page-ask-answer"><div class="new-tab-answer-bullet"><span>•</span><p><strong>要点：</strong>'
-              + '这是一段用于验证页面回答不会横向溢出的超长中文内容'.repeat(80)
-              + '</p></div></article>'
-              + '<div class="settings-dialog-actions"><button>关闭</button></div>'
-              + '</form>';
-            document.body.appendChild(fixture);
-            const form = fixture.querySelector('.page-ask-form');
-            const fits = form.scrollWidth <= form.clientWidth + 1
-              && fixture.scrollWidth <= fixture.clientWidth + 1;
-            fixture.remove();
-            return { available: Boolean(trigger), disabledOnNewTab, fits };
-          })()
-        `);
-
         result.macWindowButtonsRightAligned = process.platform !== "darwin" || (() => {
           const position = window.getWindowButtonPosition();
           return Boolean(
@@ -5192,7 +5664,7 @@ function createWindow() {
         `);
         const passed =
           result.title === "Brizo" &&
-          result.uiFontFamily.includes("Brizo EB Garamond") &&
+          result.uiFontFamily.includes("Brizo HarmonyOS Sans") &&
           result.hasRoot &&
           result.hasApp &&
           result.brandAssetsLoaded &&
@@ -5222,9 +5694,6 @@ function createWindow() {
           result.tabListDragRegion &&
           result.tabNoDragRegion &&
           result.toolbarDragRegion &&
-          result.pageAskTool.available &&
-          result.pageAskTool.disabledOnNewTab &&
-          result.pageAskTool.fits &&
           result.legacyTopTabControlsRemoved &&
           result.macWindowButtonsRightAligned &&
           result.newTabDefault.addressPlaceholder === "搜索或输入网址" &&

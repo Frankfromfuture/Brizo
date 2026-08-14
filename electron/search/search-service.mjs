@@ -3,6 +3,7 @@ import {
   mapWithConcurrency,
   matchesRequestedLanguage,
   safeText,
+  tokenSimilarity,
 } from "../../shared/search-text.mjs";
 import { FRESHNESS_TO_BOCHA } from "./bocha-client.mjs";
 import { fuseResults, isEntityOfficialSource, sourceAuthorityTier } from "./fusion.mjs";
@@ -12,6 +13,9 @@ const DEPTH_SCRAPE_COUNT = { fast: 0, balanced: 3, deep: 7 };
 const TRUSTED_ENTITY_IMAGE_DOMAINS = new Set([
   "wikimedia.org", "wikipedia.org", "britannica.com", "loc.gov",
   "si.edu", "metmuseum.org", "nationalgeographic.com",
+]);
+const COMMUNITY_ENTITY_IMAGE_DOMAINS = new Set([
+  "zhihu.com", "bilibili.com", "toutiao.com", "xiaohongshu.com", "weibo.com",
 ]);
 const INVALID_ENTITY_IMAGE_HINTS = /(?:二维码|qr(?:[-_ ]?code)?|barcode|条码|captcha|验证码|screenshot|截图|placeholder|占位|not[-_ ]?found|404|error|错误|sprite|icon|图标|avatar|头像|logo|标志|banner|横幅|watermark|水印)/iu;
 
@@ -25,6 +29,54 @@ function normalizedEntityText(value) {
   return safeText(value, 300).toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
+function entityNameMatches(title, entity) {
+  const entityKey = normalizedEntityText(entity?.name);
+  const titleKey = normalizedEntityText(title);
+  if (!entityKey || !titleKey) return false;
+  if (titleKey.includes(entityKey)) return true;
+  // Search engines often correct one mistyped Han character or return a
+  // simplified/traditional name variant. For a person only, two matching name
+  // bigrams out of three is strong enough when the source itself is trusted.
+  return entity?.kind === "person" && tokenSimilarity(title, entity.name) >= 0.66;
+}
+
+function confirmedPersonAliases(entity, ranked) {
+  if (entity?.kind !== "person") return new Map();
+  const entityKey = normalizedEntityText(entity?.name);
+  if (entityKey.length < 3 || entityKey.length > 8) return new Map();
+  const occurrences = new Map();
+  for (const source of Array.isArray(ranked) ? ranked : []) {
+    const domain = safeText(source?.domain, 240);
+    if (!domain) continue;
+    const text = `${source?.title || ""} ${source?.summary || source?.snippet || ""}`;
+    for (const sequence of text.match(/[\p{Script=Han}]{3,}/gu) || []) {
+      for (let offset = 0; offset <= sequence.length - entityKey.length; offset += 1) {
+        const alias = sequence.slice(offset, offset + entityKey.length);
+        const sameEnding = alias.slice(-2) === entityKey.slice(-2);
+        if (!sameEnding && tokenSimilarity(alias, entity.name) < 0.5) continue;
+        if (!occurrences.has(alias)) occurrences.set(alias, new Set());
+        occurrences.get(alias).add(domain);
+      }
+    }
+  }
+  return new Map([...occurrences].filter(([, domains]) => domains.size >= 2));
+}
+
+function resolveEntityKind(entity, query, ranked) {
+  if (!entity || entity.kind !== "concept") return entity;
+  const queryKey = normalizedEntityText(query);
+  if (!/^[\p{Script=Han}]{2,8}$/u.test(queryKey)) return entity;
+  const personSignals = /(?:演员|歌手|艺人|导演|主持人|运动员|作家|画家|科学家|企业家|政治家|出生|生于|履历|生平|主演|出道|事务所|女優|俳優|artist|actor|actress|born|biography)/iu;
+  const confirmingDomains = new Set();
+  for (const source of Array.isArray(ranked) ? ranked : []) {
+    const evidence = `${source?.title || ""} ${source?.summary || source?.snippet || ""}`;
+    if (personSignals.test(evidence) && source?.domain) confirmingDomains.add(source.domain);
+  }
+  return confirmingDomains.size >= 2
+    ? { ...entity, kind: "person", confidence: Math.max(0.78, Number(entity.confidence) || 0) }
+    : entity;
+}
+
 export function isEntityVisualEligible(entity) {
   return Boolean(
     safeText(entity?.name, 100)
@@ -35,34 +87,41 @@ export function isEntityVisualEligible(entity) {
 
 export function selectEntityImages(items, { entity, query, ranked = [] } = {}) {
   if (!isEntityVisualEligible(entity)) return [];
-  const entityKey = normalizedEntityText(entity.name);
+  const confirmedAliases = confirmedPersonAliases(entity, ranked);
   const officialDomains = ranked
     .filter((source) => sourceAuthorityTier(source, query || entity.name) === 0)
     .map((source) => source.domain)
     .filter(Boolean);
   const seen = new Set();
+  const seenPages = new Set();
   return (Array.isArray(items) ? items : [])
     .map((item, index) => {
       const imageUrl = safeText(item?.imageUrl || item?.thumbnailUrl, 4_000);
       const url = safeText(item?.url, 4_000);
       const domain = safeText(item?.domain, 240);
-      const titleKey = normalizedEntityText(`${item?.title || ""} ${item?.source || ""}`);
+      const pageKey = normalizedEntityText(item?.title || item?.url);
       const imageHint = `${item?.title || ""} ${item?.source || ""} ${item?.url || ""} ${item?.imageUrl || ""}`;
       const official = officialDomains.some((candidate) => domainMatches(domain, candidate));
       const institutional = sourceAuthorityTier(item, entity.name) === 0;
       const trustedReference = [...TRUSTED_ENTITY_IMAGE_DOMAINS].some((candidate) => domainMatches(domain, candidate));
       const authoritativeMedia = sourceAuthorityTier(item, entity.name) === 1;
-      const namesEntity = Boolean(entityKey && titleKey.includes(entityKey));
+      const candidateText = normalizedEntityText(`${item?.title || ""} ${item?.source || ""}`);
+      const matchedAlias = [...confirmedAliases.keys()].find((alias) => candidateText.includes(alias));
+      const namesEntity = entityNameMatches(candidateText, entity) || Boolean(matchedAlias);
+      const corroboratedDomain = Boolean(matchedAlias
+        && [...confirmedAliases.get(matchedAlias)].some((candidate) => domainMatches(domain, candidate)));
       const usableSize = !(Number(item?.width) > 0 && Number(item?.width) < 240)
         && !(Number(item?.height) > 0 && Number(item?.height) < 140)
         && (!(Number(item?.width) > 0 && Number(item?.height) > 0)
           || (Number(item.width) / Number(item.height) <= 4 && Number(item.width) / Number(item.height) >= 0.25));
       if (!/^https?:\/\//i.test(imageUrl) || !/^https?:\/\//i.test(url) || !usableSize) return null;
       if (INVALID_ENTITY_IMAGE_HINTS.test(imageHint) || /\.(?:svg|ico)(?:[?#]|$)/iu.test(imageUrl)) return null;
-      if (!official && !(namesEntity && (institutional || trustedReference || authoritativeMedia))) return null;
+      if ([...COMMUNITY_ENTITY_IMAGE_DOMAINS].some((candidate) => domainMatches(domain, candidate))) return null;
+      if (!official && !(namesEntity && (institutional || trustedReference || authoritativeMedia || corroboratedDomain))) return null;
       const key = imageUrl.replace(/[?#].*$/, "");
-      if (seen.has(key)) return null;
+      if (seen.has(key) || (pageKey && seenPages.has(pageKey))) return null;
       seen.add(key);
+      if (pageKey) seenPages.add(pageKey);
       return {
         title: safeText(item?.title || entity.name, 180),
         imageUrl,
@@ -70,8 +129,8 @@ export function selectEntityImages(items, { entity, query, ranked = [] } = {}) {
         url,
         domain,
         source: safeText(item?.source || domain, 120),
-        authority: official ? "official" : institutional || trustedReference ? "reference" : "media",
-        score: (official ? 100 : institutional ? 82 : trustedReference ? 72 : 52)
+        authority: official ? "official" : institutional || trustedReference || corroboratedDomain ? "reference" : "media",
+        score: (official ? 100 : institutional ? 82 : trustedReference ? 72 : corroboratedDomain ? 64 : 52)
           + (namesEntity ? 16 : 0)
           + (Number(item?.width) >= 800 ? 4 : 0)
           - index * 0.01,
@@ -122,6 +181,12 @@ export async function validateEntityImages(items, { signal } = {}) {
 
 function entityImageQuery(entity, language) {
   if (!isEntityVisualEligible(entity)) return "";
+  if (entity.kind === "person") {
+    if (language === "zh") return `${entity.name} 人物 照片`;
+    if (language === "ja") return `${entity.name} 人物 写真`;
+    if (language === "ko") return `${entity.name} 인물 사진`;
+    return `${entity.name} portrait photo`;
+  }
   if (language === "zh") return `${entity.name} 官方 图片`;
   if (language === "ja") return `${entity.name} 公式 画像`;
   if (language === "ko") return `${entity.name} 공식 이미지`;
@@ -348,12 +413,22 @@ export function createSearchService({
       }).map((result, index) => ({ ...result, displayRank: index }));
       if (!ranked.length) throw new Error("没有找到可用于回答的真实网页结果。");
 
-      const selectedEntityImages = selectEntityImages([
+      const resolvedVisualEntity = resolveEntityKind(visualEntity, query, ranked);
+
+      const rawEntityImages = [
         ...await entityImagesPromise,
         ...(bochaResult?.images || []),
-      ], { entity: visualEntity, query, ranked });
+      ];
+      const selectedEntityImages = selectEntityImages(rawEntityImages, { entity: resolvedVisualEntity, query, ranked });
       const entityImages = await validateEntityImages(selectedEntityImages, { signal });
-      if (entityImages.length) emit({ type: "entity-images", entity: visualEntity, images: entityImages });
+      logger.info?.("[search-entity-images]", {
+        entityKind: resolvedVisualEntity?.kind || "none",
+        eligible: Boolean(resolvedVisualEntity),
+        candidates: rawEntityImages.length,
+        selected: selectedEntityImages.length,
+        readable: entityImages.length,
+      });
+      if (entityImages.length) emit({ type: "entity-images", entity: resolvedVisualEntity, images: entityImages });
 
       const cards = [];
       if (serperConfigured && plan.vertical !== "web") {
@@ -461,7 +536,7 @@ export function createSearchService({
         message: cleanedAnswer,
         sources,
         relatedQuestions,
-        visualEntity,
+        visualEntity: resolvedVisualEntity,
         entityImages,
         cards,
         depth: plan.depth,

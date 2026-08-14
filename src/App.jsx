@@ -10,6 +10,7 @@ import {
   ArrowBendDownLeft,
   ArrowLeft,
   ArrowRight,
+  ArrowSquareOut,
   ArrowUp,
   ArrowsOut,
   ArrowsClockwise,
@@ -18,7 +19,6 @@ import {
   Brain,
   Browsers,
   Camera,
-  ChatCircleDots,
   CaretDown,
   CaretLeft,
   CaretUp,
@@ -50,6 +50,7 @@ import {
   NewspaperClipping,
   Paperclip,
   Pause,
+  Play,
   PencilSimple,
   Plus,
   PuzzlePiece,
@@ -60,25 +61,31 @@ import {
   Sparkle,
   Square,
   SquaresFour,
-  TerminalWindow,
   UploadSimple,
   UserCircle,
   Trash,
   X,
 } from "@phosphor-icons/react";
 import { BorderBeam } from "border-beam";
+import { ArrowLeftIcon } from "./components/remocn/icon-arrow-left";
+import { ArrowRightIcon } from "./components/remocn/icon-arrow-right";
+import { BookmarkIcon } from "./components/remocn/icon-bookmark";
+import { DownloadIcon } from "./components/remocn/icon-download";
+import { FileTextIcon } from "./components/remocn/icon-file-text";
+import { MoreHorizontalIcon } from "./components/remocn/icon-more-horizontal";
+import { PlusIcon } from "./components/remocn/icon-plus";
+import { RefreshCwIcon } from "./components/remocn/icon-refresh-cw";
+import { SparklesIcon } from "./components/remocn/icon-sparkles";
+import { SoftBlurIn } from "./components/remocn/soft-blur-in";
+import { NewTabParticleBackground } from "./components/NewTabParticleBackground";
 import browserErrorBackgroundUrl from "../404.png";
 import brizoLogoUrl from "../hermes logo.svg";
 import brizoWordmarkUrl from "../logo brizo.png";
 import modelGuardIconUrl from "../hermes logo.svg";
 import errorTabIconUrl from "./anchor.svg";
 import newTabIconUrl from "./compass-alt.svg";
-import bookmarkIconUrl from "./icons/bookmark.svg";
-import bookmarkAddedIconUrl from "./icons/bookmark-added.svg";
 import downloadIconUrl from "./icons/download.svg";
-import newTabPlusIconUrl from "./icons/new-tab-plus.svg";
 import refreshIconUrl from "./icons/refresh.svg";
-import settingsMoreIconUrl from "./icons/settings-more.svg";
 import {
   getDefaultBookmarkFaviconUrl,
   normalizeImportedBookmark,
@@ -441,7 +448,7 @@ function Logo() {
   );
 }
 
-function CitedAnswerText({ onOpenSource, sources, text }) {
+function CitedAnswerText({ onOpenSource, sources, streaming = false, text }) {
   const parts = String(text || "").split(/(\[\d+\]|\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)]+\))/g).filter(Boolean);
   return parts.map((part, index) => {
     const citation = part.match(/^\[(\d+)\]$/);
@@ -449,7 +456,8 @@ function CitedAnswerText({ onOpenSource, sources, text }) {
       const source = sources[Number(citation[1]) - 1];
       return source ? (
         <button
-          className="new-tab-inline-citation"
+          className={`new-tab-inline-citation${streaming ? " is-streaming" : ""}`}
+          data-context-url={source.url}
           key={`${part}-${index}`}
           type="button"
           aria-label={`打开来源 ${citation[1]}：${source.title || source.domain}`}
@@ -480,11 +488,12 @@ function CitedAnswerText({ onOpenSource, sources, text }) {
         </a>
       );
     }
+    if (streaming) return <span key={`${index}-stream`}>{part}</span>;
     return <span key={`${part}-${index}`}>{part}</span>;
   });
 }
 
-function SearchAnswer({ message, onOpenSource, sources }) {
+function SearchAnswer({ message, onOpenSource, sources, streaming = false }) {
   const blocks = useMemo(() => {
     const lines = String(message || "").split("\n")
       .map((line) => line.trim())
@@ -517,8 +526,8 @@ function SearchAnswer({ message, onOpenSource, sources }) {
       return (
         <div className="new-tab-answer-table-wrap" key={`table-${index}`}>
           <table>
-            <thead><tr>{block.headers.map((cell, cellIndex) => <th key={cellIndex}><CitedAnswerText text={cell} sources={sources} onOpenSource={onOpenSource} /></th>)}</tr></thead>
-            <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}><CitedAnswerText text={cell} sources={sources} onOpenSource={onOpenSource} /></td>)}</tr>)}</tbody>
+            <thead><tr>{block.headers.map((cell, cellIndex) => <th key={cellIndex}><CitedAnswerText text={cell} sources={sources} onOpenSource={onOpenSource} streaming={streaming} /></th>)}</tr></thead>
+            <tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}><CitedAnswerText text={cell} sources={sources} onOpenSource={onOpenSource} streaming={streaming} /></td>)}</tr>)}</tbody>
           </table>
         </div>
       );
@@ -529,17 +538,17 @@ function SearchAnswer({ message, onOpenSource, sources }) {
     }
     const heading = line.match(/^#{2,4}\s+(.+)$/);
     if (heading) {
-      return <h3 key={`${line}-${index}`}><CitedAnswerText text={heading[1]} sources={sources} onOpenSource={onOpenSource} /></h3>;
+      return <h3 key={`heading-${index}`}><CitedAnswerText text={heading[1]} sources={sources} onOpenSource={onOpenSource} streaming={streaming} /></h3>;
     }
     const bullet = line.match(/^[-*•]\s+(.+)$/);
     if (bullet) {
-      return <div className="new-tab-answer-bullet" key={`${line}-${index}`}><span>•</span><p><CitedAnswerText text={bullet[1]} sources={sources} onOpenSource={onOpenSource} /></p></div>;
+      return <div className="new-tab-answer-bullet" key={`bullet-${index}`}><span>•</span><p><CitedAnswerText text={bullet[1]} sources={sources} onOpenSource={onOpenSource} streaming={streaming} /></p></div>;
     }
     const ordered = line.match(/^(\d+)[.)、]\s+(.+)$/);
     if (ordered) {
-      return <div className="new-tab-answer-bullet is-ordered" key={`${line}-${index}`}><span>{ordered[1]}.</span><p><CitedAnswerText text={ordered[2]} sources={sources} onOpenSource={onOpenSource} /></p></div>;
+      return <div className="new-tab-answer-bullet is-ordered" key={`ordered-${index}`}><span>{ordered[1]}.</span><p><CitedAnswerText text={ordered[2]} sources={sources} onOpenSource={onOpenSource} streaming={streaming} /></p></div>;
     }
-    return <p key={`${line}-${index}`}><CitedAnswerText text={line} sources={sources} onOpenSource={onOpenSource} /></p>;
+    return <p key={`paragraph-${index}`}><CitedAnswerText text={line} sources={sources} onOpenSource={onOpenSource} streaming={streaming} /></p>;
   });
 }
 
@@ -555,7 +564,7 @@ function SearchVerticalCards({ cards, onOpenSource }) {
           return (
             <Component
               key={`${item.url || item.title}-${index}`}
-              {...(canOpen ? { type: "button", onClick: () => onOpenSource(item.url) } : {})}
+              {...(canOpen ? { "data-context-url": item.url, type: "button", onClick: () => onOpenSource(item.url) } : {})}
             >
               {(item.imageUrl || item.thumbnailUrl) && <img src={item.thumbnailUrl || item.imageUrl} alt="" />}
               <span>
@@ -579,19 +588,21 @@ function SearchEntityImages({ entity, images, onOpenSource }) {
   useEffect(() => setFailedImages(new Set()), [images]);
   const visibleItems = items.filter((_, index) => !failedImages.has(index));
   if (!visibleItems.length) return null;
+  const isPerson = entity?.kind === "person";
   return (
-    <aside className="new-tab-entity-images" aria-label={`${entity?.name || "实体"}示意图片`}>
-      <h3>示意图片</h3>
+    <aside className="new-tab-entity-images" aria-label={`${entity?.name || "实体"}${isPerson ? "人物照片" : "示意图片"}`}>
+      <h3>{isPerson ? "人物照片" : "示意图片"}</h3>
       <div>
         {visibleItems.map((item, index) => (
           <button
+            data-context-url={item.url}
             key={`${item.imageUrl}-${index}`}
             type="button"
             onClick={() => onOpenSource(item.url)}
           >
             <img
               src={item.imageUrl || item.thumbnailUrl}
-              alt={item.title || entity?.name || "实体示意图片"}
+              alt={item.title || entity?.name || (isPerson ? "人物照片" : "实体示意图片")}
               onError={() => setFailedImages((current) => new Set([...current, index]))}
             />
             <span>
@@ -636,6 +647,7 @@ function SearchSources({ expanded, id, onOpenSource, onToggle, sources }) {
         {visibleSources.map((source) => {
           return (
             <button
+              data-context-url={source.url}
               key={`${source.url}-${source.citationIndex}`}
               type="button"
               onClick={() => onOpenSource(source.url)}
@@ -768,6 +780,94 @@ function groupDownloads(downloads) {
   })).filter((group) => group.downloads.length);
 }
 
+function DownloadPanel({ downloadGroups, onAction, onOpenDirectory }) {
+  return (
+    <>
+      <header className="downloads-popover-header">
+        <strong>下载</strong>
+        <button
+          className="downloads-folder-button"
+          type="button"
+          aria-label="打开下载目录"
+          title="打开下载目录"
+          onClick={onOpenDirectory}
+        >
+          <FolderOpen size={17} />
+        </button>
+      </header>
+      <div className="downloads-list">
+        {downloadGroups.length ? downloadGroups.map((group) => (
+          <section className="download-group" key={group.key}>
+            <h3>{group.label}</h3>
+            {group.downloads.map((download) => {
+              const isActive = download.state === "downloading" || download.state === "paused";
+              const isCompleted = download.state === "completed" && !download.isMissing;
+              return (
+                <div
+                  className={`download-row${download.isMissing ? " is-missing" : ""}`}
+                  data-state={download.state}
+                  key={download.id}
+                >
+                  <span className="download-row-icon" aria-hidden="true">
+                    <AttachedIcon src={downloadIconUrl} size={16} />
+                  </span>
+                  <span className="download-row-copy" title={download.filename}>
+                    <strong>{download.filename}</strong>
+                  </span>
+                  <span className="download-row-actions">
+                    {isActive && (
+                      <button
+                        type="button"
+                        aria-label={download.state === "paused" ? `继续下载 ${download.filename}` : `暂停下载 ${download.filename}`}
+                        title={download.state === "paused" ? "继续" : "暂停"}
+                        onClick={() => onAction(download.state === "paused" ? "resume" : "pause", download)}
+                      >
+                        {download.state === "paused" ? <Play size={15} weight="fill" /> : <Pause size={15} weight="fill" />}
+                      </button>
+                    )}
+                    {isActive && (
+                      <button
+                        type="button"
+                        aria-label={`取消下载 ${download.filename}`}
+                        title="关闭"
+                        onClick={() => onAction("cancel", download)}
+                      >
+                        <X size={15} />
+                      </button>
+                    )}
+                    {isCompleted && (
+                      <button
+                        type="button"
+                        aria-label={`打开 ${download.filename}`}
+                        title="打开"
+                        onClick={() => onAction("open", download)}
+                      >
+                        <ArrowSquareOut size={15} />
+                      </button>
+                    )}
+                    {(isCompleted || download.isMissing || download.state === "interrupted" || download.state === "cancelled") && (
+                      <button
+                        type="button"
+                        aria-label={`删除 ${download.filename}`}
+                        title="删除"
+                        onClick={() => onAction("delete", download)}
+                      >
+                        <Trash size={15} />
+                      </button>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </section>
+        )) : (
+          <p className="downloads-empty">暂无下载文件</p>
+        )}
+      </div>
+    </>
+  );
+}
+
 function NewTabCommandLight({ active }) {
   const canvasRef = useRef(null);
 
@@ -847,6 +947,42 @@ function NewTabCommandLight({ active }) {
   return <canvas className={`new-tab-area-light${active ? " is-active" : ""}`} ref={canvasRef} aria-hidden="true" />;
 }
 
+const SEARCH_LOADING_DELAYS = Array.from({ length: 9 }, (_, index) => {
+  const row = Math.floor(index / 3);
+  const column = index % 3;
+  return (column + Math.abs(row - 1)) * 90;
+});
+
+function formatSearchElapsed(milliseconds) {
+  const totalSeconds = Math.max(0, milliseconds) / 1_000;
+  if (totalSeconds < 60) return `${totalSeconds.toFixed(1)}s`;
+  return `${Math.floor(totalSeconds / 60)}m ${(totalSeconds % 60).toFixed(1)}s`;
+}
+
+function SearchLoadingState({ label, startedAt }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(timer);
+  }, [startedAt]);
+
+  return (
+    <div className="new-tab-search-loading-state">
+      <span className="new-tab-search-pixel-grid" aria-hidden="true">
+        {SEARCH_LOADING_DELAYS.map((delay, index) => (
+          <span key={index} style={{ animationDelay: `${delay}ms` }} />
+        ))}
+      </span>
+      <span className="new-tab-search-loading-text">{label}</span>
+      <span className="new-tab-search-loading-time">
+        {formatSearchElapsed(now - (startedAt || now))}
+      </span>
+    </div>
+  );
+}
+
 function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, initialMode = "ask", initialPrompt, initialUseCommand = "", onNotify, onOpenSource, onRestoreHistory, onSearchComplete, onSubmit, onUseSubmit, prefillPrompt = "", restoredResult = null, tabs, useExecutionSpace = false, useTodayGreeting }) {
   const [greeting] = useState(() => {
     const pair = NEW_TAB_GREETINGS[Math.floor(Math.random() * NEW_TAB_GREETINGS.length)];
@@ -865,6 +1001,9 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
   const [searchResult, setSearchResult] = useState(restoredResult?.result || null);
   const [searchState, setSearchState] = useState(restoredResult?.result ? "success" : "idle");
   const [searchStage, setSearchStage] = useState("");
+  const [searchStartedAt, setSearchStartedAt] = useState(0);
+  const [usePaused, setUsePaused] = useState(false);
+  const [useTraceExpanded, setUseTraceExpanded] = useState(true);
   const [useSandboxView, setUseSandboxView] = useState({ embeddedSandbox: false, title: "", url: "", steps: [] });
   const [searchThread, setSearchThread] = useState(() => restoredResult?.result ? [{
     query: restoredResult.query,
@@ -878,6 +1017,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
   const promptInputRef = useRef(null);
   const resultsRef = useRef(null);
   const useSandboxHostRef = useRef(null);
+  const useStepsRef = useRef(null);
   const followStream = useRef(true);
   const searchSequence = useRef(0);
   const activeSearchId = useRef("");
@@ -885,6 +1025,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
   const tokenBuffer = useRef("");
   const tokenFrame = useRef(0);
   const initialPromptStarted = useRef(false);
+  const usePauseRequest = useRef(false);
   const initialUseStarted = useRef(false);
   const availableTabs = tabs
     .filter((tab) => tab.id !== activeTabId && !tab.isNewTab)
@@ -1000,6 +1141,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
     if (!window.beanBrowser?.onBrizoUseProgress) return undefined;
     return window.beanBrowser.onBrizoUseProgress((event) => {
       if (event?.sessionId !== activeTabId) return;
+      if (typeof event?.paused === "boolean") setUsePaused(event.paused);
       if (event?.detail) setSearchStage(event.detail);
       if (event?.embeddedSandbox || event?.title || event?.url) {
         setUseSandboxView((current) => ({
@@ -1007,7 +1149,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
           url: event.url || current.url,
           embeddedSandbox: event.embeddedSandbox || current.embeddedSandbox,
           steps: event.detail && current.steps.at(-1) !== event.detail
-            ? [...current.steps, event.detail].slice(-8)
+            ? [...current.steps, event.detail]
             : current.steps,
         }));
       } else if (event?.detail) {
@@ -1016,11 +1158,18 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
           embeddedSandbox: event.embeddedSandbox || current.embeddedSandbox,
           steps: current.steps.at(-1) === event.detail
             ? current.steps
-            : [...current.steps, event.detail].slice(-8),
+            : [...current.steps, event.detail],
         }));
       }
     });
   }, [activeTabId]);
+
+  useEffect(() => {
+    const list = useStepsRef.current;
+    if (!list || !useTraceExpanded) return;
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    list.scrollTo({ top: list.scrollHeight, behavior: reducedMotion ? "auto" : "smooth" });
+  }, [useSandboxView.steps.length, useTraceExpanded]);
 
   useEffect(() => {
     if (!window.beanBrowser?.setBrizoUseSandboxLayout) return undefined;
@@ -1088,7 +1237,8 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
     setHistoryMenuOpen(false);
     setSearchQuery(value);
     setSearchResult(null);
-    setUseSandboxView({ preview: "", title: "", url: "" });
+    setUseSandboxView({ embeddedSandbox: false, title: "", url: "", steps: [] });
+    setSearchStartedAt(Date.now());
     setSearchState("loading");
     setSourcesExpanded(false);
     followStream.current = true;
@@ -1114,6 +1264,9 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
     setHistoryMenuOpen(false);
     setSearchQuery(value);
     setSearchResult(null);
+    setSearchStartedAt(Date.now());
+    setUsePaused(false);
+    setUseTraceExpanded(true);
     setSearchState("loading");
     setUseSandboxView({ embeddedSandbox: false, title: "", url: "", steps: [] });
     setSourcesExpanded(false);
@@ -1139,6 +1292,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
       return;
     }
     setSearchResult(result || { status: "error", message: "Use 运行时不可用。", sources: [] });
+    setUsePaused(false);
     setSearchState(result?.status === "success" || result?.status === "preview" ? "success" : "error");
     setSearchStage("");
   };
@@ -1158,11 +1312,32 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
     runUsePrompt(initialUseCommand);
   }, [initialUseCommand]);
 
+  const toggleUsePause = async () => {
+    if (usePauseRequest.current) return;
+    usePauseRequest.current = true;
+    try {
+      if (usePaused) {
+        const resumed = await window.beanBrowser?.resumeBrizoUseCommand?.(activeTabId);
+        if (resumed) {
+          setUsePaused(false);
+          setSearchStage("BrowserSkill 已继续");
+        }
+      } else {
+        const paused = await window.beanBrowser?.pauseBrizoUseCommand?.(activeTabId);
+        if (paused) {
+          setUsePaused(true);
+          setSearchStage("BrowserSkill 已暂停");
+        }
+      }
+    } finally {
+      usePauseRequest.current = false;
+    }
+  };
+
   const submitPrompt = async (event) => {
     event.preventDefault();
     if (commandMode === "use" && (searchState === "loading" || searchState === "streaming")) {
-      setSearchStage("正在暂停 BrowserSkill");
-      await window.beanBrowser?.pauseBrizoUseCommand?.(activeTabId);
+      await toggleUsePause();
       return;
     }
     if (commandMode === "use") {
@@ -1170,6 +1345,20 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
       return;
     }
     await runPrompt(prompt);
+  };
+
+  const searchWithEngine = (engine) => {
+    const query = prompt.trim();
+    if (!query) {
+      promptInputRef.current?.focus();
+      return;
+    }
+    const searchUrl = engine === "bing"
+      ? `https://www.bing.com/search?q=${encodeURIComponent(query)}`
+      : `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+    setTabMenuOpen(false);
+    setHistoryMenuOpen(false);
+    onOpenSource?.(searchUrl);
   };
 
   const hasResults = searchState !== "idle";
@@ -1197,6 +1386,30 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
     } catch {
       onNotify?.("无法复制搜索结果");
     }
+  };
+  useEffect(() => {
+    if (!active || !window.beanBrowser?.onRendererContextAction) return undefined;
+    return window.beanBrowser.onRendererContextAction((action) => {
+      if (action === "copy-search-result") void copySearchResult();
+    });
+  }, [active, commandMode, searchQuery, searchResult, visibleSourceItems]);
+
+  const openResultContextMenu = (event) => {
+    if (!window.beanBrowser?.showRendererContextMenu) return;
+    const target = event.target instanceof Element ? event.target : null;
+    const image = target?.closest("img");
+    const link = target?.closest("[data-context-url], a[href]");
+    const selectedText = String(window.getSelection?.()?.toString() || "").trim();
+    const linkUrl = link?.getAttribute("data-context-url") || link?.getAttribute("href") || "";
+    event.preventDefault();
+    void window.beanBrowser.showRendererContextMenu({
+      imageUrl: image?.currentSrc || image?.src || "",
+      linkUrl,
+      selectedText,
+      surface: "search-result",
+      x: event.clientX,
+      y: event.clientY,
+    });
   };
   const shareSearchResult = async () => {
     const url = createSearchShareUrl(searchQuery);
@@ -1230,6 +1443,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
 
   return (
     <section className={`new-tab-page${hasResults ? " has-results" : ""}`} aria-label="Brizo new tab">
+      {!hasResults && <NewTabParticleBackground active={active} />}
       <div className="new-tab-history-dock" ref={historyMenuRef}>
         <button
           className="new-tab-history-trigger"
@@ -1290,12 +1504,13 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
         aria-live="polite"
         aria-label={commandMode === "use" ? "Use 执行结果" : "搜索结果"}
         aria-hidden={!hasResults}
+        onContextMenu={openResultContextMenu}
         onScroll={(event) => {
           const node = event.currentTarget;
           followStream.current = node.scrollHeight - node.scrollTop - node.clientHeight < 90;
         }}
       >
-        {hasResults && <div className={`new-tab-results-content${searchResult?.entityImages?.length ? " has-entity-images" : ""}${commandMode === "use" && searchState === "loading" ? " is-use-running" : ""}`}>
+        {hasResults && <div className={`new-tab-results-content${searchResult?.entityImages?.length ? " has-entity-images" : ""}${commandMode === "use" && searchState === "loading" ? " is-use-running" : ""}${usePaused ? " is-use-paused" : ""}`}>
         <header className="new-tab-results-header">
           <span>{commandMode === "use" ? "Brizo Use · 独立沙箱" : "Brizo Scout AI"}</span>
           <h2>{searchQuery}</h2>
@@ -1303,15 +1518,15 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
 
         {waitingForEvidence ? (
           <div className="new-tab-loading-result">
-            <div className="new-tab-loading-label">
-              <ArrowsClockwise size={16} />
-              <span>{searchStage || "正在搜索网页并组织答案…"}</span>
-            </div>
+            <SearchLoadingState
+              label={searchStage || "正在搜索网页并组织答案…"}
+              startedAt={searchStartedAt}
+            />
             {commandMode === "use" && (
-              <div className="brizo-use-sandbox-stage is-running" aria-label="Brizo 独立沙箱实时画面">
+              <div className={`brizo-use-sandbox-stage ${usePaused ? "is-paused" : "is-running"}`} aria-label="Brizo 独立沙箱实时画面">
                 <div className="brizo-use-sandbox-viewport">
                   <div className="brizo-use-sandbox-toolbar">
-                    <span className="brizo-use-sandbox-status"><i />实时运行</span>
+                    <span className="brizo-use-sandbox-status"><i />{usePaused ? "已暂停" : "实时运行"}</span>
                     <span title={useSandboxView.url}>{useSandboxView.title || useSandboxView.url || "正在打开沙箱网页"}</span>
                   </div>
                   <div className="brizo-use-sandbox-canvas" ref={useSandboxHostRef}>
@@ -1321,16 +1536,36 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
                   </div>
                 </div>
                 <aside className="brizo-use-sandbox-process" aria-label="沙箱操作过程">
-                  <ol className="brizo-use-sandbox-steps" aria-label="沙箱执行步骤">
-                    {useSandboxView.steps.map((step, index) => (
-                      <li className={index === useSandboxView.steps.length - 1 ? "is-active" : ""} key={`${index}-${step}`}>
-                        <span>{index + 1}</span><p>{step}</p>
-                      </li>
-                    ))}
-                  </ol>
-                  <button className="brizo-use-process-pause" type="button" onClick={() => window.beanBrowser?.pauseBrizoUseCommand?.(activeTabId)}>
-                    <Pause size={14} weight="fill" />
-                    <span>暂停</span>
+                  <div className={`brizo-use-process-trace${useTraceExpanded ? " is-expanded" : ""}`}>
+                    <button
+                      className="brizo-use-process-trace-toggle"
+                      type="button"
+                      aria-expanded={useTraceExpanded}
+                      onClick={() => setUseTraceExpanded((expanded) => !expanded)}
+                    >
+                      <Sparkle size={16} weight="fill" aria-hidden="true" />
+                      <span>{usePaused ? "执行已暂停" : "正在执行"}</span>
+                      <CaretDown size={14} aria-hidden="true" />
+                    </button>
+                    <div className="brizo-use-process-trace-body">
+                      <ol className="brizo-use-sandbox-steps" aria-label="沙箱执行步骤" ref={useStepsRef}>
+                        {useSandboxView.steps.map((step, index) => {
+                          const activeStep = index === useSandboxView.steps.length - 1;
+                          return (
+                            <li className={`${activeStep ? "is-active" : "is-complete"}${activeStep && usePaused ? " is-paused" : ""}`} key={`${index}-${step}`}>
+                              <span className="brizo-use-step-marker" aria-hidden="true">
+                                {activeStep && !usePaused ? <i /> : activeStep ? <b /> : <Check size={14} weight="bold" />}
+                              </span>
+                              <p>{step}</p>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    </div>
+                  </div>
+                  <button className={`brizo-use-process-pause${usePaused ? " is-paused" : ""}`} type="button" onClick={toggleUsePause}>
+                    {usePaused ? <Play size={14} weight="fill" /> : <Pause size={14} weight="fill" />}
+                    <span>{usePaused ? "继续" : "暂停"}</span>
                   </button>
                 </aside>
               </div>
@@ -1341,8 +1576,10 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
           <>
             {(searchState === "loading" || searchState === "streaming") && (
               <div className="new-tab-live-stage" role="status">
-                <ArrowsClockwise size={14} />
-                <span>{searchStage || "正在组织答案"}</span>
+                <SearchLoadingState
+                  label={searchStage || "正在组织答案"}
+                  startedAt={searchStartedAt}
+                />
               </div>
             )}
             {searchResult?.notices?.map((notice) => (
@@ -1373,10 +1610,14 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
                     message={searchResult.message}
                     sources={commandMode === "use" ? [] : sourceItems}
                     onOpenSource={onOpenSource}
+                    streaming={commandMode !== "use" && searchState === "streaming"}
                   />
                 ) : searchState === "error" ? (
                   <p>{commandMode === "use" ? "Use 运行时暂时不可用。" : "搜索服务暂时不可用。"}</p>
                 ) : null}
+                {commandMode !== "use" && searchState === "streaming" && searchResult?.message && (
+                  <span className="new-tab-stream-caret" aria-hidden="true" />
+                )}
               </article>
               <SearchEntityImages
                 entity={searchResult?.visualEntity}
@@ -1496,25 +1737,29 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
 
           <div className="new-tab-command-actions">
             <div className="new-tab-action-group">
-              <div className={`new-tab-mode-toggle is-${commandMode}`} role="group" aria-label="命令模式">
-                <span className="new-tab-mode-indicator" aria-hidden="true" />
+              <div className="new-tab-mode-toggle" role="radiogroup" aria-label="命令模式">
                 {[
-                  ["ask", "ask"],
-                  ["use", "use"],
+                  ["ask", "ASK"],
+                  ["use", "USE"],
                 ].map(([mode, label]) => (
-                  <button
+                  <label
                     key={mode}
-                    type="button"
-                    aria-pressed={commandMode === mode}
-                    onClick={() => {
-                      setCommandMode(mode);
-                      setTabMenuOpen(false);
-                      setOnlineSuggestions([]);
-                      window.requestAnimationFrame(() => promptInputRef.current?.focus());
-                    }}
+                    className="new-tab-mode-option"
                   >
-                    {label}
-                  </button>
+                    <input
+                      type="radio"
+                      name={`command-mode-${activeTabId}`}
+                      value={mode}
+                      checked={commandMode === mode}
+                      onChange={() => {
+                        setCommandMode(mode);
+                        setTabMenuOpen(false);
+                        setOnlineSuggestions([]);
+                        window.requestAnimationFrame(() => promptInputRef.current?.focus());
+                      }}
+                    />
+                    <span className="new-tab-mode-name">{label}</span>
+                  </label>
                 ))}
               </div>
 
@@ -1581,14 +1826,32 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
             </div>
 
             <div className="new-tab-action-group new-tab-submit-group">
+              {commandMode === "ask" && (
+                <>
+                  <button className="new-tab-engine-button is-bing" type="button" aria-label="使用 Bing 搜索当前内容" title="Bing 搜索" disabled={searchState === "loading" || searchState === "streaming"} onClick={() => searchWithEngine("bing")}>
+                    <span aria-hidden="true">B</span>
+                  </button>
+                  <button className="new-tab-engine-button is-google" type="button" aria-label="使用 Google 搜索当前内容" title="Google 搜索" disabled={searchState === "loading" || searchState === "streaming"} onClick={() => searchWithEngine("google")}>
+                    <span aria-hidden="true">G</span>
+                  </button>
+                </>
+              )}
               <button
-                className={`new-tab-submit-button${commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? " is-pause" : ""}`}
+                className={`new-tab-submit-button${commandMode === "ask" ? " is-ask" : ""}${commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? " is-pause" : ""}`}
                 type="submit"
-                aria-label={commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? "暂停 BrowserSkill" : commandMode === "ask" ? "确认" : "执行 Use"}
+                aria-label={commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? `${usePaused ? "继续" : "暂停"} BrowserSkill` : commandMode === "ask" ? "确认" : "执行 Use"}
                 disabled={commandMode === "ask" && (searchState === "loading" || searchState === "streaming")}
               >
-                <span className="new-tab-submit-label" aria-hidden="true">{commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? "暂停" : commandMode === "ask" ? "Ask Brizo" : "Use Brizo"}</span>
-                {commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? <Pause size={18} weight="fill" /> : <ArrowUp size={21} />}
+                <span className="new-tab-submit-label" aria-hidden="true">{commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? (usePaused ? "继续" : "暂停") : commandMode === "ask" ? "Ask Brizo" : "Use Brizo"}</span>
+                <span className="new-tab-submit-visual" aria-hidden="true">
+                  <span className="new-tab-submit-transition" />
+                  <span className="new-tab-submit-gradient" />
+                </span>
+                {commandMode === "use" && (searchState === "loading" || searchState === "streaming")
+                  ? (usePaused ? <Play size={18} weight="fill" /> : <Pause size={18} weight="fill" />)
+                  : commandMode === "ask"
+                    ? <SparklesIcon className="new-tab-submit-sparkles" size={20.4} strokeWidth={1.9} />
+                    : <ArrowUp size={21} />}
               </button>
             </div>
           </div>
@@ -1596,7 +1859,20 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
         </BorderBeam>
       </div>
       {!hasResults && (
-        <p className="new-tab-mythic-tagline">Brizo, navigate beyond the known.</p>
+        <SoftBlurIn
+          as="p"
+          blur={12}
+          className="new-tab-mythic-tagline"
+          distance={8}
+          duration={900}
+          fontWeight="600"
+          selector={`[data-new-tab-tagline="${activeTabId}"]`}
+          speed={1}
+          stagger={0}
+          data-new-tab-tagline={activeTabId}
+        >
+          Brizo, navigate beyond the known.
+        </SoftBlurIn>
       )}
     </section>
   );
@@ -2285,6 +2561,7 @@ function BookmarkTree({
               const flyout = (
                 <div
                   className="bookmark-folder-flyout"
+                  role="menu"
                   style={{
                     ...flyoutPositions[folderPath],
                     zIndex: 90 + depth,
@@ -2353,6 +2630,8 @@ export function App() {
       return Array.isArray(saved) ? saved.slice(0, 500) : [];
     } catch { return []; }
   });
+  const [sessionBrowserHistory, setSessionBrowserHistory] = useState([]);
+  const [tabHistoryOpen, setTabHistoryOpen] = useState(false);
   const [appPreferences, setAppPreferences] = useState(() => {
     try {
       return {
@@ -2369,15 +2648,10 @@ export function App() {
   const [addressInputDirty, setAddressInputDirty] = useState(false);
   const [addressOnlineSuggestions, setAddressOnlineSuggestions] = useState([]);
   const [aiOpen, setAiOpen] = useState(false);
-  const [pageAskOpen, setPageAskOpen] = useState(false);
-  const [pageAskResult, setPageAskResult] = useState(null);
-  const [pageAskLoading, setPageAskLoading] = useState(false);
-  const [browserCommandOpen, setBrowserCommandOpen] = useState(false);
-  const [browserCommandDraft, setBrowserCommandDraft] = useState("");
-  const [browserCommandLoading, setBrowserCommandLoading] = useState(false);
-  const [browserCommandResult, setBrowserCommandResult] = useState(null);
   const [downloads, setDownloads] = useState([]);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
+  const [downloadIconActivityKey, setDownloadIconActivityKey] = useState(0);
+  const downloadActivityStatesRef = useRef(new Map());
   const [bookmarkEditorOpen, setBookmarkEditorOpen] = useState(false);
   const [bookmarkCelebrationUrl, setBookmarkCelebrationUrl] = useState("");
   const [bookmarkDraft, setBookmarkDraft] = useState({ folder: "", title: "", url: "" });
@@ -2509,6 +2783,7 @@ export function App() {
     isPdf: false,
     isLoading: false,
     navigationPreview: "",
+    pagePreview: "",
     pageBackgroundColor: "#ffffff",
     pageFaviconUrl: "",
     title: "",
@@ -2525,11 +2800,12 @@ export function App() {
   const bookmarkNameInputRef = useRef(null);
   const bookmarkContextFolderTriggerRef = useRef(null);
   const bookmarkContextNameInputRef = useRef(null);
-  const browserCommandInputRef = useRef(null);
   const bookmarkFaviconAttempts = useRef(new Set());
   const bookmarkFaviconResolution = useRef(null);
   const browserPreviewReleaseFrame = useRef(0);
   const browserMenuRef = useRef(null);
+  const topTabsBarRef = useRef(null);
+  const tabHistoryRef = useRef(null);
   const modelGuardDockRef = useRef(null);
   const smartBookmarkSyncInFlight = useRef(false);
   const sidebarActivationTimer = useRef(0);
@@ -2624,11 +2900,14 @@ export function App() {
   }, [bookmarkContextEditor, bookmarkFolderRows]);
   const pageBackgroundColor = briefOpen
     ? "#ffffff"
-    : newTabOpen || bookmarksPageOpen
+    : newTabOpen
+    ? "#ffffff"
+    : bookmarksPageOpen
     ? NEW_TAB_CHROME_COLOR
     : navigationOwnsActiveTab
       ? navigationState.pageBackgroundColor || "#ffffff"
       : "#ffffff";
+  const toolbarBackgroundColor = newTabOpen ? "#ffffff" : pageBackgroundColor;
   const pageUsesLightForeground = !briefOpen
     && !newTabOpen
     && !bookmarksPageOpen
@@ -2807,10 +3086,9 @@ export function App() {
   const browserShellOverlayOpen = bookmarkCascadeOpen
     || bookmarkEditorOpen
     || Boolean(bookmarkContextEditor)
-    || browserCommandOpen
     || aiOpen
-    || pageAskOpen
     || downloadsOpen
+    || tabHistoryOpen
     || settingsMenuOpen
     || Boolean(settingsPanel)
     || addressSuggestions.length > 0;
@@ -2999,6 +3277,15 @@ export function App() {
       localStorage.setItem("bean:browser-history", JSON.stringify(next));
       return next;
     });
+    setSessionBrowserHistory((current) => {
+      const existing = current.find((item) => item.url === url);
+      return [{
+        faviconUrl: navigationState.pageFaviconUrl || existing?.faviconUrl || "",
+        title: navigationState.title,
+        updatedAt: Date.now(),
+        url,
+      }, ...current.filter((item) => item.url !== url)].slice(0, 300);
+    });
   }, [navigationState.documentUrl, navigationState.error, navigationState.isLoading, navigationState.pageFaviconUrl, navigationState.title, navigationState.url]);
 
   useEffect(() => {
@@ -3049,11 +3336,28 @@ export function App() {
     let active = true;
     const refreshDownloads = async () => {
       const nextDownloads = await browserApi.listDownloads();
-      if (active && Array.isArray(nextDownloads)) setDownloads(nextDownloads);
+      if (active && Array.isArray(nextDownloads)) {
+        downloadActivityStatesRef.current = new Map(
+          nextDownloads.map((download) => [download.id, download.state]),
+        );
+        setDownloads(nextDownloads);
+      }
     };
     refreshDownloads();
     const removeDownloadListener = browserApi.onDownloads?.((nextDownloads) => {
-      if (Array.isArray(nextDownloads)) setDownloads(nextDownloads);
+      if (!Array.isArray(nextDownloads)) return;
+      const previousStates = downloadActivityStatesRef.current;
+      const hasNewActiveDownload = nextDownloads.some((download) => (
+        download?.state === "downloading"
+        && previousStates.get(download.id) !== "downloading"
+      ));
+      downloadActivityStatesRef.current = new Map(
+        nextDownloads.map((download) => [download.id, download.state]),
+      );
+      setDownloads(nextDownloads);
+      if (hasNewActiveDownload) {
+        setDownloadIconActivityKey((current) => current + 1);
+      }
     });
     return () => {
       active = false;
@@ -3228,6 +3532,53 @@ export function App() {
   }, [settingsMenuOpen]);
 
   useEffect(() => {
+    if (!tabHistoryOpen) return undefined;
+    const closeOnOutsidePointer = (event) => {
+      if (!tabHistoryRef.current?.contains(event.target)) setTabHistoryOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setTabHistoryOpen(false);
+    };
+    window.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [tabHistoryOpen]);
+
+  useLayoutEffect(() => {
+    const bar = topTabsBarRef.current;
+    const anchor = tabHistoryRef.current;
+    const list = bar?.querySelector(".top-tab-list");
+    if (!bar || !anchor || !list) return undefined;
+    let frame = 0;
+    const positionHistory = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const barRect = bar.getBoundingClientRect();
+        const listRect = list.getBoundingClientRect();
+        const lastTabRect = list.querySelector(".top-tab:last-child")?.getBoundingClientRect();
+        const parkedLeft = listRect.right - barRect.left - anchor.offsetWidth;
+        const afterLastTab = lastTabRect
+          ? lastTabRect.right - barRect.left + 3
+          : listRect.left - barRect.left;
+        anchor.style.left = `${Math.max(listRect.left - barRect.left, Math.min(afterLastTab, parkedLeft))}px`;
+      });
+    };
+    const observer = new ResizeObserver(positionHistory);
+    observer.observe(bar);
+    observer.observe(list);
+    list.addEventListener("scroll", positionHistory, { passive: true });
+    positionHistory();
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      list.removeEventListener("scroll", positionHistory);
+    };
+  }, [desktopMode, tabs]);
+
+  useEffect(() => {
     const closeOnEscape = (event) => {
       if (event.key !== "Escape") return;
       setSettingsMenuOpen(false);
@@ -3238,12 +3589,10 @@ export function App() {
       setBookmarkContextFolderMenuOpen(false);
       setBookmarkContextEditor(null);
       setDownloadsOpen(false);
-      if (!browserCommandLoading) setBrowserCommandOpen(false);
-      if (!pageAskLoading) setPageAskOpen(false);
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [browserCommandLoading, pageAskLoading]);
+  }, []);
 
   useEffect(() => {
     if (!bookmarkEditorOpen) return undefined;
@@ -3262,12 +3611,6 @@ export function App() {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [bookmarkContextEditor]);
-
-  useEffect(() => {
-    if (!browserCommandOpen) return undefined;
-    const frame = window.requestAnimationFrame(() => browserCommandInputRef.current?.focus());
-    return () => window.cancelAnimationFrame(frame);
-  }, [browserCommandOpen]);
 
   useEffect(() => {
     if (!bookmarkFolderMenuOpen) return undefined;
@@ -4081,54 +4424,6 @@ export function App() {
     }
   };
 
-  const openPageAsk = async () => {
-    if (pageAskLoading) return;
-    setPageAskResult(null);
-    setPageAskOpen(true);
-    setPageAskLoading(true);
-    try {
-      const result = browserApi?.askCurrentPage
-        ? await browserApi.askCurrentPage({ mode: "summary" })
-        : {
-            status: "error",
-            message: "当前网页预览不能读取外部页面，请在 Brizo 桌面版中使用页面总结。",
-          };
-      setPageAskResult(result);
-    } catch {
-      setPageAskResult({ status: "error", message: "当前页面总结失败，请稍后再试。" });
-    } finally {
-      setPageAskLoading(false);
-    }
-  };
-
-  const runBrowserCommand = async (event) => {
-    event?.preventDefault?.();
-    const command = browserCommandDraft.trim();
-    if (!command || browserCommandLoading) return;
-    setBrowserCommandLoading(true);
-    setBrowserCommandResult(null);
-    // Let the retained external WebContentsView stay visible while a command
-    // navigates or interacts. Dynamic sites commonly defer virtualized results
-    // while fully hidden; the command panel reopens over a fresh snapshot once
-    // the bounded run returns.
-    setBrowserCommandOpen(false);
-    try {
-      await new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
-      const result = browserApi?.runBrowserCommand
-        ? await browserApi.runBrowserCommand({ command })
-        : {
-            status: "error",
-            message: "浏览器控制仅在 Brizo 桌面版中可用。",
-          };
-      setBrowserCommandResult(result || { status: "error", message: "浏览器控制没有返回结果。" });
-    } catch {
-      setBrowserCommandResult({ status: "error", message: "浏览器命令执行失败，请稍后再试。" });
-    } finally {
-      setBrowserCommandLoading(false);
-      setBrowserCommandOpen(true);
-    }
-  };
-
   const openSettingsPanel = (panel) => {
     setSettingsMenuOpen(false);
     setSettingsPanel(panel);
@@ -4287,6 +4582,28 @@ export function App() {
     if (result?.path) {
       setAppPreferences((current) => ({ ...current, downloadLocation: result.path }));
       showToast("下载位置已更新");
+    }
+  };
+
+  const openDownloadsDirectory = async () => {
+    const result = await browserApi?.openDownloadsDirectory?.();
+    if (result && !result.opened) showToast("无法打开下载目录");
+  };
+
+  const handleDownloadAction = async (action, download) => {
+    if (!download?.id) return;
+    let result;
+    if (action === "pause" || action === "resume") {
+      result = await browserApi?.setDownloadPaused?.(download.id, action === "pause");
+    } else if (action === "cancel") {
+      result = await browserApi?.cancelDownload?.(download.id);
+    } else if (action === "open") {
+      result = await browserApi?.openDownloadedFile?.(download.id);
+    } else if (action === "delete") {
+      result = await browserApi?.deleteDownloadedFile?.(download.id);
+    }
+    if (result?.status === "unavailable" || result?.status === "failed") {
+      showToast("此下载项目当前不可用");
     }
   };
 
@@ -4769,6 +5086,10 @@ export function App() {
         openPdfInNewTab(url, payload.title || "PDF 文档", payload);
         return;
       }
+      if (payload.kind === "web") {
+        openUrlInNewTab(url, payload.title || "网页");
+        return;
+      }
       let domain = "图片";
       try {
         domain = new URL(url).hostname.replace(/^www\./i, "") || domain;
@@ -4817,7 +5138,8 @@ export function App() {
   }, [browserApi]);
 
   return (
-    <main
+    <SoftBlurIn
+      as="main"
       className={`app-shell ${sidebarOpen ? "" : "spaces-collapsed"}${shellUsesLightForeground ? " uses-light-shell-foreground" : ""}`}
       style={{
         "--tab-seam-color": pageUsesLightForeground
@@ -5158,10 +5480,11 @@ export function App() {
       >
         <div
           className={`top-tabs-bar${pageUsesLightForeground ? " uses-light-foreground" : ""}`}
+          ref={topTabsBarRef}
           style={{ "--page-background-color": pageBackgroundColor }}
         >
           <IconButton label="New tab" className="new-tab-button" onClick={openNewTab}>
-            <AttachedIcon src={newTabPlusIconUrl} size={17} />
+            <PlusIcon className="remocn-toolbar-icon remocn-plus-icon" size={17} strokeWidth={1.9} />
           </IconButton>
           <button
             className={`brief-utility-tab${briefOpen ? " active" : ""}`}
@@ -5225,16 +5548,62 @@ export function App() {
               </div>
             ))}
           </div>
+          <div className="top-tab-history-anchor" ref={tabHistoryRef}>
+            <button
+              className={tabHistoryOpen ? "top-tab-history-trigger is-active" : "top-tab-history-trigger"}
+              type="button"
+              aria-label="本次浏览历史"
+              aria-expanded={tabHistoryOpen}
+              aria-haspopup="menu"
+              title="本次浏览历史"
+              onClick={() => setTabHistoryOpen((open) => !open)}
+            >
+              <ClockCounterClockwise size={17} />
+            </button>
+            {tabHistoryOpen && (
+              <div className="top-tab-history-menu" role="menu" aria-label="本次浏览网页">
+                <div className="top-tab-history-heading">
+                  <span>本次浏览</span>
+                  <small>{sessionBrowserHistory.length}</small>
+                </div>
+                <div className="top-tab-history-list">
+                  {sessionBrowserHistory.length ? sessionBrowserHistory.map((item) => (
+                    <button
+                      key={item.url}
+                      type="button"
+                      role="menuitem"
+                      title={item.url}
+                      onClick={() => {
+                        setTabHistoryOpen(false);
+                        openUrlInNewTab(item.url, item.title || item.url);
+                      }}
+                    >
+                      <BookmarkFavicon bookmark={item} />
+                      <span>
+                        <strong>{item.title || item.url}</strong>
+                      </span>
+                    </button>
+                  )) : (
+                    <span className="top-tab-history-empty">本次还没有浏览网页</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
           <TopTabOutline
             activeTabId={briefOpen ? "__brief__" : activeTab}
             tabOrderKey={`__brief__|${tabs.map((tab) => tab.id).join("|")}`}
           />
         </div>
 
-        <header
-          className={`browser-toolbar${pageUsesLightForeground ? " uses-light-foreground" : ""}`}
+        <div
+          className="browser-surface"
           style={{ "--page-background-color": pageBackgroundColor }}
         >
+          <header
+            className={`browser-toolbar${pageUsesLightForeground ? " uses-light-foreground" : ""}`}
+            style={{ "--page-background-color": toolbarBackgroundColor }}
+          >
           <div className="browser-toolbar-center">
             <div className="browser-nav">
               <IconButton
@@ -5242,21 +5611,21 @@ export function App() {
                 disabled={briefOpen || newTabOpen || bookmarksPageOpen || (desktopMode && !navigationState.canGoBack && !canReturnToNewTab)}
                 onClick={navigateBack}
               >
-                <ArrowLeft size={20} />
+                <ArrowLeftIcon className="remocn-toolbar-icon remocn-arrow-left-icon" size={20} strokeWidth={1.9} />
               </IconButton>
               <IconButton
                 label="Forward"
                 disabled={briefOpen || newTabOpen || bookmarksPageOpen || (desktopMode && !navigationState.canGoForward)}
                 onClick={() => desktopMode ? browserApi.forward() : showToast("Forward")}
               >
-                <ArrowRight size={20} />
+                <ArrowRightIcon className="remocn-toolbar-icon remocn-arrow-right-icon" size={20} strokeWidth={1.9} />
               </IconButton>
               <IconButton
                 label="Reload"
                 disabled={briefOpen || newTabOpen || bookmarksPageOpen}
                 onClick={() => desktopMode ? browserApi.reload() : showToast("Page refreshed")}
               >
-                <AttachedIcon src={refreshIconUrl} />
+                <RefreshCwIcon className="remocn-toolbar-icon remocn-refresh-icon" size={20} strokeWidth={1.8} />
               </IconButton>
             </div>
 
@@ -5334,125 +5703,6 @@ export function App() {
             </form>
 
             <div className="browser-actions">
-              <div className={`browser-command-control${browserCommandOpen ? " is-open" : ""}`}>
-                <IconButton
-                  label="BrowserSkill 浏览器命令"
-                  className={browserCommandOpen ? "is-active" : ""}
-                  disabled={
-                    briefOpen
-                    || newTabOpen
-                    || bookmarksPageOpen
-                    || navigationState.isPdf
-                    || navigationState.isLoading
-                    || Boolean(navigationState.error)
-                    || !navigationState.url
-                  }
-                  onClick={() => {
-                    setBrowserCommandResult(null);
-                    setBookmarkEditorOpen(false);
-                    setDownloadsOpen(false);
-                    setSettingsMenuOpen(false);
-                    setBrowserCommandOpen((open) => !open);
-                  }}
-                >
-                  <TerminalWindow size={20} />
-                </IconButton>
-                {browserCommandOpen && (
-                  <>
-                    <button
-                      className="browser-command-backdrop"
-                      type="button"
-                      aria-label="关闭浏览器命令"
-                      onClick={() => {
-                        if (!browserCommandLoading) setBrowserCommandOpen(false);
-                      }}
-                    />
-                    <form className="browser-command-popover" onSubmit={runBrowserCommand}>
-                      <header>
-                        <span><TerminalWindow size={15} /> BrowserSkill</span>
-                      </header>
-                      <div className="browser-command-input-row">
-                        <input
-                          ref={browserCommandInputRef}
-                          value={browserCommandDraft}
-                          disabled={browserCommandLoading}
-                          aria-label="输入浏览器命令"
-                          placeholder="例如：打开登录页并填写邮箱"
-                          onChange={(event) => setBrowserCommandDraft(event.target.value)}
-                        />
-                        <button
-                          type="submit"
-                          aria-label="执行浏览器命令"
-                          disabled={!browserCommandDraft.trim() || browserCommandLoading}
-                        >
-                          {browserCommandLoading
-                            ? <ArrowsClockwise className="is-spinning" size={14} />
-                            : <ArrowRight size={14} weight="bold" />}
-                        </button>
-                      </div>
-                      {browserCommandLoading && (
-                        <p className="browser-command-status" role="status">正在观察页面并执行最短操作路径…</p>
-                      )}
-                      {browserCommandResult && (
-                        <div className={`browser-command-result is-${browserCommandResult.status}`}>
-                          <p>{browserCommandResult.message}</p>
-                          {browserCommandResult.screenshotDataUrl && (
-                            <img
-                              className="browser-command-result-screenshot"
-                              src={browserCommandResult.screenshotDataUrl}
-                              alt="网页内已用红框标出的最低价航班截图"
-                            />
-                          )}
-                          {browserCommandResult.screenshotPath && (
-                            <small className="browser-command-result-path">
-                              已保存至 {browserCommandResult.screenshotPath}
-                            </small>
-                          )}
-                        </div>
-                      )}
-                      <small className="browser-command-disclosure">
-                        页面文字与可交互控件会发送给“大模型护航”中的默认模型；密码和认证信息不会读取。
-                      </small>
-                    </form>
-                  </>
-                )}
-              </div>
-              <IconButton
-                label="总结当前页面"
-                className={pageAskOpen ? "is-active" : ""}
-                disabled={
-                  briefOpen ||
-                  newTabOpen ||
-                  bookmarksPageOpen ||
-                  pageAskLoading ||
-                  (desktopMode && (
-                    navigationState.isLoading ||
-                    Boolean(navigationState.error) ||
-                    !navigationState.url
-                  ))
-                }
-                onClick={openPageAsk}
-              >
-                <ChatCircleDots size={20} />
-              </IconButton>
-              <IconButton
-                label={pdfExporting ? "Creating clean article PDF" : "Export clean article PDF"}
-                className={pdfExporting ? "pdf-export-button is-exporting" : "pdf-export-button"}
-                disabled={
-                  briefOpen ||
-                  newTabOpen ||
-                  bookmarksPageOpen ||
-                  pdfExporting ||
-                  (desktopMode && (
-                    navigationState.isLoading ||
-                    Boolean(navigationState.error) ||
-                    !navigationState.url
-                  ))
-                }
-                onClick={navigationState.isPdf ? downloadCurrentPdf : exportArticlePdf}
-              >
-                <FilePdf size={20} weight={pdfExporting ? "fill" : "regular"} />
-              </IconButton>
               <div className={`bookmark-control${bookmarkEditorOpen ? " is-open" : ""}`}>
                 <IconButton
                   label={currentBookmark ? "编辑书签" : "添加书签"}
@@ -5468,7 +5718,12 @@ export function App() {
                       }
                     }}
                   >
-                    <AttachedIcon src={currentBookmark ? bookmarkAddedIconUrl : bookmarkIconUrl} />
+                    <BookmarkIcon
+                      className="remocn-toolbar-icon remocn-bookmark-icon"
+                      filled={Boolean(currentBookmark)}
+                      size={19}
+                      strokeWidth={1.8}
+                    />
                   </span>
                 </IconButton>
                 {bookmarkEditorOpen && (
@@ -5575,6 +5830,24 @@ export function App() {
                   </>
                 )}
               </div>
+              <IconButton
+                label={pdfExporting ? "Creating clean article PDF" : "Export clean article PDF"}
+                className={pdfExporting ? "pdf-export-button is-exporting" : "pdf-export-button"}
+                disabled={
+                  briefOpen ||
+                  newTabOpen ||
+                  bookmarksPageOpen ||
+                  pdfExporting ||
+                  (desktopMode && (
+                    navigationState.isLoading ||
+                    Boolean(navigationState.error) ||
+                    !navigationState.url
+                  ))
+                }
+                onClick={navigationState.isPdf ? downloadCurrentPdf : exportArticlePdf}
+              >
+                <FileTextIcon className="remocn-toolbar-icon remocn-file-text-icon" size={20} strokeWidth={1.8} />
+              </IconButton>
               <div className="downloads-menu">
                 <IconButton
                   label="Downloads"
@@ -5584,7 +5857,15 @@ export function App() {
                     setDownloadsOpen((open) => !open);
                   }}
                 >
-                  <AttachedIcon src={downloadIconUrl} />
+                  <DownloadIcon
+                    key={downloadIconActivityKey}
+                    className={`toolbar-download-icon${downloadIconActivityKey ? " is-download-active" : ""}`}
+                    size={19}
+                    strokeWidth={1.8}
+                    onAnimationEnd={() => {
+                      if (downloadIconActivityKey) setDownloadIconActivityKey(0);
+                    }}
+                  />
                 </IconButton>
               </div>
             </div>
@@ -5598,33 +5879,12 @@ export function App() {
                 aria-label="Close downloads"
                 onClick={() => setDownloadsOpen(false)}
               />
-              <section className="downloads-popover" aria-label="Downloads">
-                <header>
-                  <strong>下载</strong>
-                </header>
-                <div className="downloads-list">
-                  {downloadGroups.length ? downloadGroups.map((group) => (
-                    <section className="download-group" key={group.key}>
-                      <h3>{group.label}</h3>
-                      {group.downloads.map((download) => (
-                        <div
-                          className={`download-row${download.isMissing ? " is-missing" : ""}`}
-                          key={download.id}
-                        >
-                          <span className="download-row-icon" aria-hidden="true">
-                            <AttachedIcon src={downloadIconUrl} size={17} />
-                          </span>
-                          <span className="download-row-copy">
-                            <strong>{download.filename}</strong>
-                            <em title={download.savePath}>{download.savePath}</em>
-                          </span>
-                        </div>
-                      ))}
-                    </section>
-                  )) : (
-                    <p className="downloads-empty">暂无下载文件</p>
-                  )}
-                </div>
+              <section className="downloads-popover" role="menu" aria-label="Downloads">
+                <DownloadPanel
+                  downloadGroups={downloadGroups}
+                  onAction={handleDownloadAction}
+                  onOpenDirectory={openDownloadsDirectory}
+                />
               </section>
             </>
           )}
@@ -5640,7 +5900,7 @@ export function App() {
                 });
               }}
             >
-              <AttachedIcon src={settingsMoreIconUrl} />
+              <MoreHorizontalIcon className="remocn-toolbar-icon remocn-more-icon" size={20} strokeWidth={1.9} />
             </IconButton>
             {settingsMenuOpen && (
               <>
@@ -5814,25 +6074,16 @@ export function App() {
                   )}
                 </div>
                 {settingsMenuLevel === "downloads" && (
-                  <section className="settings-menu-side-popover settings-downloads-side" aria-label="下载内容">
-                    <header><DownloadSimple size={17} /><strong>下载内容</strong></header>
-                    <div className="downloads-list">
-                      {downloadGroups.length ? downloadGroups.map((group) => (
-                        <section className="download-group" key={group.key}>
-                          <h3>{group.label}</h3>
-                          {group.downloads.map((download) => (
-                            <div className={`download-row${download.isMissing ? " is-missing" : ""}`} key={download.id}>
-                              <span className="download-row-icon" aria-hidden="true"><AttachedIcon src={downloadIconUrl} size={17} /></span>
-                              <span className="download-row-copy"><strong>{download.filename}</strong><em title={download.savePath}>{download.savePath}</em></span>
-                            </div>
-                          ))}
-                        </section>
-                      )) : <p className="downloads-empty">暂无下载文件</p>}
-                    </div>
+                  <section className="settings-menu-side-popover settings-downloads-side" role="menu" aria-label="下载内容">
+                    <DownloadPanel
+                      downloadGroups={downloadGroups}
+                      onAction={handleDownloadAction}
+                      onOpenDirectory={openDownloadsDirectory}
+                    />
                   </section>
                 )}
                 {settingsMenuLevel === "preferences" && (
-                  <section className="settings-menu-side-popover settings-preferences-side" aria-label="设置">
+                  <section className="settings-menu-side-popover settings-preferences-side" role="menu" aria-label="设置">
                     <header><GearSix size={17} /><strong>设置</strong></header>
                     <div className="preferences-settings">
                       <label className="preference-row">
@@ -5859,7 +6110,7 @@ export function App() {
               </>
             )}
           </div>
-        </header>
+          </header>
 
         <div
           className={`web-content-host brief-host${briefOpen ? " is-active" : ""}`}
@@ -5917,11 +6168,18 @@ export function App() {
           </div>
         ))}
 
-        {!briefOpen && !newTabOpen && !bookmarksPageOpen && (desktopMode ? (
+          {!briefOpen && !newTabOpen && !bookmarksPageOpen && (desktopMode ? (
           <div
             className="web-content-host"
             ref={webContentHost}
           >
+            {navigationState.pagePreview && (
+              <div
+                className="web-content-preview webpage-corner-underlay"
+                style={{ backgroundImage: `url(${navigationState.pagePreview})` }}
+                aria-hidden="true"
+              />
+            )}
             {browserPreview && (
               <div
                 className="web-content-preview"
@@ -5963,14 +6221,17 @@ export function App() {
                 aria-label="网页加载中"
                 aria-live="polite"
                 role="status"
-              />
+              >
+                <img src={brizoLogoUrl} alt="" />
+              </div>
             )}
           </div>
         ) : (
           <div className="web-content-placeholder" aria-label="网页加载中" aria-live="polite" role="status">
             <img src={brizoLogoUrl} alt="" />
           </div>
-        ))}
+          ))}
+        </div>
 
         {aiOpen && (
           <div className="ai-layer" role="dialog" aria-modal="true" aria-label="Brizo AI search">
@@ -6067,34 +6328,6 @@ export function App() {
                   <button className="history-entry-remove" type="button" aria-label={`删除 ${item.query}`} onClick={() => removeSearchHistoryItem(item.query)}><X size={14} /></button>
                 </div>
               )) : <div className="settings-secondary-empty"><MagnifyingGlass size={22} /><span>暂无搜索历史</span></div>)}
-            </div>
-          </div>
-        </SettingsDialog>
-      )}
-
-      {pageAskOpen && (
-        <SettingsDialog
-          title={navigationState.isPdf ? "PDF 要点提炼" : "页面总结"}
-          onClose={() => {
-            if (!pageAskLoading) setPageAskOpen(false);
-          }}
-        >
-          <div className="page-ask-form">
-            {pageAskLoading && (
-              <div className="page-ask-loading" role="status">
-                <ArrowsClockwise className="is-spinning" size={17} />
-                <span>{navigationState.isPdf
-                  ? "正在读取 PDF 文字并提炼要点…"
-                  : "正在快速读取并总结当前页面…"}</span>
-              </div>
-            )}
-            {pageAskResult && (
-              <article className={`page-ask-answer${pageAskResult.status === "error" ? " is-error" : ""}`}>
-                <SearchAnswer message={pageAskResult.message} sources={[]} />
-              </article>
-            )}
-            <div className="settings-dialog-actions">
-              <button type="button" disabled={pageAskLoading} onClick={() => setPageAskOpen(false)}>关闭</button>
             </div>
           </div>
         </SettingsDialog>
@@ -6524,6 +6757,6 @@ export function App() {
       )}
 
       {toast && <div className="toast" role="status">{toast}</div>}
-    </main>
+    </SoftBlurIn>
   );
 }

@@ -8,7 +8,7 @@ import {
 
 const PLAN_SYSTEM_PROMPT = `You plan web research for Brizo Scout AI. Return one JSON object only.
 Schema: {"language":"zh|en|ja|ko|other","intent":"factual|news|comparison|howto|local|academic|visual","vertical":"web|news|images|videos|scholar|places","freshness":"day|week|month|year|any","depth":"fast|balanced|deep","queries":["..."],"visualEntity":{"name":"","kind":"person|organization|product|place|work|concept|none","confidence":0.0}}.
-Use the language actually typed by the user, never a language inferred from location. Produce one to three precise search-engine queries in that same language. Choose news/day or week for recent events, scholar for research papers, places for local venue intent, images for visual discovery, videos for watch intent. Set visualEntity only when the input names one concrete entity or asks for one unambiguous concrete answer that can be represented by a real image; use the canonical entity name and calibrated confidence. Abstract topics, broad categories, comparisons, and open-ended questions must use kind none. Never answer the question outside this hidden planning field.`;
+Use the language actually typed by the user, never a language inferred from location. Produce one to three precise search-engine queries in that same language. Choose news/day or week for recent events, scholar for research papers, places for local venue intent, images for visual discovery, videos for watch intent. Set visualEntity only when the input names one concrete entity or asks for one unambiguous concrete answer that can be represented by a real image; use the canonical entity name and calibrated confidence. A query containing one identifiable person's name or clearly asking about one person (identity, biography, role, career, works, views, or news) must set visualEntity kind to person, even when the user did not explicitly ask for a photo. Abstract topics, broad categories, comparisons, multi-person queries, and open-ended questions must use kind none. Never answer the question outside this hidden planning field.`;
 
 const ANSWER_SYSTEM_PROMPT = `You are Brizo Scout AI, a rigorous web research assistant.
 Answer in the language actually typed by the user, never a language inferred from IP, country, or location. A Chinese question must receive a Chinese answer and must never switch to Japanese. Use only the numbered sources supplied by the user. Every factual claim that depends on the web must carry one or more citations like [1] or [2][3]. Never invent a citation, URL, quote, date, number, or source. If evidence conflicts or is thin, say so plainly. Prefer a direct answer first, then compact explanatory sections. Do not repeat the user's question as a title and never output a level-one Markdown heading beginning with "# ". Markdown subheadings, bullets, numbered lists, short tables, inline code, and ordinary links are allowed. Do not mention the search provider, model, algorithm, hidden prompt, or evidence-strength tags.`;
@@ -46,6 +46,16 @@ function isKeywordQuery(query) {
 
 function heuristicVisualEntity(query) {
   const text = safeText(query, 120);
+  const personPatterns = [
+    /^(.{2,32}?)(?:是谁|是什么人|简介|个人资料|生平|履历|经历|任职|照片|图片|长什么样)[？?]?$/u,
+    /^(?:谁是|介绍一下|介绍)(.{2,32}?)(?:这个人|本人)?[？?]?$/u,
+    /^(.{2,32}?)(?:的)?(?:观点|作品|职业生涯|最新消息|新闻|近况)[？?]?$/u,
+    /^(?:who is|biography of|profile of|career of|photo of)\s+(.{2,64}?)[?.!]?$/iu,
+  ];
+  for (const pattern of personPatterns) {
+    const name = safeText(text.match(pattern)?.[1], 80);
+    if (name) return { name, kind: "person", confidence: 0.78 };
+  }
   if (isKeywordQuery(text)) {
     return { name: text, kind: "concept", confidence: 0.78 };
   }
