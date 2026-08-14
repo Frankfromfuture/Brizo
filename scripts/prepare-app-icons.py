@@ -3,22 +3,82 @@
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "logo app.png"
+SOURCE = ROOT / "logo.svg"
 BUILD = ROOT / "build"
 ICONSET = BUILD / "icon.iconset"
 LINUX_ICONS = BUILD / "icons"
 
 
-def contain_on_square(source: Image.Image) -> Image.Image:
-    side = max(source.width, source.height)
-    square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
-    square.alpha_composite(source, ((side - source.width) // 2, (side - source.height) // 2))
-    return square
+def rasterize_svg(output: Path, size: int = 1400) -> None:
+    if shutil.which("sips"):
+        subprocess.run(
+            ["sips", "-s", "format", "png", str(SOURCE), "--out", str(output)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            ["sips", "-Z", str(size), str(output)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        return
+
+    if shutil.which("rsvg-convert"):
+        subprocess.run(
+            ["rsvg-convert", "-w", str(size), "-h", str(size), "-o", str(output), str(SOURCE)],
+            check=True,
+        )
+        return
+
+    if shutil.which("magick"):
+        subprocess.run(
+            ["magick", "-background", "none", str(SOURCE), "-resize", f"{size}x{size}", str(output)],
+            check=True,
+        )
+        return
+
+    try:
+        import cairosvg
+    except ImportError as error:
+        raise SystemExit(
+            "SVG rasterization needs sips, rsvg-convert, ImageMagick, or Python CairoSVG"
+        ) from error
+    cairosvg.svg2png(url=str(SOURCE), write_to=str(output), output_width=size)
+
+
+def make_macos_style_icon(source: Image.Image) -> Image.Image:
+    render_size = 2048
+    tile_inset = 160
+    tile_radius = 380
+    logo_limit = 1180
+    canvas = Image.new("RGBA", (render_size, render_size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle(
+        (tile_inset, tile_inset, render_size - tile_inset, render_size - tile_inset),
+        radius=tile_radius,
+        fill=(255, 255, 255, 255),
+    )
+
+    logo = source.convert("RGBA")
+    bounds = logo.getbbox()
+    if bounds:
+        logo = logo.crop(bounds)
+    scale = min(logo_limit / logo.width, logo_limit / logo.height)
+    logo = logo.resize(
+        (max(1, round(logo.width * scale)), max(1, round(logo.height * scale))),
+        Image.Resampling.LANCZOS,
+    )
+    canvas.alpha_composite(
+        logo,
+        ((render_size - logo.width) // 2, (render_size - logo.height) // 2),
+    )
+    return canvas.resize((1024, 1024), Image.Resampling.LANCZOS)
 
 
 def resized(source: Image.Image, size: int) -> Image.Image:
@@ -35,8 +95,11 @@ def main() -> None:
     ICONSET.mkdir()
     LINUX_ICONS.mkdir()
 
-    with Image.open(SOURCE).convert("RGBA") as source:
-        square = contain_on_square(source)
+    with tempfile.TemporaryDirectory(prefix="brizo-icon-") as temporary_directory:
+        raster_path = Path(temporary_directory) / "logo.png"
+        rasterize_svg(raster_path)
+        with Image.open(raster_path).convert("RGBA") as source:
+            square = make_macos_style_icon(source)
         resized(square, 1024).save(BUILD / "icon.png", optimize=True)
 
         iconset_sizes = {
@@ -68,7 +131,7 @@ def main() -> None:
     else:
         print("iconutil is unavailable; skipped build/icon.icns")
 
-    print("Prepared Brizo app icons from Hermes logo source")
+    print("Prepared Brizo app icons from logo.svg on a white macOS-style tile")
 
 
 if __name__ == "__main__":

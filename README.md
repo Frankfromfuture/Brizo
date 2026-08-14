@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="./logo.png" alt="Brizo logo" width="104" />
+  <img src="./logo.svg" alt="Brizo logo" width="104" />
   <br />
   <img src="./logo%20brizo.png" alt="Brizo" width="196" />
 
@@ -202,7 +202,7 @@ See [LICENSE](./LICENSE).
 ---
 
 <div align="center">
-  <img src="./logo.png" alt="Brizo logo" width="48" />
+  <img src="./logo.svg" alt="Brizo logo" width="48" />
   <br />
   <strong>Brizo, navigate beyond the known.</strong>
 </div>

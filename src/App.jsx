@@ -78,10 +78,9 @@ import { RefreshCwIcon } from "./components/remocn/icon-refresh-cw";
 import { SparklesIcon } from "./components/remocn/icon-sparkles";
 import { SoftBlurIn } from "./components/remocn/soft-blur-in";
 import { NewTabParticleBackground } from "./components/NewTabParticleBackground";
-import browserErrorBackgroundUrl from "../404.png";
-import brizoLogoUrl from "../hermes logo.svg";
+import brizoLogoUrl from "../logo.svg";
 import brizoWordmarkUrl from "../logo brizo.png";
-import modelGuardIconUrl from "../hermes logo.svg";
+import modelGuardIconUrl from "../logo.svg";
 import errorTabIconUrl from "./anchor.svg";
 import newTabIconUrl from "./compass-alt.svg";
 import downloadIconUrl from "./icons/download.svg";
@@ -6196,10 +6195,6 @@ export function App() {
             )}
             {navigationState.error ? (
               <div className="browser-error-page" aria-label="网页读取失败" aria-live="polite" role="status">
-                <div
-                  className="browser-error-background"
-                  style={{ backgroundImage: `url(${browserErrorBackgroundUrl})` }}
-                />
                 <div className="browser-error-content">
                   <img src={brizoLogoUrl} alt="Brizo" />
                   {(() => {

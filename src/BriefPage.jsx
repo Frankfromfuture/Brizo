@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   X,
 } from "@phosphor-icons/react";
-import brizoLogoUrl from "../hermes logo.svg";
+import brizoLogoUrl from "../logo.svg";
 
 const PREVIEW_IMAGES = [
   "https://images.unsplash.com/photo-1578575437130-527eed3abbec?auto=format&fit=crop&w=1400&q=82",

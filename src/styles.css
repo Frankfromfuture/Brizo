@@ -7925,16 +7925,6 @@ kbd {
   color: #252a26;
 }
 
-.browser-error-background {
-  position: absolute;
-  inset: 0;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: cover;
-  opacity: 0.2;
-  pointer-events: none;
-}
-
 .browser-error-content {
   position: absolute;
   z-index: 1;

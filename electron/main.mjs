@@ -88,11 +88,8 @@ function findBundledRendererAsset(stem, extension = "png") {
 }
 
 const loadingLogoPath = app.isPackaged
-  ? findBundledRendererAsset("hermes logo", "svg")
-  : path.join(projectRoot, "hermes logo.svg");
-const browserErrorBackgroundPath = app.isPackaged
-  ? findBundledRendererAsset("404")
-  : path.join(projectRoot, "404.png");
+  ? findBundledRendererAsset("logo", "svg")
+  : path.join(projectRoot, "logo.svg");
 const shellSmokeTest = process.argv.includes("--smoke-test");
 const browserSmokeTest = process.argv.includes("--browser-smoke");
 const pdfSmokeTest = process.argv.includes("--pdf-smoke");
@@ -1470,12 +1467,8 @@ function describeBrowserFailure({ statusCode = 0, errorCode = 0, errorDescriptio
 
 async function writeBrowserErrorPage(failure) {
   const [code, reason, chinese, english] = failure;
-  const [logo, background] = await Promise.all([
-    readFile(loadingLogoPath),
-    readFile(browserErrorBackgroundPath),
-  ]);
+  const logo = await readFile(loadingLogoPath);
   const logoUrl = `data:image/svg+xml;base64,${logo.toString("base64")}`;
-  const backgroundUrl = `data:image/png;base64,${background.toString("base64")}`;
   const html = `<!doctype html>
     <html lang="zh-CN">
       <head>
@@ -1487,7 +1480,6 @@ async function writeBrowserErrorPage(failure) {
           * { box-sizing: border-box; }
           html, body { width: 100%; height: 100%; margin: 0; background: #fff; }
           body { overflow: hidden; color: #252a26; font-family: "HarmonyOS Sans SC", sans-serif; font-style: normal; -webkit-font-smoothing: antialiased; }
-          body::before { content: ""; position: fixed; inset: 0; background: url("${backgroundUrl}") center / cover no-repeat; opacity: .2; pointer-events: none; }
           main { position: absolute; z-index: 1; top: 50%; left: 50%; width: min(560px, calc(100% - 48px)); transform: translate(-50%, calc(-50% - 7.5vh)); text-align: center; }
           img { width: 116px; height: 116px; object-fit: contain; }
           h1 { margin: 25px 0 10px; font-size: 25px; font-weight: 500; letter-spacing: .02em; }
@@ -5451,7 +5443,7 @@ function createWindow() {
                 && wordmark?.complete
                 && mark.naturalWidth > 0
                 && wordmark.naturalWidth > 0
-                && /\\/hermes logo(?:-[^/]+)?\\.svg$/.test(decodeURIComponent(markUrl))
+                && /\\/logo(?:-[^/]+)?\\.svg$/.test(decodeURIComponent(markUrl))
                 && /\\/logo brizo(?:-[^/]+)?\\.png$/.test(wordmarkUrl),
               );
             })(),
