@@ -54,7 +54,7 @@ const AUTHORITATIVE_MEDIA_DOMAINS = new Set([
   "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "wsj.com",
   "nytimes.com", "bbc.com", "bbc.co.uk", "economist.com", "theguardian.com",
   "xinhuanet.com", "people.com.cn", "cctv.com", "chinanews.com.cn",
-  "caixin.com", "yicai.com", "thepaper.cn",
+  "caixin.com", "yicai.com", "thepaper.cn", "sina.com.cn",
 ]);
 
 function domainMatches(domain, entry) {

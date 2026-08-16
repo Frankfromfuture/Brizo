@@ -168,7 +168,7 @@ let browserView;
 const browserViews = new Map();
 const browserTabSleepDelayMs = 10 * 60 * 1000;
 const browserContentBorderRadius = 15;
-const browserFrameInset = 2;
+const browserFrameInset = 0;
 const pdfReaderBackgroundColor = "rgb(63, 63, 63)";
 let browserBounds = { x: 0, y: 72, width: 800, height: 600 };
 let browserVisible = true;
@@ -1833,17 +1833,17 @@ function requestOpenPdfTab(input, options = {}) {
   return true;
 }
 
-async function sampleRenderedTopEdgeColor(webContents) {
+async function sampleRenderedLeftEdgeColor(webContents) {
   if (!webContents || webContents.isDestroyed() || browserBounds.width <= 0 || browserBounds.height <= 0) return "";
   try {
     const image = await webContents.capturePage({
       x: 0,
       y: 0,
-      width: Math.max(1, Math.round(browserBounds.width)),
-      height: Math.min(6, Math.max(1, Math.round(browserBounds.height))),
+      width: Math.min(8, Math.max(1, Math.round(browserBounds.width))),
+      height: Math.max(1, Math.round(browserBounds.height)),
     });
     if (!image || image.isEmpty()) return "";
-    const bitmap = image.resize({ width: 120, height: 4, quality: "good" }).toBitmap();
+    const bitmap = image.resize({ width: 4, height: 120, quality: "good" }).toBitmap();
     const buckets = new Map();
     const bucketSize = 24;
     for (let offset = 0; offset + 3 < bitmap.length; offset += 4) {
@@ -1893,28 +1893,28 @@ async function updatePageBackgroundColor() {
           const alpha = normalized.match(/^rgba\\([^,]+,[^,]+,[^,]+,([^)]+)\\)$/)?.[1];
           return alpha == null || Number(alpha) > 0.08;
         };
-        const colorTouchingTopEdge = (x) => {
-          const topElement = document.elementFromPoint(x, 1);
-          const topStyle = topElement ? getComputedStyle(topElement) : null;
-          let element = topElement;
+        const colorTouchingLeftEdge = (y) => {
+          const leftElement = document.elementFromPoint(1, y);
+          const leftStyle = leftElement ? getComputedStyle(leftElement) : null;
+          let element = leftElement;
           while (element) {
             const rect = element.getBoundingClientRect();
             const color = getComputedStyle(element).backgroundColor;
-            if (rect.top <= 1.5 && rect.bottom > 1 && isVisibleColor(color)) {
+            if (rect.left <= 2 && rect.right > 1 && isVisibleColor(color)) {
               return {
                 color,
                 sourceTag: element.tagName || "",
-                topHasRenderedContent: ["CANVAS", "IFRAME", "IMG", "SVG", "VIDEO"].includes(topElement?.tagName)
-                  || (topStyle?.backgroundImage && topStyle.backgroundImage !== "none"),
+                leftHasRenderedContent: ["CANVAS", "IFRAME", "IMG", "SVG", "VIDEO"].includes(leftElement?.tagName)
+                  || (leftStyle?.backgroundImage && leftStyle.backgroundImage !== "none"),
               };
             }
             element = element.parentElement;
           }
           return null;
         };
-        const width = Math.max(document.documentElement.clientWidth, 1);
-        const edgeSamples = [0.08, 0.25, 0.5, 0.75, 0.92]
-          .map((ratio) => colorTouchingTopEdge(Math.min(width - 1, Math.max(0, width * ratio))))
+        const height = Math.max(document.documentElement.clientHeight, 1);
+        const edgeSamples = [0.08, 0.2, 0.35, 0.5, 0.65, 0.8, 0.92]
+          .map((ratio) => colorTouchingLeftEdge(Math.min(height - 1, Math.max(0, height * ratio))))
           .filter(Boolean);
         if (edgeSamples.length) {
           const counts = new Map();
@@ -1924,7 +1924,7 @@ async function updatePageBackgroundColor() {
           return {
             color,
             needsRenderedPixels: matchingSamples.some((sample) =>
-              sample.topHasRenderedContent || ["BODY", "HTML"].includes(sample.sourceTag)
+              sample.leftHasRenderedContent || ["BODY", "HTML"].includes(sample.sourceTag)
             ),
           };
         }
@@ -1939,7 +1939,7 @@ async function updatePageBackgroundColor() {
     `);
     const domColor = typeof domSample?.color === "string" ? domSample.color : "#ffffff";
     const renderedColor = sampleIsCurrent() && domSample?.needsRenderedPixels
-      ? await sampleRenderedTopEdgeColor(sampledWebContents)
+      ? await sampleRenderedLeftEdgeColor(sampledWebContents)
       : "";
     const color = renderedColor || domColor;
 
@@ -1969,12 +1969,8 @@ function setBrowserViewVisible(visible) {
       continue;
     }
     const isSelected = view === browserView && browserVisible;
-    const isPaintReady = isSelected && Boolean(view.__brizoContentReady);
-    const isPreparingReplacement = view === browserView
-      && browserVisible
-      && Boolean(view.__brizoNavigationPending);
     const frameView = view.__brizoFrameView;
-    const layoutBounds = view.__brizoNavigationViewport || browserBounds;
+    const layoutBounds = browserBounds;
     const frameTopOverlap = Math.min(browserContentBorderRadius, layoutBounds.y);
     const frameBounds = {
       x: Math.max(0, layoutBounds.x - browserFrameInset),
@@ -1992,21 +1988,15 @@ function setBrowserViewVisible(visible) {
       width: layoutBounds.width,
       height: layoutBounds.height,
     };
-    const shouldShowFrame = isPaintReady || isPreparingReplacement;
-    const snapshotVisible = isPreparingReplacement
-      && Boolean(view.__brizoSnapshotReady);
 
-    // Keep every native webpage at its real viewport size while overlays or
-    // another tab hide it. Resizing a WebContentsView to 0 × 0 triggers a
-    // responsive reflow; View visibility preserves layout, scroll, and DOM.
-    webContents.setBackgroundThrottling(!(isSelected || (browserVisible && view.__brizoNavigationPending)));
+    webContents.setBackgroundThrottling(!isSelected);
     frameView?.setBounds(frameBounds);
     view.setBounds(contentBounds);
     view.__brizoSnapshotView?.setBounds(contentBounds);
 
-    view.setVisible(shouldShowFrame);
-    view.__brizoSnapshotView?.setVisible(snapshotVisible);
-    frameView?.setVisible(shouldShowFrame);
+    view.setVisible(isSelected);
+    view.__brizoSnapshotView?.setVisible(false);
+    frameView?.setVisible(isSelected);
   }
 }
 
@@ -2063,7 +2053,7 @@ async function prepareBrowserSnapshotOverlay(view, preview) {
   if (view.__brizoSnapshotPreview === preview && view.__brizoSnapshotReady) return true;
   view.__brizoSnapshotPreview = preview;
   view.__brizoSnapshotReady = false;
-  const html = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:"><style>html,body,img{margin:0;width:100%;height:100%;overflow:hidden}body{background:#fff}img{display:block;object-fit:fill}</style><img src="${preview}" alt="">`;
+  const html = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:"><style>html,body,img{margin:0;width:100%;height:100%;overflow:hidden}body{background:#f1e7e1}img{display:block;object-fit:fill}</style><img src="${preview}" alt="">`;
   try {
     await overlayWebContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
     if (view.__brizoSnapshotPreview !== preview || overlayWebContents.isDestroyed()) return false;
@@ -2085,7 +2075,7 @@ async function prepareBrowserLoadingOverlay(view) {
     <meta charset="utf-8">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
     <style>
-      html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#fcfafa}
+      html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#f1e7e1}
       body{display:grid;place-items:center}
       i{width:22px;height:22px;border:1px solid rgba(165,140,94,.22);border-top-color:#a58c5e;border-radius:50%;animation:spin .8s linear infinite}
       @keyframes spin{to{transform:rotate(360deg)}}
@@ -2276,44 +2266,14 @@ function beginBrowserNavigation(view, action) {
   if (!webContents) return false;
   const requestGeneration = (view.__brizoNavigationRequestGeneration || 0) + 1;
   view.__brizoNavigationRequestGeneration = requestGeneration;
-  freezeBrowserNavigationViewport(view);
-  view.__brizoNavigationPending = true;
-  if (browserView === view) publishBrowserState();
-
-  void (async () => {
-    let preview = view.__brizoNavigationPreview || view.__brizoLastPaintPreview || "";
-    if (view.__brizoContentReady && webContents.getURL()) {
-      preview = await captureMeaningfulPreview(webContents) || preview;
-    }
-    if (
-      webContents.isDestroyed()
-      || view.__brizoNavigationRequestGeneration !== requestGeneration
-    ) return;
-    view.__brizoNavigationPreview = preview;
-    if (preview) view.__brizoLastPaintPreview = preview;
-    view.__brizoContentReady = false;
-    if (browserView === view) publishBrowserState();
-    if (preview) await prepareBrowserSnapshotOverlay(view, preview);
-    else await prepareBrowserLoadingOverlay(view);
-    if (view.__brizoSnapshotReady && mainWindow && !mainWindow.isDestroyed()) {
-      try {
-        // Let React paint the frozen outgoing frame underneath the still-visible
-        // native page before removing that native layer. This closes the single
-        // compositor-frame gap that would otherwise flash the host background.
-        await mainWindow.webContents.executeJavaScript(`
-          new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
-        `);
-      } catch {
-        // Continue navigation if the shell is closing or temporarily unavailable.
-      }
-    }
-    if (
-      webContents.isDestroyed()
-      || view.__brizoNavigationRequestGeneration !== requestGeneration
-    ) return;
+  view.__brizoNavigationPending = false;
+  view.__brizoContentReady = true;
+  view.__brizoNavigationPreview = "";
+  if (browserView === view) {
     setBrowserViewVisible(browserVisible);
-    action();
-  })();
+    publishBrowserState();
+  }
+  action();
   return true;
 }
 
@@ -2890,19 +2850,9 @@ function createBrowserView(window, ownerTabId = "__default__") {
     view.__brizoNavigationGeneration += 1;
     view.__brizoRevealGeneration = -1;
     view.__brizoPaintReadySignal = "";
+    view.__brizoContentReady = true;
+    view.__brizoNavigationPending = false;
     logBrowserNavigation("started", view, url);
-    // Toolbar/history navigation has already installed a frozen outgoing frame.
-    // Site links, script reloads and redirects reuse the last verified painted
-    // frame so every main-frame transition follows the same no-white-screen path.
-    if (!view.__brizoNavigationPending) {
-      freezeBrowserNavigationViewport(view);
-      view.__brizoNavigationPending = true;
-      view.__brizoNavigationPreview = view.__brizoNavigationPreview
-        || view.__brizoLastPaintPreview
-        || "";
-      view.__brizoContentReady = false;
-      if (browserView === view) setBrowserViewVisible(browserVisible);
-    }
     if (browserView !== view) return;
     browserNavigationGeneration += 1;
     if (!browserErrorPageActive) browserError = "";
@@ -2933,7 +2883,7 @@ function createBrowserView(window, ownerTabId = "__default__") {
       setTimeout(async () => {
         const webContents = getLiveViewWebContents(view);
         if (!webContents || !view.__brizoIsPdf) return;
-        const sampledColor = await sampleRenderedTopEdgeColor(webContents);
+        const sampledColor = await sampleRenderedLeftEdgeColor(webContents);
         if (!sampledColor) return;
         view.__brizoBackgroundColor = sampledColor;
         if (browserView === view) {
@@ -5275,8 +5225,8 @@ function registerBrowserIpc() {
 
 function createWindow() {
   const initialWindowWidth = 1440;
-  const windowButtonRightInset = 70;
-  const windowButtonTopInset = 16;
+  const windowButtonRightInset = 80;
+  const windowButtonTopInset = 22;
   const window = new BrowserWindow({
     title: "Brizo",
     icon: appIconPath,

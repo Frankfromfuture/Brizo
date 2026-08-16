@@ -31,7 +31,7 @@ void main() {
   float perspective = mix(0.48, 1.18, depth);
   float x = plane.x * perspective * 1.08;
   float y = mix(0.68, -0.82, depth) + height * mix(0.055, 0.19, depth);
-  float edgeFade = smoothstep(1.04, 0.74, abs(x));
+  float edgeFade = smoothstep(1.02, 0.74, abs(x)) * smoothstep(-0.96, -0.60, x);
   float horizonFade = smoothstep(0.0, 0.16, depth) * smoothstep(1.0, 0.82, depth);
 
   float shade = clamp(0.5 + height * 0.34 + depth * 0.18, 0.0, 1.0);
@@ -138,7 +138,7 @@ export function NewTabParticleBackground({ active }) {
         return;
       }
       lastFrameAt = now;
-      gl.clearColor(241.0 / 255.0, 241.0 / 255.0, 241.0 / 255.0, 1.0);
+      gl.clearColor(0.0, 0.0, 0.0, 0.0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.uniform1f(timeLocation, (now - startedAt) / 1000);
       gl.drawArrays(gl.POINTS, 0, GRID_SIZE * GRID_SIZE);

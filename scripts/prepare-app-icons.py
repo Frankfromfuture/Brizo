@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw
 
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE = ROOT / "logo.svg"
+SOURCE = ROOT / "logo pic.svg"
 BUILD = ROOT / "build"
 ICONSET = BUILD / "icon.iconset"
 LINUX_ICONS = BUILD / "icons"
@@ -56,7 +56,7 @@ def make_macos_style_icon(source: Image.Image) -> Image.Image:
     render_size = 2048
     tile_inset = 160
     tile_radius = 380
-    logo_limit = 1180
+    logo_limit = 1298
     canvas = Image.new("RGBA", (render_size, render_size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
     draw.rounded_rectangle(
@@ -131,7 +131,7 @@ def main() -> None:
     else:
         print("iconutil is unavailable; skipped build/icon.icns")
 
-    print("Prepared Brizo app icons from logo.svg on a white macOS-style tile")
+    print("Prepared Brizo app icons from logo pic.svg on a white macOS-style tile")
 
 
 if __name__ == "__main__":

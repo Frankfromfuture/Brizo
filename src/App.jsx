@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -13,6 +14,7 @@ import {
   ArrowSquareOut,
   ArrowsOut,
   ArrowsClockwise,
+  ArrowUUpLeft,
   BellSimple,
   BookmarkSimple,
   Brain,
@@ -52,6 +54,7 @@ import {
   Play,
   PencilSimple,
   Plus,
+  PushPin,
   PuzzlePiece,
   Rocket,
   Selection,
@@ -79,7 +82,8 @@ import { SparklesIcon } from "./components/remocn/icon-sparkles";
 import { SoftBlurIn } from "./components/remocn/soft-blur-in";
 import { NewTabParticleBackground } from "./components/NewTabParticleBackground";
 import brizoLogoUrl from "../logo.svg";
-import brizoWordmarkUrl from "../logo brizo.png";
+import brizoWordLogoUrl from "../logo word.svg";
+import logoPicUrl from "../logo pic.svg";
 import modelGuardIconUrl from "../logo.svg";
 import errorTabIconUrl from "./anchor.svg";
 import newTabIconUrl from "./compass-alt.svg";
@@ -438,11 +442,25 @@ function persistSearchHistory(items) {
   }
 }
 
+function formatHistoryTime(timestamp) {
+  if (!timestamp) return "";
+  try {
+    const d = new Date(timestamp);
+    const now = new Date();
+    const isToday = d.toDateString() === now.toDateString();
+    if (isToday) {
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  } catch {
+    return "";
+  }
+}
+
 function Logo() {
   return (
     <div className="brand" aria-label="Brizo home">
-      <img className="brizo-mark" src={brizoLogoUrl} alt="" />
-      <img className="brizo-wordmark" src={brizoWordmarkUrl} alt="Brizo" />
+      <img className="brizo-wordmark" src={brizoWordLogoUrl} alt="Brizo" />
     </div>
   );
 }
@@ -694,11 +712,115 @@ const START_TAB = {
   domain: "brizo",
   id: "brizo-start",
   isNewTab: true,
+  isPinned: false,
   useTodayGreeting: true,
   shortTitle: "新标签页",
   title: "新标签页",
   url: "",
 };
+
+const INITIAL_TABS = [
+  {
+    domain: "calendar.google.com",
+    id: "pinned-calendar",
+    isPinned: true,
+    shortTitle: "Google 日历",
+    title: "Google 日历",
+    url: "https://calendar.google.com",
+    iconKey: "calendar",
+  },
+  {
+    domain: "mail.google.com",
+    id: "pinned-gmail",
+    isPinned: true,
+    shortTitle: "Gmail",
+    title: "Gmail",
+    url: "https://mail.google.com",
+    iconKey: "gmail",
+  },
+  {
+    domain: "slack.com",
+    id: "pinned-slack",
+    isPinned: true,
+    shortTitle: "Slack",
+    title: "Slack",
+    url: "https://slack.com",
+    iconKey: "slack",
+  },
+  {
+    domain: "bilibili.com",
+    id: "pinned-bilibili",
+    isPinned: true,
+    shortTitle: "哔哩哔哩",
+    title: "哔哩哔哩",
+    url: "https://www.bilibili.com",
+    iconKey: "bilibili",
+  },
+  {
+    domain: "microsoft.com",
+    id: "pinned-edge",
+    isPinned: true,
+    shortTitle: "Edge",
+    title: "Microsoft Edge",
+    url: "https://www.microsoft.com/edge",
+    iconKey: "edge",
+  },
+  {
+    domain: "wx.qq.com",
+    id: "pinned-chat",
+    isPinned: true,
+    shortTitle: "微信",
+    title: "微信网页版",
+    url: "https://wx.qq.com",
+    iconKey: "chat",
+  },
+  {
+    domain: "brizo",
+    id: "pinned-brizo",
+    isPinned: true,
+    isNewTab: true,
+    shortTitle: "Brizo",
+    title: "Brizo",
+    url: "",
+    iconKey: "brizo",
+  },
+  {
+    domain: "gemini.google.com",
+    id: "tab-gemini",
+    isPinned: false,
+    shortTitle: "Google Gemini",
+    title: "Google Gemini",
+    url: "https://gemini.google.com",
+    iconKey: "gemini",
+  },
+  {
+    domain: "taobao.com",
+    id: "tab-taobao",
+    isPinned: false,
+    shortTitle: "淘宝",
+    title: "淘宝网",
+    url: "https://www.taobao.com",
+    iconKey: "taobao",
+  },
+  {
+    domain: "youdao.com",
+    id: "tab-youdao",
+    isPinned: false,
+    shortTitle: "网易有道",
+    title: "网易有道",
+    url: "https://fanyi.youdao.com",
+    iconKey: "youdao",
+  },
+  {
+    domain: "maps.google.com",
+    id: "tab-maps",
+    isPinned: false,
+    shortTitle: "Google 地图",
+    title: "Google 地图",
+    url: "https://maps.google.com",
+    iconKey: "maps",
+  },
+];
 
 const NEW_TAB_GREETINGS = [
   ["今天有什么冒险？", "有什么冒险在等着你？"],
@@ -1675,8 +1797,8 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
       </section>
 
       <div className="new-tab-compose">
-        <div className="new-tab-intro" aria-hidden={hasResults}>
-          <img className="new-tab-logo" src={brizoLogoUrl} alt="" />
+      <div className="new-tab-intro" aria-hidden={hasResults}>
+          <img className="new-tab-logo" src={logoPicUrl} alt="" />
           <h1>{greeting}</h1>
         </div>
 
@@ -1877,7 +1999,143 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
   );
 }
 
-function SiteIcon({ id = 1, faviconUrl = "", isError = false, isNewTab = false, isPdf = false }) {
+function BrandCustomIcon({ name }) {
+  if (name === "calendar") {
+    return (
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+        <rect x="2" y="3" width="20" height="18" rx="4.5" fill="#4285F4" />
+        <rect x="2" y="3" width="20" height="6" fill="#1A73E8" />
+        <text x="12" y="17.5" fill="#ffffff" fontSize="9.5" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">31</text>
+      </svg>
+    );
+  }
+  if (name === "gmail") {
+    return (
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+        <path d="M4 6C2.9 6 2 6.9 2 8V18C2 19.1 2.9 20 4 20H6V11.5L12 16L18 11.5V20H20C21.1 20 22 19.1 22 18V8C22 6.9 21.1 6 20 6H18L12 10.5L6 6H4Z" fill="#EA4335" />
+        <path d="M2 8V18C2 19.1 2.9 20 4 20H6V11.5L2 8.5V8Z" fill="#4285F4" />
+        <path d="M22 8V18C22 19.1 21.1 20 20 20H18V11.5L22 8.5V8Z" fill="#34A853" />
+        <path d="M6 11.5V20H4C2.9 20 2 19.1 2 18V8.5L6 11.5Z" fill="#FBBC05" />
+      </svg>
+    );
+  }
+  if (name === "slack") {
+    return (
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+        <path d="M5.5 10.5C6.33 10.5 7 9.83 7 9V5.5C7 4.67 6.33 4 5.5 4S4 4.67 4 5.5V9C4 9.83 4.67 10.5 5.5 10.5Z" fill="#E01E5A"/>
+        <path d="M4 12.5C4 13.33 4.67 14 5.5 14H9C9.83 14 10.5 13.33 10.5 12.5S9.83 11 9 11H5.5C4.67 11 4 11.67 4 12.5Z" fill="#E01E5A"/>
+        <path d="M10.5 5.5C10.5 4.67 9.83 4 9 4H5.5C4.67 4 4 4.67 4 5.5S4.67 7 5.5 7H9C9.83 7 10.5 6.33 10.5 5.5Z" fill="#36C5F0"/>
+        <path d="M12.5 4C11.67 4 11 4.67 11 5.5V9C11 9.83 11.67 10.5 12.5 10.5S14 9.83 14 9V5.5C14 4.67 13.33 4 12.5 4Z" fill="#36C5F0"/>
+        <path d="M18.5 10.5C17.67 10.5 17 9.83 17 9V5.5C17 4.67 17.67 4 18.5 4S20 4.67 20 5.5V9C20 9.83 19.33 10.5 18.5 10.5Z" fill="#2EB67D"/>
+        <path d="M20 12.5C20 11.67 19.33 11 18.5 11H15C14.17 11 13.5 11.67 13.5 12.5S14.17 14 15 14H18.5C19.33 14 20 13.33 20 12.5Z" fill="#2EB67D"/>
+        <path d="M13.5 18.5C13.5 19.33 14.17 20 15 20H18.5C19.33 20 20 19.33 20 18.5S19.33 17 18.5 17H15C14.17 17 13.5 17.67 13.5 18.5Z" fill="#ECB22E"/>
+        <path d="M11.5 20C12.33 20 13 19.33 13 18.5V15C13 14.17 12.33 13.5 11.5 13.5S10 14.17 10 15V18.5C10 19.33 10.67 20 11.5 20Z" fill="#ECB22E"/>
+      </svg>
+    );
+  }
+  if (name === "bilibili") {
+    return (
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+        <rect x="2" y="5" width="20" height="15" rx="5" fill="#00AEEC" />
+        <circle cx="8" cy="11.5" r="1.5" fill="#ffffff" />
+        <circle cx="16" cy="11.5" r="1.5" fill="#ffffff" />
+        <path d="M10 15C10.5 15.8 11.2 16 12 16C12.8 16 13.5 15.8 14 15" stroke="#ffffff" strokeWidth="1.5" strokeLinecap="round" />
+        <path d="M7 2.5L9.5 5" stroke="#00AEEC" strokeWidth="2" strokeLinecap="round" />
+        <path d="M17 2.5L14.5 5" stroke="#00AEEC" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (name === "edge") {
+    return (
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+        <circle cx="12" cy="12" r="10" fill="#0078D7" />
+        <path d="M12 4C7.58 4 4 7.58 4 12C4 16.42 7.58 20 12 20C15.5 20 18.44 17.76 19.46 14.62C18.66 15.48 17.2 16 15.5 16C12.5 16 10 13.5 10 10.5C10 8.5 11 6.8 12.6 5.8C12.4 5.8 12.2 4 12 4Z" fill="#50E6FF" />
+        <circle cx="13" cy="11" r="5" fill="#ffffff" />
+      </svg>
+    );
+  }
+  if (name === "chat") {
+    return (
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+        <circle cx="12" cy="12" r="10" fill="#C0C5C2" />
+        <path d="M12 6C8.68 6 6 8.24 6 11C6 12.56 6.86 13.94 8.22 14.85L7.5 17.5L10.3 16.1C10.84 16.24 11.41 16.3 12 16.3C15.32 16.3 18 14.06 18 11.3C18 8.54 15.32 6 12 6Z" fill="#ffffff" />
+      </svg>
+    );
+  }
+  if (name === "brizo") {
+    return (
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+        <rect x="2" y="2" width="20" height="20" rx="6" fill="#111111" />
+        <path d="M7 12C7 9.24 9.24 7 12 7C14.76 7 17 9.24 17 12V16C17 16.55 16.55 17 16 17H8C7.45 17 7 16.55 7 16V12Z" fill="#ffffff" />
+        <circle cx="12" cy="13" r="2.5" fill="#111111" />
+      </svg>
+    );
+  }
+  if (name === "gemini") {
+    return (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+        <path d="M12 2C12 7.52 7.52 12 2 12C7.52 12 12 16.48 12 22C12 16.48 16.48 12 22 12C16.48 12 12 7.52 12 2Z" fill="url(#gemini-grad-brand)" />
+        <defs>
+          <linearGradient id="gemini-grad-brand" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#4E82EE" />
+            <stop offset="0.5" stopColor="#9B72CB" />
+            <stop offset="1" stopColor="#D96570" />
+          </linearGradient>
+        </defs>
+      </svg>
+    );
+  }
+  if (name === "taobao") {
+    return (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+        <rect width="24" height="24" rx="5" fill="#FF5000" />
+        <text x="12" y="17" fill="#ffffff" fontSize="13" fontWeight="900" textAnchor="middle" fontFamily="sans-serif">淘</text>
+      </svg>
+    );
+  }
+  if (name === "youdao") {
+    return (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+        <text x="12" y="18" fill="#E02020" fontSize="18" fontWeight="900" fontStyle="italic" textAnchor="middle" fontFamily="sans-serif">y</text>
+      </svg>
+    );
+  }
+  if (name === "maps") {
+    return (
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+        <path d="M12 2C8.13 2 5 5.13 5 9C5 14.25 12 22 12 22C12 22 19 14.25 19 9C19 5.13 15.87 2 12 2Z" fill="#34A853" />
+        <path d="M12 2C8.13 2 5 5.13 5 9C5 10.3 5.35 11.5 5.96 12.55L12 5.5V2Z" fill="#4285F4" />
+        <path d="M12 22C12 22 19 14.25 19 9C19 8.1 18.8 7.25 18.45 6.5L12 14V22Z" fill="#FBBC05" />
+        <path d="M12 5.5L5.96 12.55C7.2 14.7 9.3 18.1 12 22V14L18.45 6.5C17.65 5.1 16.3 3.9 14.7 3.1L12 5.5Z" fill="#EA4335" />
+        <circle cx="12" cy="9" r="3.5" fill="#ffffff" />
+      </svg>
+    );
+  }
+  return null;
+}
+
+function SiteIcon({ id = 1, iconKey = "", url = "", faviconUrl = "", isError = false, isNewTab = false, isPdf = false }) {
+  let matchedKey = iconKey;
+  if (!matchedKey && url) {
+    if (url.includes("calendar.google.com")) matchedKey = "calendar";
+    else if (url.includes("mail.google.com")) matchedKey = "gmail";
+    else if (url.includes("slack.com")) matchedKey = "slack";
+    else if (url.includes("bilibili.com")) matchedKey = "bilibili";
+    else if (url.includes("microsoft.com") || url.includes("edge")) matchedKey = "edge";
+    else if (url.includes("wx.qq.com") || url.includes("weixin")) matchedKey = "chat";
+    else if (url.includes("gemini.google.com")) matchedKey = "gemini";
+    else if (url.includes("taobao.com")) matchedKey = "taobao";
+    else if (url.includes("youdao.com")) matchedKey = "youdao";
+    else if (url.includes("maps.google.com")) matchedKey = "maps";
+  }
+
+  if (matchedKey) {
+    const brandSvg = <BrandCustomIcon name={matchedKey} />;
+    if (brandSvg) {
+      return <span className="site-icon is-brand" aria-hidden="true">{brandSvg}</span>;
+    }
+  }
+
   const icons = {
     1: Flask,
     2: Brain,
@@ -1893,187 +2151,856 @@ function SiteIcon({ id = 1, faviconUrl = "", isError = false, isNewTab = false, 
       {isPdf
         ? <FilePdf size={14} weight="fill" />
         : isNewTab
-        ? <img src={newTabIconUrl} alt="" />
+        ? <img src={logoPicUrl} alt="" />
         : isError
           ? <img src={errorTabIconUrl} alt="" />
         : faviconUrl
           ? <img src={faviconUrl} alt="" />
-          : <Icon size={13} weight="bold" />}
+          : <Icon size={14} weight="bold" />}
     </span>
   );
 }
 
-function TopTabOutline({ activeTabId, tabOrderKey }) {
-  const svgRef = useRef(null);
-  const geometryRef = useRef(null);
-  const animationFrameRef = useRef(0);
-  const previousActiveIdRef = useRef(activeTabId);
-  const previousTabOrderKeyRef = useRef(tabOrderKey);
-  const [geometry, setGeometry] = useState(null);
+function TabContextMenu({ contextMenu, onClose, onTogglePin, onCloseTab, onCloseOtherTabs, onNewTab, onReload, onCopyUrl }) {
+  if (!contextMenu) return null;
+  const { x, y, tab } = contextMenu;
+  return createPortal(
+    <>
+      <div className="tab-context-backdrop" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} />
+      <div
+        className="tab-context-menu"
+        style={{ left: `${x}px`, top: `${y}px` }}
+        role="menu"
+      >
+        <button
+          type="button"
+          className="tab-context-item"
+          role="menuitem"
+          onClick={() => onTogglePin(tab.id)}
+        >
+          <PushPin size={15} weight={tab.isPinned ? "fill" : "regular"} />
+          <span>{tab.isPinned ? "取消常驻置顶" : "常驻置顶"}</span>
+        </button>
+        <button
+          type="button"
+          className="tab-context-item"
+          role="menuitem"
+          onClick={onNewTab}
+        >
+          <Plus size={15} />
+          <span>新建标签页</span>
+        </button>
+        <button
+          type="button"
+          className="tab-context-item"
+          role="menuitem"
+          onClick={() => onReload(tab)}
+        >
+          <ArrowsClockwise size={15} />
+          <span>重新加载</span>
+        </button>
+        {tab.url ? (
+          <button
+            type="button"
+            className="tab-context-item"
+            role="menuitem"
+            onClick={() => onCopyUrl(tab.url)}
+          >
+            <CopySimple size={15} />
+            <span>复制网址</span>
+          </button>
+        ) : null}
+        <div className="tab-context-divider" />
+        <button
+          type="button"
+          className="tab-context-item is-danger"
+          role="menuitem"
+          onClick={() => onCloseTab(tab.id)}
+        >
+          <X size={15} />
+          <span>关闭标签页</span>
+        </button>
+        <button
+          type="button"
+          className="tab-context-item"
+          role="menuitem"
+          onClick={() => onCloseOtherTabs(tab.id)}
+        >
+          <Square size={15} />
+          <span>关闭其他标签页</span>
+        </button>
+      </div>
+    </>,
+    document.body
+  );
+}
 
-  useLayoutEffect(() => {
-    const svg = svgRef.current;
-    const strip = svg?.parentElement;
-    const tabList = strip?.querySelector(".top-tab-list");
-    if (!svg || !strip || !tabList) return undefined;
+const MARQUEE_SPEED_PX_PER_SEC = 36;
+const MARQUEE_SCROLL_RATIO = 0.3;
 
-    const makeGeometry = ({ frameHeight, height, left, right, top, width }) => {
-      const frameStrokeInset = 0.75;
-      const baseline = height - frameStrokeInset;
-      const shoulderRadius = 15;
-      const topRadius = 15;
-      const stripEdgeRadius = 15;
-      const bottomRadius = 15;
-      const bottomFrameInset = 6;
-      const rightFrameInset = 6;
-      const leftFrame = 0;
-      const rightFrame = width - rightFrameInset;
-      const frameBottom = frameHeight - bottomFrameInset;
-      const shoulderTop = baseline - shoulderRadius;
-      const leftOuter = left - shoulderRadius;
-      const rightOuter = right + shoulderRadius;
+function applyMarqueeMetrics(text, distance) {
+  const duration = distance / (MARQUEE_SCROLL_RATIO * MARQUEE_SPEED_PX_PER_SEC);
+  text.style.setProperty("--marquee-distance", `${distance}px`);
+  text.style.setProperty("--marquee-duration", `${Math.max(1.5, duration)}s`);
+}
 
-      return {
-        width,
-        height,
-        left,
-        right,
-        top,
-        frameHeight,
-        outlineHeight: frameHeight,
-        fillPath: [
-          `M ${leftOuter} ${baseline}`,
-          `A ${shoulderRadius} ${shoulderRadius} 0 0 0 ${left} ${shoulderTop}`,
-          `V ${top + topRadius}`,
-          `A ${topRadius} ${topRadius} 0 0 1 ${left + topRadius} ${top}`,
-          `H ${right - topRadius}`,
-          `A ${topRadius} ${topRadius} 0 0 1 ${right} ${top + topRadius}`,
-          `V ${shoulderTop}`,
-          `A ${shoulderRadius} ${shoulderRadius} 0 0 0 ${rightOuter} ${baseline}`,
-          `L ${rightOuter} ${height}`,
-          `L ${leftOuter} ${height}`,
-          "Z",
-        ].join(" "),
-        strokePath: [
-          `M ${leftFrame} ${baseline + stripEdgeRadius}`,
-          `A ${stripEdgeRadius} ${stripEdgeRadius} 0 0 1 ${leftFrame + stripEdgeRadius} ${baseline}`,
-          `H ${leftOuter}`,
-          `A ${shoulderRadius} ${shoulderRadius} 0 0 0 ${left} ${shoulderTop}`,
-          `V ${top + topRadius}`,
-          `A ${topRadius} ${topRadius} 0 0 1 ${left + topRadius} ${top}`,
-          `H ${right - topRadius}`,
-          `A ${topRadius} ${topRadius} 0 0 1 ${right} ${top + topRadius}`,
-          `V ${shoulderTop}`,
-          `A ${shoulderRadius} ${shoulderRadius} 0 0 0 ${rightOuter} ${baseline}`,
-          `H ${rightFrame - stripEdgeRadius}`,
-          `A ${stripEdgeRadius} ${stripEdgeRadius} 0 0 1 ${rightFrame} ${baseline + stripEdgeRadius}`,
-          `V ${frameBottom - bottomRadius}`,
-          `A ${bottomRadius} ${bottomRadius} 0 0 1 ${rightFrame - bottomRadius} ${frameBottom}`,
-          `H ${leftFrame + bottomRadius}`,
-          `A ${bottomRadius} ${bottomRadius} 0 0 1 ${leftFrame} ${frameBottom - bottomRadius}`,
-          "Z",
-        ].join(" "),
-      };
-    };
+function startTabTitleMarquee(event) {
+  const label = event.currentTarget.querySelector(".sidebar-tab-title");
+  const text = label?.firstElementChild;
+  if (!label || !text) return;
+  const distance = text.scrollWidth - label.clientWidth;
+  if (distance > 0) {
+    applyMarqueeMetrics(text, distance);
+    event.currentTarget.classList.add("is-marquee");
+  }
+}
 
-    const publishGeometry = (nextGeometry) => {
-      geometryRef.current = nextGeometry;
-      setGeometry(nextGeometry);
-    };
+function stopTabTitleMarquee(event) {
+  event.currentTarget.classList.remove("is-marquee");
+}
 
-    const updateGeometry = () => {
-      if (animationFrameRef.current) return;
-      const active = strip.querySelector(".top-tab.active, .brief-utility-tab.active");
-      if (!active) return;
+function findBookmarkTreeNode(root, folderPath) {
+  if (!folderPath) return root;
+  let node = root;
+  for (const folderName of splitFolderPath(folderPath)) {
+    if (!node?.folders?.[folderName]) return null;
+    node = node.folders[folderName];
+  }
+  return node;
+}
 
-      const stripRect = strip.getBoundingClientRect();
-      const panelRect = strip.closest(".browser-panel")?.getBoundingClientRect();
-      const activeRect = active.getBoundingClientRect();
-      const width = stripRect.width;
-      const height = stripRect.height;
-      const frameHeight = panelRect?.height || window.innerHeight;
-      const left = activeRect.left - stripRect.left + 0.75;
-      const right = activeRect.right - stripRect.left - 0.75;
-      const top = activeRect.top - stripRect.top + 0.75;
-      const target = makeGeometry({ frameHeight, height, left, right, top, width });
-      const previous = geometryRef.current;
-      const shouldAnimate = Boolean(
-        previous
-        && previousActiveIdRef.current !== activeTabId
-        && previousTabOrderKeyRef.current === tabOrderKey
-        && previous.width === target.width
-        && previous.height === target.height
-        && previous.frameHeight === target.frameHeight
-        && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      );
-      previousActiveIdRef.current = activeTabId;
-      previousTabOrderKeyRef.current = tabOrderKey;
+function sortBookmarkFolderEntries(node, folderOrders, folderPath = "") {
+  const manualOrder = folderOrders?.[folderPath] || [];
+  const manualRanks = new Map(
+    manualOrder.map((folderName, index) => [folderName, index]),
+  );
+  return Object.entries(node?.folders || {}).sort(
+    ([leftName, leftNode], [rightName, rightNode]) => {
+      const leftRank = manualRanks.get(leftName);
+      const rightRank = manualRanks.get(rightName);
+      if (leftRank !== undefined || rightRank !== undefined) {
+        if (leftRank === undefined) return 1;
+        if (rightRank === undefined) return -1;
+        return leftRank - rightRank;
+      }
+      const leftOrder = Number(leftNode?.sourceOrder);
+      const rightOrder = Number(rightNode?.sourceOrder);
+      if (Number.isFinite(leftOrder) && Number.isFinite(rightOrder) && leftOrder !== rightOrder) {
+        return leftOrder - rightOrder;
+      }
+      return String(leftName).localeCompare(String(rightName), "zh-CN");
+    },
+  );
+}
 
-      if (!shouldAnimate) {
-        publishGeometry(target);
+function HorizontalBookmarksBar({
+  bookmarkTree,
+  folderOrders = {},
+  dragItem,
+  dropTarget,
+  lightForeground = false,
+  onDragEnd,
+  onDragOver,
+  onVerticalDragOver,
+  onDragStart,
+  onDrop,
+  onDropdownOpenChange = () => {},
+  onOpenBookmark,
+  onOpenBookmarkContextEditor,
+}) {
+  const [activeDropdownFolder, setActiveDropdownFolder] = useState(null);
+  const [openFolderPaths, setOpenFolderPaths] = useState([]);
+  const [menuAnchor, setMenuAnchor] = useState(null);
+  const [menuScroll, setMenuScroll] = useState({ top: false, bottom: false });
+  const folderDropdownRef = useRef(null);
+  const scrollContentRef = useRef(null);
+  const triggerRef = useRef(null);
+  const autoScrollRef = useRef(0);
+  const hoverCloseTimer = useRef(0);
+
+  useEffect(() => {
+    onDropdownOpenChange(Boolean(activeDropdownFolder));
+    return () => onDropdownOpenChange(false);
+  }, [activeDropdownFolder, onDropdownOpenChange]);
+
+  const stopAutoScroll = () => {
+    if (autoScrollRef.current) {
+      window.clearInterval(autoScrollRef.current);
+      autoScrollRef.current = 0;
+    }
+  };
+
+  const updateScrollFlags = () => {
+    const menu = scrollContentRef.current;
+    if (!menu) return;
+    const top = menu.scrollTop > 0;
+    const bottom = menu.scrollTop + menu.clientHeight < menu.scrollHeight - 1;
+    setMenuScroll((current) => (
+      current.top === top && current.bottom === bottom ? current : { top, bottom }
+    ));
+  };
+
+  const startAutoScroll = (direction) => {
+    stopAutoScroll();
+    const menu = scrollContentRef.current;
+    if (!menu) return;
+    autoScrollRef.current = window.setInterval(() => {
+      const el = scrollContentRef.current;
+      if (!el) {
+        stopAutoScroll();
         return;
       }
+      const maxTop = el.scrollHeight - el.clientHeight;
+      const next = direction > 0
+        ? Math.min(el.scrollTop + 10, maxTop)
+        : Math.max(el.scrollTop - 10, 0);
+      el.scrollTop = next;
+      updateScrollFlags();
+      if ((direction > 0 && next >= maxTop) || (direction < 0 && next <= 0)) {
+        stopAutoScroll();
+      }
+    }, 40);
+  };
 
-      const startedAt = performance.now();
-      const duration = 220;
-      const animate = (now) => {
-        const progress = Math.min(1, (now - startedAt) / duration);
-        const eased = 1 - ((1 - progress) ** 3);
-        const interpolate = (from, to) => from + (to - from) * eased;
-        publishGeometry(makeGeometry({
-          frameHeight: target.frameHeight,
-          width: target.width,
-          height: target.height,
-          left: interpolate(previous.left, target.left),
-          right: interpolate(previous.right, target.right),
-          top: interpolate(previous.top, target.top),
-        }));
-        if (progress < 1) {
-          animationFrameRef.current = window.requestAnimationFrame(animate);
-        } else {
-          animationFrameRef.current = 0;
-        }
-      };
-      animationFrameRef.current = window.requestAnimationFrame(animate);
+  const startNameMarquee = (event) => {
+    const label = event.currentTarget.querySelector(
+      ".bookmarks-bar-dropdown-folder-name, .bookmarks-bar-dropdown-item-name",
+    );
+    const text = label?.firstElementChild;
+    if (!label || !text) return;
+    const distance = text.scrollWidth - label.clientWidth;
+    if (distance > 0) {
+      applyMarqueeMetrics(text, distance);
+      event.currentTarget.classList.add("is-marquee");
+    }
+  };
+
+  const stopNameMarquee = (event) => event.currentTarget.classList.remove("is-marquee");
+
+  useEffect(() => {
+    if (!activeDropdownFolder) return undefined;
+    const handleClickOutside = (event) => {
+      if (
+        folderDropdownRef.current?.contains(event.target)
+        || triggerRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      setActiveDropdownFolder(null);
+      setOpenFolderPaths([]);
+      setMenuAnchor(null);
+      stopAutoScroll();
     };
-
-    updateGeometry();
-    const observer = new ResizeObserver(updateGeometry);
-    observer.observe(strip);
-    observer.observe(tabList);
-    const panel = strip.closest(".browser-panel");
-    if (panel) observer.observe(panel);
-    const active = strip.querySelector(".top-tab.active, .brief-utility-tab.active");
-    if (active) observer.observe(active);
-    tabList.addEventListener("scroll", updateGeometry, { passive: true });
-    window.addEventListener("resize", updateGeometry);
-
+    const repositionMenu = () => {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const menuWidth = folderDropdownRef.current?.getBoundingClientRect().width || 190;
+      const top = Math.round(rect.bottom + 4);
+      const maxHeight = Math.max(120, Math.min(540, Math.round(window.innerHeight - top - 8)));
+      const left = Math.max(
+        8,
+        Math.min(Math.round(rect.left), Math.round(window.innerWidth - menuWidth - 8)),
+      );
+      setMenuAnchor((current) => (
+        current && current.top === top && current.left === left && current.maxHeight === maxHeight
+          ? current
+          : { top, left, maxHeight }
+      ));
+    };
+    window.addEventListener("pointerdown", handleClickOutside);
+    window.addEventListener("resize", repositionMenu);
+    window.addEventListener("scroll", repositionMenu, true);
+    repositionMenu();
     return () => {
-      window.cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = 0;
-      observer.disconnect();
-      tabList.removeEventListener("scroll", updateGeometry);
-      window.removeEventListener("resize", updateGeometry);
+      stopAutoScroll();
+      window.removeEventListener("pointerdown", handleClickOutside);
+      window.removeEventListener("resize", repositionMenu);
+      window.removeEventListener("scroll", repositionMenu, true);
     };
-  }, [activeTabId, tabOrderKey]);
+  }, [activeDropdownFolder]);
+
+  useLayoutEffect(() => {
+    updateScrollFlags();
+    return () => stopAutoScroll();
+  }, [activeDropdownFolder, openFolderPaths]);
+
+  useEffect(() => () => {
+    if (hoverCloseTimer.current) {
+      window.clearTimeout(hoverCloseTimer.current);
+    }
+  }, []);
+
+  const rootFolderEntries = sortBookmarkFolderEntries(bookmarkTree, folderOrders);
+  const rootBookmarks = [...(bookmarkTree?.bookmarks || [])].sort(compareBookmarks);
+  const dropClassFor = (key) => (
+    dropTarget?.key === key ? ` is-drop-${dropTarget.position}` : ""
+  );
+
+  if (rootFolderEntries.length === 0 && rootBookmarks.length === 0) {
+    return null;
+  }
+
+  const closeMenu = () => {
+    setActiveDropdownFolder(null);
+    setOpenFolderPaths([]);
+    setMenuAnchor(null);
+  };
+
+  const openDropdown = (folderName, trigger) => {
+    const rect = trigger.getBoundingClientRect();
+    const top = Math.round(rect.bottom + 4);
+    setMenuAnchor({
+      top,
+      left: Math.max(8, Math.round(rect.left)),
+      maxHeight: Math.max(120, Math.min(540, Math.round(window.innerHeight - top - 8))),
+    });
+    setActiveDropdownFolder(folderName);
+    setOpenFolderPaths([]);
+  };
+
+  const openFolderPathAt = (level, path) => {
+    setOpenFolderPaths((current) => {
+      const next = current.slice(0, level);
+      next.push(path);
+      return next;
+    });
+  };
+
+  const clearHoverClose = () => {
+    if (hoverCloseTimer.current) {
+      window.clearTimeout(hoverCloseTimer.current);
+      hoverCloseTimer.current = 0;
+    }
+  };
+
+  const scheduleHoverClose = () => {
+    clearHoverClose();
+    hoverCloseTimer.current = window.setTimeout(closeMenu, 500);
+  };
 
   return (
-    <svg
-      ref={svgRef}
-      className="top-tab-outline"
-      viewBox={geometry ? `0 0 ${geometry.width} ${geometry.outlineHeight}` : undefined}
-      style={geometry ? { height: `${geometry.outlineHeight}px` } : undefined}
-      preserveAspectRatio="none"
-      aria-hidden="true"
-      focusable="false"
+    <div
+      className={`horizontal-bookmarks-bar${lightForeground ? " uses-light-foreground" : ""}`}
+      role="navigation"
+      aria-label="收藏夹栏"
     >
-      {geometry && (
-        <>
-          <path className="top-tab-outline-fill" d={geometry.fillPath} />
-          <path className="top-tab-outline-stroke" d={geometry.strokePath} />
-        </>
+      {rootFolderEntries.map(([folderName, folderNode]) => {
+        const isOpen = activeDropdownFolder === folderName;
+        const activeNode = isOpen ? folderNode : null;
+        const activeEntries = activeNode
+          ? sortBookmarkFolderEntries(activeNode, folderOrders, folderName)
+          : [];
+        const activeBookmarks = activeNode
+          ? [...activeNode.bookmarks].sort(compareBookmarks)
+          : [];
+        const openChildPath = isOpen ? openFolderPaths[0] : null;
+        const openChildNode = openChildPath
+          ? activeNode?.folders?.[splitFolderPath(openChildPath).at(-1)]
+          : null;
+
+        return (
+          <div
+            key={folderName}
+            className={`bookmarks-bar-folder-wrapper${isOpen ? " is-open" : ""}`}
+          >
+            <button
+              className={`bookmarks-bar-folder-btn${dropClassFor(`folder:${folderName}`)}`}
+              type="button"
+              aria-expanded={isOpen}
+              ref={isOpen ? triggerRef : null}
+              draggable
+              onMouseEnter={(event) => {
+                if (activeDropdownFolder !== folderName) {
+                  openDropdown(folderName, event.currentTarget);
+                }
+                clearHoverClose();
+              }}
+              onMouseLeave={scheduleHoverClose}
+              onClick={(event) => {
+                if (isOpen) {
+                  closeMenu();
+                  return;
+                }
+                openDropdown(folderName, event.currentTarget);
+              }}
+              onContextMenu={(event) => onOpenBookmarkContextEditor(
+                event,
+                { type: "folder", path: folderName, title: folderName },
+                { fromBar: true },
+              )}
+              onDragStart={(event) => onDragStart(event, {
+                type: "folder",
+                path: folderName,
+                title: folderName,
+              })}
+              onDragOver={(event) => {
+                if (activeDropdownFolder !== folderName) {
+                  openDropdown(folderName, event.currentTarget);
+                }
+                clearHoverClose();
+                onDragOver(event, {
+                  type: "folder",
+                  path: folderName,
+                  key: `folder:${folderName}`,
+                });
+              }}
+              onDrop={(event) => onDrop(event, {
+                type: "folder",
+                path: folderName,
+                key: `folder:${folderName}`,
+              })}
+              onDragEnd={onDragEnd}
+            >
+              <FolderSimple size={18} weight="fill" />
+              <span>{folderName}</span>
+              <CaretDown size={10} weight="bold" />
+            </button>
+            {isOpen && activeNode && menuAnchor && createPortal(
+              <div
+                className="bookmarks-bar-dropdown-menu"
+                role="menu"
+                ref={folderDropdownRef}
+                onMouseEnter={clearHoverClose}
+                onMouseLeave={scheduleHoverClose}
+                style={{ position: "fixed", top: menuAnchor.top, left: menuAnchor.left }}
+              >
+                <div
+                  className="bookmarks-bar-dropdown-scroll"
+                  ref={scrollContentRef}
+                  onScroll={updateScrollFlags}
+                  style={{ maxHeight: menuAnchor.maxHeight }}
+                >
+                  {activeEntries.map(([subFolderName, subFolderNode]) => {
+                    const subFolderPath = `${folderName} / ${subFolderName}`;
+                    return (
+                      <button
+                        key={subFolderName}
+                        className={`bookmarks-bar-dropdown-folder${dropClassFor(`folder:${subFolderPath}`)}`}
+                        type="button"
+                        role="menuitem"
+                        aria-haspopup="true"
+                        draggable
+                        onClick={() => openFolderPathAt(0, subFolderPath)}
+                        onContextMenu={(event) => onOpenBookmarkContextEditor(
+                          event,
+                          { type: "folder", path: subFolderPath, title: subFolderName },
+                          { fromBar: true },
+                        )}
+                        onMouseEnter={(event) => {
+                          openFolderPathAt(0, subFolderPath);
+                          startNameMarquee(event);
+                        }}
+                        onMouseLeave={stopNameMarquee}
+                        onDragStart={(event) => onDragStart(event, {
+                          type: "folder",
+                          path: subFolderPath,
+                          title: subFolderName,
+                        })}
+                        onDragOver={(event) => {
+                          openFolderPathAt(0, subFolderPath);
+                          clearHoverClose();
+                          (onVerticalDragOver || onDragOver)(event, {
+                            type: "folder",
+                            path: subFolderPath,
+                            key: `folder:${subFolderPath}`,
+                          });
+                        }}
+                        onDrop={(event) => onDrop(event, {
+                          type: "folder",
+                          path: subFolderPath,
+                          key: `folder:${subFolderPath}`,
+                        })}
+                        onDragEnd={onDragEnd}
+                      >
+                        <FolderSimple size={18} weight="fill" />
+                        <span className="bookmarks-bar-dropdown-folder-name"><span>{subFolderName}</span></span>
+                        <CaretRight size={11} weight="bold" />
+                      </button>
+                    );
+                  })}
+                  {activeBookmarks.map((bookmark) => (
+                    <button
+                      key={bookmark.id || bookmark.url}
+                      className={`bookmarks-bar-dropdown-item${dropClassFor(`bookmark:${bookmark.url}`)}`}
+                      type="button"
+                      role="menuitem"
+                      title={bookmark.url}
+                      draggable
+                      onClick={() => {
+                        closeMenu();
+                        onOpenBookmark(bookmark);
+                      }}
+                      onContextMenu={(event) => {
+                        closeMenu();
+                        onOpenBookmarkContextEditor(
+                          event,
+                          { type: "bookmark", bookmark },
+                          { fromBar: true },
+                        );
+                      }}
+                      onMouseEnter={startNameMarquee}
+                      onMouseLeave={stopNameMarquee}
+                      onDragStart={(event) => onDragStart(event, {
+                        type: "bookmark",
+                        url: bookmark.url,
+                        folder: bookmark.folder || "",
+                        title: bookmark.title || bookmark.url,
+                      })}
+                      onDragOver={(event) => {
+                        clearHoverClose();
+                        (onVerticalDragOver || onDragOver)(event, {
+                          type: "bookmark",
+                          url: bookmark.url,
+                          folder: bookmark.folder || "",
+                          key: `bookmark:${bookmark.url}`,
+                        });
+                      }}
+                      onDrop={(event) => onDrop(event, {
+                        type: "bookmark",
+                        url: bookmark.url,
+                        folder: bookmark.folder || "",
+                        key: `bookmark:${bookmark.url}`,
+                      })}
+                      onDragEnd={onDragEnd}
+                    >
+                      <BookmarkFavicon bookmark={bookmark} />
+                      <span className="bookmarks-bar-dropdown-item-name"><span>{bookmark.title || bookmark.url}</span></span>
+                    </button>
+                  ))}
+                  {activeEntries.length === 0 && activeBookmarks.length === 0 && (
+                    <div className="bookmarks-bar-dropdown-empty">此文件夹为空</div>
+                  )}
+                </div>
+                <div
+                  className={`bookmarks-bar-dropdown-edge is-top${menuScroll.top ? " is-visible" : ""}`}
+                  onPointerEnter={() => startAutoScroll(-1)}
+                  onPointerLeave={stopAutoScroll}
+                >
+                  <CaretUp size={12} weight="bold" />
+                </div>
+                <div
+                  className={`bookmarks-bar-dropdown-edge is-bottom${menuScroll.bottom ? " is-visible" : ""}`}
+                  onPointerEnter={() => startAutoScroll(1)}
+                  onPointerLeave={stopAutoScroll}
+                >
+                  <CaretDown size={12} weight="bold" />
+                </div>
+                {openChildNode && (
+                  <BookmarkDropdownCascade
+                    level={1}
+                    path={openChildPath}
+                    node={openChildNode}
+                    folderOrders={folderOrders}
+                    openFolderPaths={openFolderPaths}
+                    onOpenFolderPath={openFolderPathAt}
+                    onClose={closeMenu}
+                    onOpenBookmark={onOpenBookmark}
+                    onOpenBookmarkContextEditor={onOpenBookmarkContextEditor}
+                    parentRef={folderDropdownRef}
+                    dropClassFor={dropClassFor}
+                    onDragStart={onDragStart}
+                    onDragOver={onVerticalDragOver || onDragOver}
+                    onDrop={onDrop}
+                    onDragEnd={onDragEnd}
+                  />
+                )}
+              </div>,
+              document.getElementById("root"),
+            )}
+          </div>
+        );
+      })}
+      {rootBookmarks.map((bookmark) => (
+        <button
+          key={bookmark.id || bookmark.url}
+          className={`bookmarks-bar-item${dropClassFor(`bookmark:${bookmark.url}`)}`}
+          type="button"
+          title={bookmark.url}
+          onClick={() => onOpenBookmark(bookmark)}
+          onContextMenu={(event) => onOpenBookmarkContextEditor(
+            event,
+            { type: "bookmark", bookmark },
+            { fromBar: true },
+          )}
+          draggable
+          onDragStart={(event) => onDragStart(event, {
+            type: "bookmark",
+            url: bookmark.url,
+            folder: bookmark.folder || "",
+            title: bookmark.title || bookmark.url,
+          })}
+          onDragOver={(event) => onDragOver(event, {
+            type: "bookmark",
+            url: bookmark.url,
+            folder: bookmark.folder || "",
+            key: `bookmark:${bookmark.url}`,
+          })}
+          onDrop={(event) => onDrop(event, {
+            type: "bookmark",
+            url: bookmark.url,
+            folder: bookmark.folder || "",
+            key: `bookmark:${bookmark.url}`,
+          })}
+          onDragEnd={onDragEnd}
+        >
+          <BookmarkFavicon bookmark={bookmark} />
+          <span>{bookmark.title || bookmark.url}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function BookmarkDropdownCascade({
+  level,
+  path,
+  node,
+  folderOrders,
+  openFolderPaths,
+  onOpenFolderPath,
+  onClose,
+  onOpenBookmark,
+  onOpenBookmarkContextEditor,
+  parentRef,
+  dropClassFor = () => "",
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+}) {
+  const selfRef = useRef(null);
+  const scrollRef = useRef(null);
+  const autoScrollRef = useRef(0);
+  const [menuScroll, setMenuScroll] = useState({ top: false, bottom: false });
+  const [side, setSide] = useState("right");
+
+  const updateScrollFlags = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const top = el.scrollTop > 0;
+    const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+    setMenuScroll((current) => (
+      current.top === top && current.bottom === bottom ? current : { top, bottom }
+    ));
+  };
+
+  const stopAutoScroll = () => {
+    if (autoScrollRef.current) {
+      window.clearInterval(autoScrollRef.current);
+      autoScrollRef.current = 0;
+    }
+  };
+
+  const startAutoScroll = (direction) => {
+    stopAutoScroll();
+    const el = scrollRef.current;
+    if (!el) return;
+    autoScrollRef.current = window.setInterval(() => {
+      const current = scrollRef.current;
+      if (!current) {
+        stopAutoScroll();
+        return;
+      }
+      const maxTop = current.scrollHeight - current.clientHeight;
+      const next = direction > 0
+        ? Math.min(current.scrollTop + 10, maxTop)
+        : Math.max(current.scrollTop - 10, 0);
+      current.scrollTop = next;
+      updateScrollFlags();
+      if ((direction > 0 && next >= maxTop) || (direction < 0 && next <= 0)) {
+        stopAutoScroll();
+      }
+    }, 40);
+  };
+
+  const startNameMarquee = (event) => {
+    const label = event.currentTarget.querySelector(
+      ".bookmarks-bar-dropdown-folder-name, .bookmarks-bar-dropdown-item-name",
+    );
+    const text = label?.firstElementChild;
+    if (!label || !text) return;
+    const distance = text.scrollWidth - label.clientWidth;
+    if (distance > 0) {
+      applyMarqueeMetrics(text, distance);
+      event.currentTarget.classList.add("is-marquee");
+    }
+  };
+
+  const stopNameMarquee = (event) => event.currentTarget.classList.remove("is-marquee");
+
+  useLayoutEffect(() => {
+    const computeSide = () => {
+      const parent = parentRef?.current;
+      const self = selfRef.current;
+      if (!parent || !self) return;
+      const parentRect = parent.getBoundingClientRect();
+      const selfWidth = self.getBoundingClientRect().width;
+      const fitsRight = parentRect.right + selfWidth + 8 <= window.innerWidth;
+      setSide(fitsRight ? "right" : "left");
+    };
+    computeSide();
+    window.addEventListener("resize", computeSide);
+    return () => {
+      stopAutoScroll();
+      window.removeEventListener("resize", computeSide);
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    updateScrollFlags();
+    return () => stopAutoScroll();
+  }, [node]);
+
+  const entries = sortBookmarkFolderEntries(node, folderOrders, path);
+  const bookmarks = [...(node?.bookmarks || [])].sort(compareBookmarks);
+  const openChildPath = openFolderPaths[level];
+  const openChildNode = openChildPath
+    ? node?.folders?.[splitFolderPath(openChildPath).at(-1)]
+    : null;
+
+  return (
+    <div
+      className={`bookmarks-bar-dropdown-menu is-cascade is-${side}`}
+      role="menu"
+      ref={selfRef}
+    >
+      <div
+        className="bookmarks-bar-dropdown-scroll"
+        ref={scrollRef}
+        onScroll={updateScrollFlags}
+      >
+        {entries.map(([subFolderName, subFolderNode]) => {
+          const childPath = path ? `${path} / ${subFolderName}` : subFolderName;
+          return (
+            <button
+              key={subFolderName}
+              className={`bookmarks-bar-dropdown-folder${dropClassFor(`folder:${childPath}`)}`}
+              type="button"
+              role="menuitem"
+              aria-haspopup="true"
+              draggable
+              onClick={() => onOpenFolderPath(level, childPath)}
+              onContextMenu={(event) => onOpenBookmarkContextEditor(
+                event,
+                { type: "folder", path: childPath, title: subFolderName },
+                { fromBar: true },
+              )}
+              onMouseEnter={(event) => {
+                onOpenFolderPath(level, childPath);
+                startNameMarquee(event);
+              }}
+              onMouseLeave={stopNameMarquee}
+              onDragStart={(event) => onDragStart?.(event, {
+                type: "folder",
+                path: childPath,
+                title: subFolderName,
+              })}
+              onDragOver={(event) => {
+                onOpenFolderPath(level, childPath);
+                onDragOver?.(event, {
+                  type: "folder",
+                  path: childPath,
+                  key: `folder:${childPath}`,
+                });
+              }}
+              onDrop={(event) => onDrop?.(event, {
+                type: "folder",
+                path: childPath,
+                key: `folder:${childPath}`,
+              })}
+              onDragEnd={onDragEnd}
+            >
+              <FolderSimple size={18} weight="fill" />
+              <span className="bookmarks-bar-dropdown-folder-name"><span>{subFolderName}</span></span>
+              <CaretRight size={11} weight="bold" />
+            </button>
+          );
+        })}
+        {bookmarks.map((bookmark) => (
+          <button
+            key={bookmark.id || bookmark.url}
+            className={`bookmarks-bar-dropdown-item${dropClassFor(`bookmark:${bookmark.url}`)}`}
+            type="button"
+            role="menuitem"
+            title={bookmark.url}
+            draggable
+            onClick={() => {
+              onClose();
+              onOpenBookmark(bookmark);
+            }}
+            onContextMenu={(event) => {
+              onClose();
+              onOpenBookmarkContextEditor(
+                event,
+                { type: "bookmark", bookmark },
+                { fromBar: true },
+              );
+            }}
+            onMouseEnter={startNameMarquee}
+            onMouseLeave={stopNameMarquee}
+            onDragStart={(event) => onDragStart?.(event, {
+              type: "bookmark",
+              url: bookmark.url,
+              folder: bookmark.folder || "",
+              title: bookmark.title || bookmark.url,
+            })}
+            onDragOver={(event) => onDragOver?.(event, {
+              type: "bookmark",
+              url: bookmark.url,
+              folder: bookmark.folder || "",
+              key: `bookmark:${bookmark.url}`,
+            })}
+            onDrop={(event) => onDrop?.(event, {
+              type: "bookmark",
+              url: bookmark.url,
+              folder: bookmark.folder || "",
+              key: `bookmark:${bookmark.url}`,
+            })}
+            onDragEnd={onDragEnd}
+          >
+            <BookmarkFavicon bookmark={bookmark} />
+            <span className="bookmarks-bar-dropdown-item-name"><span>{bookmark.title || bookmark.url}</span></span>
+          </button>
+        ))}
+        {entries.length === 0 && bookmarks.length === 0 && (
+          <div className="bookmarks-bar-dropdown-empty">此文件夹为空</div>
+        )}
+      </div>
+      <div
+        className={`bookmarks-bar-dropdown-edge is-top${menuScroll.top ? " is-visible" : ""}`}
+        onPointerEnter={() => startAutoScroll(-1)}
+        onPointerLeave={stopAutoScroll}
+      >
+        <CaretUp size={12} weight="bold" />
+      </div>
+      <div
+        className={`bookmarks-bar-dropdown-edge is-bottom${menuScroll.bottom ? " is-visible" : ""}`}
+        onPointerEnter={() => startAutoScroll(1)}
+        onPointerLeave={stopAutoScroll}
+      >
+        <CaretDown size={12} weight="bold" />
+      </div>
+      {openChildNode && (
+        <BookmarkDropdownCascade
+          level={level + 1}
+          path={openChildPath}
+          node={openChildNode}
+          folderOrders={folderOrders}
+          openFolderPaths={openFolderPaths}
+          onOpenFolderPath={onOpenFolderPath}
+          onClose={onClose}
+          onOpenBookmark={onOpenBookmark}
+          onOpenBookmarkContextEditor={onOpenBookmarkContextEditor}
+          parentRef={selfRef}
+          dropClassFor={dropClassFor}
+          onDragStart={onDragStart}
+          onDragOver={onDragOver}
+          onDrop={onDrop}
+          onDragEnd={onDragEnd}
+        />
       )}
-    </svg>
+    </div>
   );
 }
 
@@ -2611,10 +3538,84 @@ export function App() {
   const browserApi = window.beanBrowser;
   const desktopMode = Boolean(browserApi);
   const initialAddress = "";
-  const [activeTab, setActiveTab] = useState(START_TAB.id);
+  const [tabs, setTabs] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("bean:open-tabs") || "null");
+      return Array.isArray(saved) && saved.length ? saved : INITIAL_TABS;
+    } catch {
+      return INITIAL_TABS;
+    }
+  });
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("bean:open-tabs") || "null");
+      return saved?.find((t) => !t.isPinned)?.id || saved?.[0]?.id || "tab-maps";
+    } catch {
+      return "tab-maps";
+    }
+  });
   const [activeSurface, setActiveSurface] = useState("tab");
-  const [tabs, setTabs] = useState(() => [START_TAB]);
+  const [tabContextMenu, setTabContextMenu] = useState(null);
   const [draggedTabId, setDraggedTabId] = useState("");
+
+  const pinnedTabs = useMemo(() => tabs.filter((tab) => tab.isPinned), [tabs]);
+  const unpinnedTabs = useMemo(() => tabs.filter((tab) => !tab.isPinned), [tabs]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("bean:open-tabs", JSON.stringify(tabs));
+    } catch {
+      // ignore
+    }
+  }, [tabs]);
+
+  const handleTabContextMenu = (e, tab) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setTabContextMenu({
+      x: Math.min(window.innerWidth - 170, Math.max(10, e.clientX)),
+      y: Math.min(window.innerHeight - 240, Math.max(10, e.clientY)),
+      tab,
+    });
+  };
+
+  const toggleTabPinned = (tabId) => {
+    setTabs((currentTabs) =>
+      currentTabs.map((t) => (t.id === tabId ? { ...t, isPinned: !t.isPinned } : t))
+    );
+    setTabContextMenu(null);
+  };
+
+  const closeOtherTabs = (tabId) => {
+    const closed = tabs
+      .map((t, index) => ({ tab: { ...t }, index }))
+      .filter((item) => item.tab.id !== tabId && !item.tab.isPinned);
+    if (closed.length > 0) {
+      setClosedTabs((prev) => [...prev, ...closed]);
+    }
+    setTabs((currentTabs) =>
+      currentTabs.filter((t) => t.id === tabId || t.isPinned)
+    );
+    setActiveTab(tabId);
+    setTabContextMenu(null);
+  };
+
+  const reloadTab = (tab) => {
+    if (desktopMode) {
+      browserApi.reload();
+    } else {
+      showToast("标签页已重新加载");
+    }
+    setTabContextMenu(null);
+  };
+
+  const copyTabUrl = (url) => {
+    if (url) {
+      navigator.clipboard?.writeText(url);
+      showToast("已复制网址");
+    }
+    setTabContextMenu(null);
+  };
   const [query, setQuery] = useState("");
   const [addressText, setAddressText] = useState(() => formatAddressForDisplay(initialAddress));
   const [searchHistory, setSearchHistory] = useState(() => {
@@ -2630,6 +3631,8 @@ export function App() {
     } catch { return []; }
   });
   const [sessionBrowserHistory, setSessionBrowserHistory] = useState([]);
+  const [closedTabs, setClosedTabs] = useState([]);
+  const [sidebarHistoryOpen, setSidebarHistoryOpen] = useState(false);
   const [tabHistoryOpen, setTabHistoryOpen] = useState(false);
   const [appPreferences, setAppPreferences] = useState(() => {
     try {
@@ -2663,7 +3666,7 @@ export function App() {
   const [following, setFollowing] = useState(false);
   const [pdfExporting, setPdfExporting] = useState(false);
   const [toast, setToast] = useState("");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarFoldersActive, setSidebarFoldersActive] = useState(false);
   const [systemUsesDarkAppearance, setSystemUsesDarkAppearance] = useState(() => (
     window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false
@@ -2683,6 +3686,7 @@ export function App() {
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [settingsMenuLevel, setSettingsMenuLevel] = useState("root");
   const [settingsPanel, setSettingsPanel] = useState("");
+  const [bookmarkBarDropdownOpen, setBookmarkBarDropdownOpen] = useState(false);
   const [pageZoom, setPageZoom] = useState(() => {
     const stored = Number(localStorage.getItem("bean:page-zoom"));
     return Number.isFinite(stored) && stored >= 0.5 && stored <= 2 ? stored : 1;
@@ -2803,6 +3807,9 @@ export function App() {
   const bookmarkFaviconResolution = useRef(null);
   const browserPreviewReleaseFrame = useRef(0);
   const browserMenuRef = useRef(null);
+  const sidebarSettingsRef = useRef(null);
+  const sidebarHistoryPopoverRef = useRef(null);
+  const settingsPopoverRef = useRef(null);
   const topTabsBarRef = useRef(null);
   const tabHistoryRef = useRef(null);
   const modelGuardDockRef = useRef(null);
@@ -2816,6 +3823,51 @@ export function App() {
   const addressLoadAngle = useRef(0);
   const addressLoadWasActive = useRef(false);
   const [addressLoadPhase, setAddressLoadPhase] = useState("idle");
+  const [activeIndicatorY, setActiveIndicatorY] = useState(null);
+  const [activeIndicatorHeight, setActiveIndicatorHeight] = useState(35);
+  const tabRowRefs = useRef({});
+  const sidebarTabsListRef = useRef(null);
+  const [tabsScrollFlags, setTabsScrollFlags] = useState({ top: false, bottom: false });
+  const tabsAutoScrollTimer = useRef(null);
+
+  const updateTabsScrollFlags = useCallback(() => {
+    const el = sidebarTabsListRef.current;
+    if (!el) return;
+    const top = el.scrollTop > 0;
+    const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 1;
+    setTabsScrollFlags((current) => (
+      current.top === top && current.bottom === bottom ? current : { top, bottom }
+    ));
+  }, []);
+
+  const stopTabsAutoScroll = () => {
+    if (tabsAutoScrollTimer.current) {
+      window.clearInterval(tabsAutoScrollTimer.current);
+      tabsAutoScrollTimer.current = null;
+    }
+  };
+
+  const startTabsAutoScroll = (direction) => {
+    stopTabsAutoScroll();
+    const el = sidebarTabsListRef.current;
+    if (!el) return;
+    tabsAutoScrollTimer.current = window.setInterval(() => {
+      const target = sidebarTabsListRef.current;
+      if (!target) {
+        stopTabsAutoScroll();
+        return;
+      }
+      const maxTop = target.scrollHeight - target.clientHeight;
+      const next = direction > 0
+        ? Math.min(target.scrollTop + 10, maxTop)
+        : Math.max(target.scrollTop - 10, 0);
+      target.scrollTop = next;
+      updateTabsScrollFlags();
+      if ((direction > 0 && next >= maxTop) || (direction < 0 && next <= 0)) {
+        stopTabsAutoScroll();
+      }
+    }, 35);
+  };
 
   const resolveMissingBookmarkFavicons = () => {
     if (!browserApi?.resolveBookmarkFavicons || bookmarkFaviconResolution.current) return;
@@ -2900,13 +3952,13 @@ export function App() {
   const pageBackgroundColor = briefOpen
     ? "#ffffff"
     : newTabOpen
-    ? "#ffffff"
+    ? "#f1f1f1"
     : bookmarksPageOpen
-    ? NEW_TAB_CHROME_COLOR
+    ? "#faf9f6"
     : navigationOwnsActiveTab
       ? navigationState.pageBackgroundColor || "#ffffff"
       : "#ffffff";
-  const toolbarBackgroundColor = newTabOpen ? "#ffffff" : pageBackgroundColor;
+  const toolbarBackgroundColor = pageBackgroundColor;
   const pageUsesLightForeground = !briefOpen
     && !newTabOpen
     && !bookmarksPageOpen
@@ -2915,6 +3967,55 @@ export function App() {
   const shellUsesLightForeground = !navigationState.isPdf
     && (pageUsesLightForeground || systemUsesDarkAppearance);
   const filteredBookmarkLibrary = bookmarkLibrary;
+
+  useLayoutEffect(() => {
+    if (briefOpen || !activeTab) {
+      setActiveIndicatorY(null);
+      return;
+    }
+    const activeEl = tabRowRefs.current[activeTab];
+    if (activeEl) {
+      setActiveIndicatorY(activeEl.offsetTop);
+      setActiveIndicatorHeight(activeEl.offsetHeight || 35);
+    }
+    updateTabsScrollFlags();
+  }, [activeTab, briefOpen, unpinnedTabs, updateTabsScrollFlags]);
+
+  useEffect(() => {
+    const el = sidebarTabsListRef.current;
+    if (!el) return undefined;
+    updateTabsScrollFlags();
+    const rafId = requestAnimationFrame(updateTabsScrollFlags);
+    const handleScroll = () => updateTabsScrollFlags();
+    el.addEventListener("scroll", handleScroll, { passive: true });
+    let ro = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => {
+        updateTabsScrollFlags();
+      });
+      ro.observe(el);
+    }
+    return () => {
+      cancelAnimationFrame(rafId);
+      el.removeEventListener("scroll", handleScroll);
+      if (ro) ro.disconnect();
+      stopTabsAutoScroll();
+    };
+  }, [tabs, unpinnedTabs, updateTabsScrollFlags]);
+
+  useEffect(() => {
+    if (activeTab && tabRowRefs.current[activeTab] && sidebarTabsListRef.current) {
+      const activeEl = tabRowRefs.current[activeTab];
+      const listEl = sidebarTabsListRef.current;
+      const activeTop = activeEl.offsetTop;
+      const activeBottom = activeTop + activeEl.offsetHeight;
+      if (activeTop < listEl.scrollTop) {
+        listEl.scrollTo({ top: activeTop - 6, behavior: "smooth" });
+      } else if (activeBottom > listEl.scrollTop + listEl.clientHeight) {
+        listEl.scrollTo({ top: activeBottom - listEl.clientHeight + 6, behavior: "smooth" });
+      }
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     const appearanceQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -3087,7 +4188,9 @@ export function App() {
     || Boolean(bookmarkContextEditor)
     || aiOpen
     || downloadsOpen
-    || tabHistoryOpen
+    || sidebarHistoryOpen
+    || Boolean(tabContextMenu)
+    || bookmarkBarDropdownOpen
     || settingsMenuOpen
     || Boolean(settingsPanel)
     || addressSuggestions.length > 0;
@@ -3464,10 +4567,10 @@ export function App() {
       frame = window.requestAnimationFrame(() => {
         const bounds = host.getBoundingClientRect();
         browserApi.setBounds({
-          x: bounds.left + 1,
+          x: bounds.left,
           y: bounds.top,
-          width: Math.max(1, bounds.width - 2),
-          height: Math.max(1, bounds.height - 1),
+          width: Math.max(1, bounds.width),
+          height: Math.max(1, bounds.height),
         });
       });
     };
@@ -3521,7 +4624,11 @@ export function App() {
   useEffect(() => {
     if (!settingsMenuOpen) return undefined;
     const closeOnOutsidePointer = (event) => {
-      if (browserMenuRef.current?.contains(event.target)) return;
+      if (
+        browserMenuRef.current?.contains(event.target)
+        || sidebarSettingsRef.current?.contains(event.target)
+        || settingsPopoverRef.current?.contains(event.target)
+      ) return;
       setSettingsMenuOpen(false);
       setSettingsMenuLevel("root");
       setSettingsPanel("");
@@ -3531,12 +4638,17 @@ export function App() {
   }, [settingsMenuOpen]);
 
   useEffect(() => {
-    if (!tabHistoryOpen) return undefined;
+    if (!sidebarHistoryOpen) return undefined;
     const closeOnOutsidePointer = (event) => {
-      if (!tabHistoryRef.current?.contains(event.target)) setTabHistoryOpen(false);
+      if (
+        !sidebarHistoryPopoverRef.current?.contains(event.target) &&
+        !event.target.closest?.(".sidebar-dock-history-btn")
+      ) {
+        setSidebarHistoryOpen(false);
+      }
     };
     const closeOnEscape = (event) => {
-      if (event.key === "Escape") setTabHistoryOpen(false);
+      if (event.key === "Escape") setSidebarHistoryOpen(false);
     };
     window.addEventListener("pointerdown", closeOnOutsidePointer, true);
     window.addEventListener("keydown", closeOnEscape);
@@ -3544,43 +4656,13 @@ export function App() {
       window.removeEventListener("pointerdown", closeOnOutsidePointer, true);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [tabHistoryOpen]);
-
-  useLayoutEffect(() => {
-    const bar = topTabsBarRef.current;
-    const anchor = tabHistoryRef.current;
-    const list = bar?.querySelector(".top-tab-list");
-    if (!bar || !anchor || !list) return undefined;
-    let frame = 0;
-    const positionHistory = () => {
-      window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(() => {
-        const barRect = bar.getBoundingClientRect();
-        const listRect = list.getBoundingClientRect();
-        const lastTabRect = list.querySelector(".top-tab:last-child")?.getBoundingClientRect();
-        const parkedLeft = listRect.right - barRect.left - anchor.offsetWidth;
-        const afterLastTab = lastTabRect
-          ? lastTabRect.right - barRect.left + 3
-          : listRect.left - barRect.left;
-        anchor.style.left = `${Math.max(listRect.left - barRect.left, Math.min(afterLastTab, parkedLeft))}px`;
-      });
-    };
-    const observer = new ResizeObserver(positionHistory);
-    observer.observe(bar);
-    observer.observe(list);
-    list.addEventListener("scroll", positionHistory, { passive: true });
-    positionHistory();
-    return () => {
-      window.cancelAnimationFrame(frame);
-      observer.disconnect();
-      list.removeEventListener("scroll", positionHistory);
-    };
-  }, [desktopMode, tabs]);
+  }, [sidebarHistoryOpen]);
 
   useEffect(() => {
     const closeOnEscape = (event) => {
       if (event.key !== "Escape") return;
       setSettingsMenuOpen(false);
+      setSidebarHistoryOpen(false);
       setSettingsMenuLevel("root");
       setSettingsPanel("");
       setBookmarkFolderMenuOpen(false);
@@ -3756,18 +4838,18 @@ export function App() {
     setBookmarkContextFolderMenuOpen(false);
     setBookmarkContextEditor(null);
     setSidebarFoldersActive(false);
-    setSidebarOpen(false);
     setExpandedFolders(new Set());
   };
 
-  const openBookmarkContextEditor = (event, item) => {
+  const openBookmarkContextEditor = (event, item, options = {}) => {
     event.preventDefault();
     event.stopPropagation();
+    const fromBar = Boolean(options.fromBar);
     const bounds = event.currentTarget.getBoundingClientRect();
     const panelWidth = 273;
     const panelHeight = 162;
-    const left = Math.min(bounds.right + 8, window.innerWidth - panelWidth - 8);
-    const top = Math.max(8, Math.min(bounds.top, window.innerHeight - panelHeight - 8));
+    const left = Math.max(8, Math.min(bounds.left, window.innerWidth - panelWidth - 8));
+    const top = Math.max(8, Math.min(bounds.bottom + 8, window.innerHeight - panelHeight - 8));
     const isFolder = item.type === "folder";
     setBookmarkDraft({ folder: "", title: "", url: "" });
     setBookmarkFolderMenuOpen(false);
@@ -3785,14 +4867,16 @@ export function App() {
       left: Math.max(8, left),
       top,
     });
-    if (isFolder) {
+    if (isFolder && !fromBar) {
       setExpandedFolders((current) => new Set(
         [...current].filter((openPath) => item.path.startsWith(`${openPath} / `)),
       ));
     }
-    window.clearTimeout(sidebarCollapseTimer.current);
-    setSidebarOpen(true);
-    setSidebarFoldersActive(true);
+    if (!fromBar) {
+      window.clearTimeout(sidebarCollapseTimer.current);
+      setSidebarOpen(true);
+      setSidebarFoldersActive(true);
+    }
   };
 
   const saveBookmarkContextEditor = () => {
@@ -4048,6 +5132,79 @@ export function App() {
       showToast(`Opened ${article.domain}`);
     }
   };
+
+  const restoreClosedTab = useCallback(() => {
+    if (closedTabs.length === 0) {
+      showToast("暂无可恢复的标签页");
+      return;
+    }
+    const lastItem = closedTabs[closedTabs.length - 1];
+    setClosedTabs((prev) => prev.slice(0, -1));
+    const restoredTab = { ...lastItem.tab };
+
+    setTabs((currentTabs) => {
+      const targetIndex = Math.min(
+        Math.max(0, lastItem.index ?? currentTabs.length),
+        currentTabs.length
+      );
+      const nextTabs = [...currentTabs];
+      nextTabs.splice(targetIndex, 0, restoredTab);
+      return nextTabs;
+    });
+
+    selectArticle(restoredTab);
+    showToast(`已恢复: ${restoredTab.shortTitle || restoredTab.title || "新标签页"}`);
+  }, [closedTabs]);
+
+  const closeAllTabs = () => {
+    if (tabs.length === 0) return;
+    setClosedTabs((prev) => [
+      ...prev,
+      ...tabs.map((tab, index) => ({ tab: { ...tab }, index })),
+    ]);
+
+    tabs.forEach((tab) => {
+      browserApi?.closeTabView?.(tab.id);
+    });
+
+    const freshTab = {
+      domain: "brizo",
+      id: `new-tab-${Date.now()}`,
+      isNewTab: true,
+      isPinned: false,
+      useTodayGreeting: false,
+      shortTitle: "新标签页",
+      title: "新标签页",
+      url: "",
+    };
+    setTabs([freshTab]);
+    setActiveSurface("tab");
+    setActiveTab(freshTab.id);
+    addressEditing.current = false;
+    addressValue.current = "";
+    setAddressText("");
+    showToast("已清空全部标签页");
+  };
+
+  const openHistoryItemInTab = (item) => {
+    setSidebarHistoryOpen(false);
+    if (newTabOpen && !tabs.find((t) => t.id === activeTab)?.url) {
+      navigateFromAddress(item.url);
+    } else {
+      openUrlInNewTab(item.url, item.title || item.url);
+    }
+  };
+
+  useEffect(() => {
+    const handleUndoTabShortcut = (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && (event.key === "T" || event.key === "t")) {
+        event.preventDefault();
+        restoreClosedTab();
+      }
+    };
+    window.addEventListener("keydown", handleUndoTabShortcut);
+    return () => window.removeEventListener("keydown", handleUndoTabShortcut);
+  }, [restoreClosedTab]);
 
   const openBookmarkOrganizerPage = () => {
     const existing = tabs.find((tab) => tab.isBookmarksPage);
@@ -4821,10 +5978,38 @@ export function App() {
     setDropTarget({ ...target, position });
   };
 
+  const handleHorizontalBookmarkDragOver = (event, target) => {
+    if (!dragItem) return;
+    if (dragItem.type === "folder") {
+      if (target.type !== "folder" || target.path === dragItem.path) return;
+      if (target.path.startsWith(`${dragItem.path} / `)) return;
+    }
+    if (dragItem.type === "bookmark" && target.type === "bookmark" && target.url === dragItem.url) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const ratio = bounds.width
+      ? (event.clientX - bounds.left) / bounds.width
+      : 0.5;
+    let position = ratio < 0.5 ? "before" : "after";
+    if (target.type === "folder") {
+      if (ratio < 0.25) position = "before";
+      else if (ratio > 0.75) position = "after";
+      else position = "inside";
+    }
+    setDropTarget({ ...target, position });
+  };
+
   const moveBookmarkItem = (item, target, position) => {
     const moving = bookmarkLibrary.find((bookmark) => bookmark.url === item.url);
     if (!moving) return;
-    const destinationFolder = target.type === "folder" ? target.path : target.folder;
+    const destinationFolder = target.type === "folder"
+      ? (position === "inside" ? target.path : parentFolderPath(target.path))
+      : target.folder;
     if (destinationFolder == null) return;
 
     const sourceFolder = moving.folder;
@@ -4972,7 +6157,6 @@ export function App() {
     if (bookmarkDragJustEnded.current) return;
     setExpandedFolders(new Set());
     setBrowserPreview("");
-    setSidebarOpen(false);
     browserApi?.setVisible(true);
     const existingTab = tabs.find((tab) => tab.url === bookmark.url);
     if (existingTab) {
@@ -5000,6 +6184,9 @@ export function App() {
   const closeTab = (tabId) => {
     const closingIndex = tabs.findIndex((tab) => tab.id === tabId);
     if (closingIndex < 0 || tabs.length === 1) return;
+
+    const closingTab = tabs[closingIndex];
+    setClosedTabs((prev) => [...prev, { tab: { ...closingTab }, index: closingIndex }]);
 
     const nextTabs = tabs.filter((tab) => tab.id !== tabId);
     browserApi?.closeTabView?.(tabId);
@@ -5032,6 +6219,7 @@ export function App() {
       domain: "brizo",
       id: `new-tab-${Date.now()}`,
       isNewTab: true,
+      isPinned: false,
       useTodayGreeting: false,
       shortTitle: "新标签页",
       title: "新标签页",
@@ -5144,228 +6332,221 @@ export function App() {
         "--tab-seam-color": pageUsesLightForeground
           ? "rgba(255, 255, 255, 0.44)"
           : "#dde0dc",
+        "--page-background-color": pageBackgroundColor,
       }}
     >
       <aside
-        className={`spaces-panel${bookmarkCascadeOpen ? " has-open-bookmark-cascade" : ""}`}
-        onPointerEnter={() => {
-          resolveMissingBookmarkFavicons();
-          window.clearTimeout(sidebarCollapseTimer.current);
-          window.clearTimeout(sidebarActivationTimer.current);
-          setSidebarOpen(true);
-          if (bookmarkCascadeOpen) {
-            setSidebarFoldersActive(true);
-          } else {
-            setSidebarFoldersActive(false);
-            sidebarActivationTimer.current = window.setTimeout(
-              () => setSidebarFoldersActive(true),
-              BOOKMARK_SIDEBAR_EXPAND_MS,
-            );
-          }
-        }}
-        onPointerLeave={scheduleBookmarkCascadeClose}
+        className="spaces-panel"
       >
         <header className="spaces-header">
           <Logo />
         </header>
 
-        <div className="bookmark-view-switch" role="group" aria-label="收藏夹模式">
-          <button
-            className={bookmarkView === "traditional" ? "is-active" : ""}
-            type="button"
-            aria-pressed={bookmarkView === "traditional"}
-            title="传统收藏夹"
-            onClick={() => selectBookmarkView("traditional")}
-          >
-            <ListBullets size={16} weight={bookmarkView === "traditional" ? "fill" : "regular"} />
-            <span>传统</span>
-          </button>
-          <button
-            className={bookmarkView === "smart" ? "is-active" : ""}
-            type="button"
-            aria-pressed={bookmarkView === "smart"}
-            title="智能收藏夹"
-            onClick={() => selectBookmarkView("smart")}
-          >
-            <Sparkle size={16} weight={bookmarkView === "smart" ? "fill" : "regular"} />
-            <span>智能</span>
-          </button>
-        </div>
-
-        <nav className="bookmark-sidebar-body" aria-label="Bookmarks">
-          {bookmarkView === "smart" ? (
-            !smartBookmarkConsent ? (
-              <div className="smart-bookmarks-placeholder">
-                <Sparkle size={20} weight="fill" />
-                <strong>智能整理收藏夹</strong>
-                <p>将标题、域名、脱敏路径和原文件夹发送给 DeepSeek；访问次数始终留在本地。</p>
+        {pinnedTabs.length > 0 && (
+          <div className="pinned-tabs-grid" role="tablist" aria-label="常驻标签">
+            {pinnedTabs.map((tab) => {
+              const isSelected = !briefOpen && activeTab === tab.id;
+              return (
                 <button
+                  key={tab.id}
                   type="button"
-                  onClick={() => {
-                    window.localStorage.setItem("bean:smart-bookmark-consent", "accepted");
-                    setSmartBookmarkConsent(true);
-                    window.setTimeout(() => syncSmartBookmarks(true), 0);
-                  }}
+                  className={`pinned-tab-btn${isSelected ? " is-active" : ""}${isSelected && pageUsesLightForeground ? " uses-light-foreground" : ""}`}
+                  role="tab"
+                  aria-selected={isSelected}
+                  title={tab.title || tab.shortTitle}
+                  onClick={() => selectArticle(tab)}
+                  onContextMenu={(e) => handleTabContextMenu(e, tab)}
                 >
-                  开始智能整理
+                  <SiteIcon
+                    id={tab.id}
+                    iconKey={tab.iconKey}
+                    url={tab.url}
+                    faviconUrl={tab.faviconUrl}
+                    isError={tab.loadError}
+                    isNewTab={tab.isNewTab}
+                    isPdf={tab.isPdf}
+                  />
                 </button>
-              </div>
-            ) : smartBookmarkStatus === "loading" && !smartBookmarkView ? (
-              <div className="smart-bookmarks-placeholder is-loading">
-                <Sparkle size={20} weight="fill" />
-                <strong>
-                  {smartBookmarkProgress?.stage === "preparing"
-                    ? "正在分析收藏内容"
-                    : smartBookmarkProgress?.stage === "refining"
-                      ? "正在后台校准"
-                      : "AI 正在分类用途簇"}
-                </strong>
-                <p>
-                  {smartBookmarkProgress?.total
-                    ? `${Math.min(smartBookmarkProgress.completed || 0, smartBookmarkProgress.total)} / ${smartBookmarkProgress.total} 个用途簇`
-                    : "正在准备脱敏元数据…"}
-                </p>
-              </div>
-            ) : ["missing-provider", "desktop-only", "error"].includes(smartBookmarkStatus) && !smartBookmarkView ? (
-              <div className="smart-bookmarks-placeholder is-error">
-                <Brain size={20} />
-                <strong>{smartBookmarkStatus === "missing-provider" ? "需要 DeepSeek" : "暂时无法整理"}</strong>
-                <p>{smartBookmarkMessage || "请稍后重试。"}</p>
-                {smartBookmarkStatus === "missing-provider" && (
-                  <button type="button" onClick={() => setSettingsPanel("model-guard")}>绑定 DeepSeek</button>
-                )}
-              </div>
-            ) : smartBookmarkView ? (
-              <>
-                <div className={`smart-bookmark-status ${smartBookmarkStatus === "stale" ? "has-warning" : ""}`}>
-                  <span>
-                    {smartBookmarkStatus === "loading"
-                      ? smartBookmarkProgress?.stage === "preparing"
-                        ? "分析内容中"
-                        : smartBookmarkProgress?.total
-                          ? `${Math.min(smartBookmarkProgress.completed || 0, smartBookmarkProgress.total)}/${smartBookmarkProgress.total} 簇`
-                          : "整理中"
-                      : smartBookmarkStatus === "stale" ? "使用上次结果" : `${smartBookmarkSnapshot.stats?.bookmarkCount || 0} 项`}
-                  </span>
-                  <button type="button" title="重新智能整理" aria-label="重新智能整理" onClick={() => syncSmartBookmarks(true)}>
-                    <AttachedIcon src={refreshIconUrl} size={13} />
-                  </button>
-                </div>
-                <BookmarkTree
-                  canExpandFolders={sidebarOpen && sidebarFoldersActive}
-                  expandedFolders={visibleExpandedFolders}
-                  folderIconIds={smartBookmarkView.folderIconIds}
-                  folderOrders={smartBookmarkView.folderOrders}
-                  node={smartBookmarkView.tree}
-                  onOpen={openBookmark}
-                  onToggle={toggleBookmarkFolder}
-                  onCascadePointerEnter={keepBookmarkCascadeOpen}
-                  onCascadePointerLeave={scheduleBookmarkCascadeClose}
-                  readOnly
-                />
-              </>
-            ) : (
-              <div className="smart-bookmarks-placeholder">
-                <Sparkle size={20} weight="fill" />
-                <strong>尚未整理</strong>
-                <button type="button" onClick={() => syncSmartBookmarks(true)}>开始整理</button>
-              </div>
-            )
-          ) : filteredBookmarkLibrary.length ? (
-            <BookmarkTree
-              canExpandFolders={sidebarOpen && sidebarFoldersActive}
-              dragItem={dragItem}
-              dropTarget={dropTarget}
-              expandedFolders={visibleExpandedFolders}
-              folderOrders={folderOrders}
-              node={bookmarkTree}
-              onDragEnd={handleBookmarkDragEnd}
-              onDragOverTarget={handleBookmarkDragOver}
-              onDragStart={handleBookmarkDragStart}
-              onDropTarget={handleBookmarkDrop}
-              onEdit={openBookmarkContextEditor}
-              onOpen={openBookmark}
-              onToggle={toggleBookmarkFolder}
-              onCascadePointerEnter={keepBookmarkCascadeOpen}
-              onCascadePointerLeave={scheduleBookmarkCascadeClose}
-            />
-          ) : (
-            <div className="bookmark-search-empty">
-              <MagnifyingGlass size={18} />
-              <span>未找到收藏内容</span>
-            </div>
-          )}
-        </nav>
+              );
+            })}
+          </div>
+        )}
 
-        <footer
-          className={`model-guard-dock ${modelGuardMenuOpen ? "is-open" : ""}`}
-          ref={modelGuardDockRef}
+        {pinnedTabs.length > 0 && (
+          <div className="sidebar-pinned-divider" role="separator" aria-label="置顶区与标签页区分隔线" />
+        )}
+
+        <button
+          type="button"
+          className="sidebar-new-tab-btn"
+          onClick={openNewTab}
+          title="新建标签页"
         >
-          <div className="model-guard-flyout" aria-hidden={!modelGuardMenuOpen}>
-            <div className="model-guard-flyout-heading">
-              <span>选取模型</span>
-            </div>
-            {modelProviders.map((provider) => {
-              const providerModel = provider.selectedModel || provider.models?.[0] || "暂未识别模型";
+          <Plus size={16} weight="bold" />
+          <span>New Tab</span>
+        </button>
+
+        <div className="sidebar-tabs-section">
+          <div
+            className={`sidebar-tabs-scroll-edge is-top${tabsScrollFlags.top ? " is-visible" : ""}`}
+            onPointerEnter={() => startTabsAutoScroll(-1)}
+            onPointerLeave={stopTabsAutoScroll}
+          >
+            <CaretUp size={12} weight="bold" />
+          </div>
+
+          <div
+            className="sidebar-tabs-list"
+            role="tablist"
+            aria-label="标签页"
+            ref={sidebarTabsListRef}
+            onScroll={updateTabsScrollFlags}
+          >
+            {activeIndicatorY !== null && (
+              <div
+                className={`sidebar-tab-active-indicator${pageUsesLightForeground ? " uses-light-foreground" : ""}`}
+                style={{
+                  "--indicator-y": `${activeIndicatorY}px`,
+                  height: `${activeIndicatorHeight}px`,
+                }}
+                aria-hidden="true"
+              />
+            )}
+            {unpinnedTabs.map((tab) => {
+              const isSelected = !briefOpen && activeTab === tab.id;
               return (
                 <div
-                  key={provider.id}
-                  className={`model-guard-provider-row${provider.id === defaultModelProvider?.id ? " is-selected" : ""}`}
+                  key={tab.id}
+                  ref={(el) => {
+                    if (el) {
+                      tabRowRefs.current[tab.id] = el;
+                    } else {
+                      delete tabRowRefs.current[tab.id];
+                    }
+                  }}
+                  className={`sidebar-tab-row${isSelected ? " is-active" : ""}${isSelected && pageUsesLightForeground ? " uses-light-foreground" : ""}${draggedTabId === tab.id ? " is-dragging" : ""}`}
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("application/x-brizo-tab-id", tab.id);
+                    setDraggedTabId(tab.id);
+                  }}
+                  onDragEnter={() => moveTabBefore(draggedTabId, tab.id)}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setDraggedTabId("");
+                  }}
+                  onDragEnd={() => setDraggedTabId("")}
+                  onContextMenu={(e) => handleTabContextMenu(e, tab)}
+                  onMouseEnter={startTabTitleMarquee}
+                  onMouseLeave={stopTabTitleMarquee}
                 >
                   <button
-                    className="model-guard-provider-select"
                     type="button"
-                    tabIndex={modelGuardMenuOpen ? 0 : -1}
-                    onClick={() => {
-                      setDefaultModelProvider(provider.id);
-                      setModelGuardMenuOpen(false);
-                    }}
+                    className="sidebar-tab-select"
+                    role="tab"
+                    aria-selected={isSelected}
+                    title={tab.title || tab.shortTitle}
+                    onClick={() => selectArticle(tab)}
                   >
-                    <span className="model-guard-choice-icon"><Brain size={15} /></span>
-                    <span className="model-guard-choice-copy">
-                      <strong>{providerModel}</strong>
-                    </span>
-                    {provider.id === defaultModelProvider?.id && <Check size={14} weight="bold" />}
+                    <SiteIcon
+                      id={tab.id}
+                      iconKey={tab.iconKey}
+                      url={tab.url}
+                      faviconUrl={tab.faviconUrl}
+                      isError={tab.loadError}
+                      isNewTab={tab.isNewTab}
+                      isPdf={tab.isPdf}
+                    />
+                    <span className="sidebar-tab-title"><span>{tab.shortTitle || tab.title}</span></span>
+                    {tab.unread && <span className="sidebar-tab-unread" aria-label="Updated" />}
                   </button>
-                  <button
-                    className="model-guard-provider-edit"
-                    type="button"
-                    tabIndex={modelGuardMenuOpen ? 0 : -1}
-                    aria-label={`编辑 ${provider.name || providerModel}`}
-                    title="编辑模型 API"
-                    onClick={() => {
-                      editModelProvider(provider);
-                      setModelGuardMenuOpen(false);
-                      setSettingsPanel("model-guard");
-                    }}
-                  >
-                    <PencilSimple size={14} />
-                  </button>
+                  {tabs.length > 1 && (
+                    <button
+                      type="button"
+                      className="sidebar-tab-close"
+                      aria-label={`关闭 ${tab.shortTitle || tab.title}`}
+                      title="关闭标签页"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        closeTab(tab.id);
+                      }}
+                    >
+                      <X size={13} weight="bold" />
+                    </button>
+                  )}
                 </div>
               );
             })}
-            <button
-              className="model-guard-add"
-              type="button"
-              tabIndex={modelGuardMenuOpen ? 0 : -1}
-              onClick={() => {
-                setModelGuardMenuOpen(false);
-                setSettingsPanel("model-guard");
-              }}
-            >
-              <Plus size={15} />
-              <span>添加模型</span>
-            </button>
           </div>
-          <button
-            className="model-guard-trigger"
-            type="button"
-            aria-expanded={modelGuardMenuOpen}
-            aria-label="模型护航"
-            title="模型护航"
-            onClick={() => setModelGuardMenuOpen((open) => !open)}
+
+          <div
+            className={`sidebar-tabs-scroll-edge is-bottom${tabsScrollFlags.bottom ? " is-visible" : ""}`}
+            onPointerEnter={() => startTabsAutoScroll(1)}
+            onPointerLeave={stopTabsAutoScroll}
           >
-            <span className="model-guard-trigger-icon"><img src={modelGuardIconUrl} alt="" /></span>
+            <CaretDown size={12} weight="bold" />
+          </div>
+        </div>
+
+        <footer className="sidebar-settings-dock">
+          <button
+            className={`sidebar-dock-btn sidebar-settings-btn${settingsMenuOpen ? " is-active" : ""}`}
+            type="button"
+            aria-label="打开设置菜单"
+            title="设置"
+            data-tooltip="设置"
+            data-tooltip-pos="left"
+            onClick={() => {
+              setSidebarHistoryOpen(false);
+              setSettingsMenuOpen((value) => {
+                if (!value) setSettingsMenuLevel("root");
+                return !value;
+              });
+            }}
+          >
+            <MoreHorizontalIcon className="remocn-toolbar-icon remocn-more-icon" size={20} strokeWidth={1.9} />
+          </button>
+
+          <button
+            className={`sidebar-dock-btn${closedTabs.length === 0 ? " is-empty" : ""}`}
+            type="button"
+            aria-label="恢复关闭的标签页"
+            title="恢复关闭的标签页"
+            data-tooltip="恢复关闭标签"
+            onClick={restoreClosedTab}
+          >
+            <ArrowUUpLeft size={18} weight="bold" />
+          </button>
+
+          <button
+            className={`sidebar-dock-btn sidebar-dock-history-btn${sidebarHistoryOpen ? " is-active" : ""}`}
+            type="button"
+            aria-label="历史记录"
+            title="历史记录"
+            data-tooltip="历史记录"
+            onClick={() => {
+              setSettingsMenuOpen(false);
+              setSidebarHistoryOpen((open) => !open);
+            }}
+          >
+            <ClockCounterClockwise size={19} />
+          </button>
+
+          <button
+            className="sidebar-dock-btn is-danger"
+            type="button"
+            aria-label="删除全部标签"
+            title="删除全部标签"
+            data-tooltip="删除全部标签"
+            data-tooltip-pos="right"
+            onClick={closeAllTabs}
+          >
+            <Trash size={18} />
           </button>
         </footer>
       </aside>
@@ -5380,14 +6561,13 @@ export function App() {
           />
           <section
             className="bookmark-editor bookmark-context-editor"
-            role="dialog"
+            role="menu"
             aria-label={bookmarkContextEditor.type === "folder" ? "编辑文件夹" : "编辑书签"}
             style={{
               "--bookmark-context-left": `${bookmarkContextEditor.left}px`,
               "--bookmark-context-top": `${bookmarkContextEditor.top}px`,
             }}
           >
-            <span className="bookmark-context-editor-pointer" aria-hidden="true" />
             <div className="bookmark-editor-fields">
               <label htmlFor="bookmark-context-editor-name">名称</label>
               <input
@@ -5477,124 +6657,6 @@ export function App() {
       <section
         className={`browser-panel ${desktopMode ? "desktop-browser" : ""}`}
       >
-        <div
-          className={`top-tabs-bar${pageUsesLightForeground ? " uses-light-foreground" : ""}`}
-          ref={topTabsBarRef}
-          style={{ "--page-background-color": pageBackgroundColor }}
-        >
-          <IconButton label="New tab" className="new-tab-button" onClick={openNewTab}>
-            <PlusIcon className="remocn-toolbar-icon remocn-plus-icon" size={17} strokeWidth={1.9} />
-          </IconButton>
-          <button
-            className={`brief-utility-tab${briefOpen ? " active" : ""}`}
-            type="button"
-            role="tab"
-            aria-selected={briefOpen}
-            title="Brizo Brief"
-            onClick={openBrief}
-          >
-            <span><NewspaperClipping size={14} />Brief</span>
-          </button>
-          <div className="top-tab-list" role="tablist" aria-label="Open pages">
-            {tabs.map((article) => (
-              <div
-                key={article.id}
-                className={`top-tab${!briefOpen && activeTab === article.id ? " active" : ""}${draggedTabId === article.id ? " is-dragging" : ""}`}
-                draggable
-                role="presentation"
-                onDragStart={(event) => {
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData("application/x-brizo-tab-id", article.id);
-                  setDraggedTabId(article.id);
-                }}
-                onDragEnter={() => moveTabBefore(draggedTabId, article.id)}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  event.dataTransfer.dropEffect = "move";
-                }}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  setDraggedTabId("");
-                }}
-                onDragEnd={() => setDraggedTabId("")}
-              >
-                <button
-                  type="button"
-                  className="top-tab-select"
-                  role="tab"
-                  aria-selected={!briefOpen && activeTab === article.id}
-                  title={article.title}
-                  onClick={() => selectArticle(article)}
-                >
-                  <SiteIcon id={article.id} faviconUrl={article.faviconUrl} isError={article.loadError} isNewTab={article.isNewTab} isPdf={article.isPdf} />
-                  <span className="top-tab-title">{article.shortTitle}</span>
-                  {article.unread && <span className="top-tab-unread" aria-label="Updated" />}
-                </button>
-                {tabs.length > 1 && (
-                  <button
-                    type="button"
-                    className="top-tab-close"
-                    aria-label={`Close ${article.shortTitle}`}
-                    title="Close tab"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      closeTab(article.id);
-                    }}
-                  >
-                    <X size={13} weight="bold" />
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="top-tab-history-anchor" ref={tabHistoryRef}>
-            <button
-              className={tabHistoryOpen ? "top-tab-history-trigger is-active" : "top-tab-history-trigger"}
-              type="button"
-              aria-label="本次浏览历史"
-              aria-expanded={tabHistoryOpen}
-              aria-haspopup="menu"
-              title="本次浏览历史"
-              onClick={() => setTabHistoryOpen((open) => !open)}
-            >
-              <ClockCounterClockwise size={17} />
-            </button>
-            {tabHistoryOpen && (
-              <div className="top-tab-history-menu" role="menu" aria-label="本次浏览网页">
-                <div className="top-tab-history-heading">
-                  <span>本次浏览</span>
-                  <small>{sessionBrowserHistory.length}</small>
-                </div>
-                <div className="top-tab-history-list">
-                  {sessionBrowserHistory.length ? sessionBrowserHistory.map((item) => (
-                    <button
-                      key={item.url}
-                      type="button"
-                      role="menuitem"
-                      title={item.url}
-                      onClick={() => {
-                        setTabHistoryOpen(false);
-                        openUrlInNewTab(item.url, item.title || item.url);
-                      }}
-                    >
-                      <BookmarkFavicon bookmark={item} />
-                      <span>
-                        <strong>{item.title || item.url}</strong>
-                      </span>
-                    </button>
-                  )) : (
-                    <span className="top-tab-history-empty">本次还没有浏览网页</span>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-          <TopTabOutline
-            activeTabId={briefOpen ? "__brief__" : activeTab}
-            tabOrderKey={`__brief__|${tabs.map((tab) => tab.id).join("|")}`}
-          />
-        </div>
-
         <div
           className="browser-surface"
           style={{ "--page-background-color": pageBackgroundColor }}
@@ -5736,20 +6798,7 @@ export function App() {
                         setBookmarkEditorOpen(false);
                       }}
                     />
-                    <section className="bookmark-editor" role="dialog" aria-labelledby="bookmark-editor-title">
-                      <CaretUp className="bookmark-editor-pointer" size={30} weight="fill" aria-hidden="true" />
-                      <header className="bookmark-editor-header">
-                        <h2 id="bookmark-editor-title">已添加书签</h2>
-                        {navigationState.pageFaviconUrl || currentArticle?.faviconUrl ? (
-                          <img
-                            className="bookmark-editor-site-icon"
-                            src={navigationState.pageFaviconUrl || currentArticle?.faviconUrl}
-                            alt=""
-                          />
-                        ) : (
-                          <GlobeHemisphereWest className="bookmark-editor-site-fallback" size={22} aria-hidden="true" />
-                        )}
-                      </header>
+                    <section className="bookmark-editor" role="menu" aria-label="编辑书签">
                       <div className="bookmark-editor-fields">
                         <label htmlFor="bookmark-editor-name">名称</label>
                         <input
@@ -5889,19 +6938,96 @@ export function App() {
           )}
 
           <div className="browser-menu" ref={browserMenuRef}>
-            <IconButton
-              label="Settings and tools"
-              className={settingsMenuOpen ? "is-active" : ""}
-              onClick={() => {
-                setSettingsMenuOpen((value) => {
-                  if (!value) setSettingsMenuLevel("root");
-                  return !value;
-                });
-              }}
-            >
-              <MoreHorizontalIcon className="remocn-toolbar-icon remocn-more-icon" size={20} strokeWidth={1.9} />
-            </IconButton>
-            {settingsMenuOpen && (
+            {sidebarHistoryOpen && createPortal(
+              <>
+                <button
+                  className="settings-menu-backdrop"
+                  type="button"
+                  aria-label="关闭历史记录菜单"
+                  onPointerDown={() => setSidebarHistoryOpen(false)}
+                />
+                <div
+                  className="sidebar-history-popover"
+                  ref={sidebarHistoryPopoverRef}
+                  role="menu"
+                  aria-label="历史记录"
+                >
+                  <header className="sidebar-history-header">
+                    <div className="sidebar-history-title">
+                      <ClockCounterClockwise size={16} />
+                      <strong>历史记录</strong>
+                    </div>
+                    <div className="sidebar-history-actions">
+                      {browserHistory.length > 0 && (
+                        <button
+                          type="button"
+                          className="sidebar-history-action-btn"
+                          onClick={() => {
+                            setBrowserHistory([]);
+                            localStorage.removeItem("bean:browser-history");
+                            showToast("已清空浏览记录");
+                          }}
+                        >
+                          清除
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="sidebar-history-action-btn"
+                        onClick={() => {
+                          setSidebarHistoryOpen(false);
+                          openSettingsPanel("history");
+                        }}
+                      >
+                        全部...
+                      </button>
+                    </div>
+                  </header>
+
+                  <div className="sidebar-history-list">
+                    {browserHistory.length > 0 ? (
+                      browserHistory.slice(0, 30).map((item) => (
+                        <div className="sidebar-history-row" key={`${item.url}-${item.updatedAt || ""}`}>
+                          <button
+                            className="sidebar-history-item-btn"
+                            type="button"
+                            role="menuitem"
+                            title={item.url}
+                            onClick={() => openHistoryItemInTab(item)}
+                          >
+                            <BookmarkFavicon bookmark={item} />
+                            <span className="sidebar-history-copy">
+                              <strong>{item.title || item.url}</strong>
+                              <small>{formatAddressForDisplay(item.url)}</small>
+                            </span>
+                            <time>{formatHistoryTime(item.updatedAt)}</time>
+                          </button>
+                          <button
+                            className="sidebar-history-item-remove"
+                            type="button"
+                            aria-label={`删除 ${item.title || item.url}`}
+                            title="删除此记录"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeBrowserHistoryItem(item.url);
+                            }}
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="sidebar-history-empty">
+                        <ClockCounterClockwise size={22} />
+                        <span>暂无浏览记录</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>,
+              document.body
+            )}
+            {settingsMenuOpen && createPortal(
               <>
                 <button
                   className="settings-menu-backdrop"
@@ -5913,7 +7039,7 @@ export function App() {
                     setSettingsPanel("");
                   }}
                 />
-                <div className="settings-menu-popover" role="menu" aria-label="Settings and tools">
+                <div className="settings-menu-popover" ref={settingsPopoverRef} role="menu" aria-label="Settings and tools">
                   {["root", "downloads", "preferences"].includes(settingsMenuLevel) ? <>
                   <button
                     className="settings-account-row"
@@ -6106,10 +7232,27 @@ export function App() {
                     </div>
                   </section>
                 )}
-              </>
+              </>,
+              document.getElementById("root"),
             )}
           </div>
           </header>
+
+          <HorizontalBookmarksBar
+            bookmarkTree={bookmarkTree}
+            folderOrders={folderOrders}
+            dragItem={dragItem}
+            dropTarget={dropTarget}
+            lightForeground={pageUsesLightForeground}
+            onDragEnd={handleBookmarkDragEnd}
+            onDragOver={handleHorizontalBookmarkDragOver}
+            onVerticalDragOver={handleBookmarkDragOver}
+            onDragStart={handleBookmarkDragStart}
+            onDrop={handleBookmarkDrop}
+            onDropdownOpenChange={setBookmarkBarDropdownOpen}
+            onOpenBookmark={openBookmark}
+            onOpenBookmarkContextEditor={openBookmarkContextEditor}
+          />
 
         <div
           className={`web-content-host brief-host${briefOpen ? " is-active" : ""}`}
@@ -6172,16 +7315,9 @@ export function App() {
             className="web-content-host"
             ref={webContentHost}
           >
-            {navigationState.pagePreview && (
-              <div
-                className="web-content-preview webpage-corner-underlay"
-                style={{ backgroundImage: `url(${navigationState.pagePreview})` }}
-                aria-hidden="true"
-              />
-            )}
             {browserPreview && (
               <div
-                className="web-content-preview"
+                className="web-content-preview browser-preview"
                 style={{ backgroundImage: `url(${browserPreview})` }}
                 aria-hidden="true"
               />
@@ -6193,7 +7329,7 @@ export function App() {
                 aria-hidden="true"
               />
             )}
-            {navigationState.error ? (
+            {navigationState.error && (
               <div className="browser-error-page" aria-label="网页读取失败" aria-live="polite" role="status">
                 <div className="browser-error-content">
                   <img src={brizoLogoUrl} alt="Brizo" />
@@ -6209,23 +7345,9 @@ export function App() {
                   })()}
                 </div>
               </div>
-            ) : !navigationState.isContentReady && !navigationState.navigationPreview && (
-              <div
-                className="web-content-placeholder"
-                style={{ backgroundColor: pageBackgroundColor }}
-                aria-label="网页加载中"
-                aria-live="polite"
-                role="status"
-              >
-                <img src={brizoLogoUrl} alt="" />
-              </div>
             )}
           </div>
-        ) : (
-          <div className="web-content-placeholder" aria-label="网页加载中" aria-live="polite" role="status">
-            <img src={brizoLogoUrl} alt="" />
-          </div>
-          ))}
+        ) : null)}
         </div>
 
         {aiOpen && (
@@ -6752,6 +7874,17 @@ export function App() {
       )}
 
       {toast && <div className="toast" role="status">{toast}</div>}
+
+      <TabContextMenu
+        contextMenu={tabContextMenu}
+        onClose={() => setTabContextMenu(null)}
+        onTogglePin={toggleTabPinned}
+        onCloseTab={closeTab}
+        onCloseOtherTabs={closeOtherTabs}
+        onNewTab={openNewTab}
+        onReload={reloadTab}
+        onCopyUrl={copyTabUrl}
+      />
     </SoftBlurIn>
   );
 }

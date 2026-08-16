@@ -3,6 +3,7 @@ import {
   mapWithConcurrency,
   matchesRequestedLanguage,
   safeText,
+  tokenize,
   tokenSimilarity,
 } from "../../shared/search-text.mjs";
 import { FRESHNESS_TO_BOCHA } from "./bocha-client.mjs";
@@ -37,7 +38,17 @@ function entityNameMatches(title, entity) {
   // Search engines often correct one mistyped Han character or return a
   // simplified/traditional name variant. For a person only, two matching name
   // bigrams out of three is strong enough when the source itself is trusted.
-  return entity?.kind === "person" && tokenSimilarity(title, entity.name) >= 0.66;
+  if (entity?.kind === "person" && entityKey.length >= 3) {
+    const entityBigrams = tokenize(entityKey);
+    if (!entityBigrams.length) return false;
+    for (let offset = 0; offset <= titleKey.length - entityKey.length; offset += 1) {
+      const window = titleKey.slice(offset, offset + entityKey.length);
+      const windowBigrams = tokenize(window);
+      const matched = windowBigrams.filter((token) => entityBigrams.includes(token)).length;
+      if (matched / entityBigrams.length >= 0.66) return true;
+    }
+  }
+  return false;
 }
 
 function confirmedPersonAliases(entity, ranked) {
@@ -278,6 +289,11 @@ export function createSearchService({
 }) {
   return {
     async run(payload, { emit, signal }) {
+      const searchStartedAt = Date.now();
+      let planningDurationMs = 0;
+      let retrievalDurationMs = 0;
+      let readingDurationMs = 0;
+      let synthesisDurationMs = 0;
       const query = safeText(payload?.query, 4_000);
       if (!query) throw new Error("请输入搜索内容。");
       const contextLabel = payload?.context?.tab?.url
@@ -290,11 +306,13 @@ export function createSearchService({
       const researchContext = [contextLabel, threadContext].filter(Boolean).join("\n\n");
 
       emit({ type: "stage", stage: "planning", detail: "正在理解问题并规划检索" });
+      const planningStartedAt = Date.now();
       const planned = await answerEngine.plan(query, {
         depth: payload?.depth || "auto",
         context: researchContext,
         signal,
       });
+      planningDurationMs = Date.now() - planningStartedAt;
       const requestedLanguage = languageForInput(query);
       const plannedQueries = (Array.isArray(planned?.queries) ? planned.queries : [])
         .map((item) => safeText(item, 180))
@@ -314,6 +332,7 @@ export function createSearchService({
       ]);
       const professionalConfigured = serperConfigured || bochaConfigured;
       emit({ type: "stage", stage: "searching", detail: `正在并行检索 ${plan.queries.length} 组查询` });
+      const retrievalStartedAt = Date.now();
 
       // Provider clients have their own per-request deadlines. This outer watchdog
       // is the final guard against a custom fetch implementation or local source
@@ -445,10 +464,12 @@ export function createSearchService({
       }
       if (cards.length) emit({ type: "cards", cards });
       emit({ type: "sources", sources: ranked.map(publicSource), count: ranked.length });
+      retrievalDurationMs = Date.now() - retrievalStartedAt;
 
       const scrapeCount = serperConfigured ? DEPTH_SCRAPE_COUNT[plan.depth] || 0 : 0;
       if (scrapeCount > 0) {
         emit({ type: "stage", stage: "reading", detail: `正在阅读 ${Math.min(scrapeCount, ranked.length)} 篇高相关网页` });
+        const readingStartedAt = Date.now();
         const enriched = await mapWithConcurrency(ranked.slice(0, scrapeCount), 3, async (result) => {
           const cached = await scrapeCache.get(result.url);
           if (cached?.markdown || cached?.text) {
@@ -473,6 +494,7 @@ export function createSearchService({
           limit: plan.depth === "deep" ? 12 : 10,
         }).map((result, index) => ({ ...result, displayRank: index }));
         emit({ type: "sources", sources: ranked.map(publicSource), count: ranked.length });
+        readingDurationMs = Date.now() - readingStartedAt;
       }
 
       const freeSignals = [
@@ -497,6 +519,7 @@ export function createSearchService({
       };
 
       emit({ type: "stage", stage: "writing", detail: "正在撰写带引用的答案" });
+      const synthesisStartedAt = Date.now();
       let streamedAnswer = "";
       const streamed = await answerEngine.streamAnswer({
         query,
@@ -530,6 +553,12 @@ export function createSearchService({
         freeSignals,
         signal,
       }))).filter((item) => matchesRequestedLanguage(item, requestedLanguage)).slice(0, 5);
+      synthesisDurationMs = Date.now() - synthesisStartedAt;
+      const totalDurationMs = Date.now() - searchStartedAt;
+
+      const timingSummary = `[search-timing] 查询: "${query}" | 总耗时: ${totalDurationMs}ms (规划: ${planningDurationMs}ms | 检索: ${retrievalDurationMs}ms${readingDurationMs ? ` | 阅读: ${readingDurationMs}ms` : ""} | 生成: ${synthesisDurationMs}ms)`;
+      logger.info?.(timingSummary);
+
       const result = {
         status: "success",
         mode: "scout",
@@ -544,6 +573,13 @@ export function createSearchService({
         retrievalProviders,
         grounded: checked.grounded,
         degraded: !professionalConfigured,
+        timing: {
+          totalMs: totalDurationMs,
+          planningMs: planningDurationMs,
+          retrievalMs: retrievalDurationMs,
+          readingMs: readingDurationMs,
+          synthesisMs: synthesisDurationMs,
+        },
       };
       emit({ type: "done", result });
       return result;
