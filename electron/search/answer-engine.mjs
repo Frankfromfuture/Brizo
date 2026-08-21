@@ -237,7 +237,7 @@ export function createAnswerEngine({ llm }) {
             { role: "system", content: ANSWER_SYSTEM_PROMPT },
             { role: "user", content: user },
           ],
-          maxTokens: plan.depth === "deep" ? 3_200 : plan.depth === "balanced" ? 2_300 : 800,
+          maxTokens: plan.depth === "deep" ? 4_000 : plan.depth === "balanced" ? 3_000 : 2_400,
           temperature: 0.2,
           signal,
           thinkingVariant,

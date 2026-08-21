@@ -16,7 +16,7 @@ export function createPasswordVault({ safeStorage, storePath }) {
     }
   };
 
-  const writeStore = (store) => writeFile(resolveStorePath(), JSON.stringify(store, null, 2), "utf8");
+  const writeStore = (store) => writeFile(resolveStorePath(), JSON.stringify(store, null, 2), { encoding: "utf8", mode: 0o600 });
 
   const sanitize = (store) => (store?.entries || []).map((entry) => ({
     id: entry.id,
@@ -79,5 +79,33 @@ export function createPasswordVault({ safeStorage, storePath }) {
     return decrypt(store.entries.find((entry) => entry.id === id));
   };
 
-  return { list, remove, reveal, save };
+  const hostnameFor = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    try {
+      return new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).hostname.toLowerCase();
+    } catch {
+      return "";
+    }
+  };
+
+  const entryMatchesUrl = (entry, pageUrl) => {
+    const savedHost = hostnameFor(entry?.site);
+    const pageHost = hostnameFor(pageUrl);
+    return Boolean(savedHost && pageHost && (pageHost === savedHost || pageHost.endsWith(`.${savedHost}`)));
+  };
+
+  const matches = async (pageUrl) => {
+    const store = await readStore();
+    return sanitize({ entries: store.entries.filter((entry) => entryMatchesUrl(entry, pageUrl)) });
+  };
+
+  const revealForUrl = async (id, pageUrl) => {
+    const store = await readStore();
+    const entry = store.entries.find((candidate) => candidate.id === id && entryMatchesUrl(candidate, pageUrl));
+    const password = decrypt(entry);
+    return entry && password ? { password, username: entry.username } : null;
+  };
+
+  return { list, matches, remove, reveal, revealForUrl, save };
 }

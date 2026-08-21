@@ -1,231 +1,170 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  ArrowSquareOut,
   ArrowsClockwise,
   Check,
   Clock,
-  DotsThree,
-  GearSix,
-  Heart,
-  LinkSimple,
-  Minus,
-  PushPin,
   ShieldCheck,
+  Sparkle,
   X,
 } from "@phosphor-icons/react";
-import brizoLogoUrl from "../logo.svg";
+import { getDefaultBookmarkFaviconUrl } from "../shared/bookmark-folders.mjs";
 
-const PREVIEW_IMAGES = [
-  "https://images.unsplash.com/photo-1578575437130-527eed3abbec?auto=format&fit=crop&w=1400&q=82",
-  "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80",
-  "https://images.unsplash.com/photo-1521295121783-8a321d551ad2?auto=format&fit=crop&w=800&q=80",
-  "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=800&q=80",
-  "https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=800&q=80",
-];
-
-const PREVIEW_SOURCE_SETS = [
-  ["新华社", "https://www.news.cn/"],
-  ["央视新闻", "https://news.cctv.com/"],
-  ["界面新闻", "https://www.jiemian.com/"],
-  ["澎湃新闻", "https://www.thepaper.cn/"],
-  ["财新", "https://www.caixin.com/"],
-  ["Reuters", "https://www.reuters.com/"],
-  ["AP News", "https://apnews.com/"],
-  ["BBC News", "https://www.bbc.com/news"],
-  ["Nature", "https://www.nature.com/"],
-];
-
-function previewSources(seed = 0) {
-  return Array.from({ length: 3 }, (_, index) => PREVIEW_SOURCE_SETS[(seed + index) % PREVIEW_SOURCE_SETS.length])
-    .map(([title, url], index) => ({
-    domain: new URL(url).hostname.replace(/^www\./, ""),
-    id: `preview-source-${seed}-${index}`,
-    snippet: "来自权威媒体与官方机构的公开报道；桌面版会通过 Serper News 实时检索并综合原始来源。",
-    title,
-    url,
-    authorityLabel: index === 0 ? "一线权威来源" : "权威媒体",
-    }));
-}
-
-function makePreviewStory({ headline, id, index, region, summary, topicId, topicLabel }) {
-  const sources = previewSources(index);
-  return {
-    headline,
-    id,
-    imageUrl: PREVIEW_IMAGES[index % PREVIEW_IMAGES.length],
-    importance: Math.max(0.62, 0.92 - index * 0.015),
-    publishedAt: new Date(Date.now() - (index + 1) * 18 * 60_000).toISOString(),
-    region,
-    score: 1 - index * 0.02,
-    sources,
-    sourceCount: sources.length,
-    summary,
-    topicId,
-    topicLabel,
-    url: `${sources[0].url}?brizo-preview=${encodeURIComponent(id)}`,
-  };
-}
-
-const PREVIEW_TOPIC_CONTENT = [
+const GOOGLE_NEWS_PREVIEW_STORIES = [
   {
-    id: "technology",
-    label: "科学与技术",
-    weight: 0.17,
-    headlines: [
-      "大模型推理成本持续下降，智能体应用加速进入产业场景",
-      "量子计算与经典超级计算机混合架构在科研领域取得新突破",
-      "开源大模型生态蓬勃发展，挑战传统封闭商业模型垄断",
-    ],
-    summaries: [
-      "多家科技企业与研究机构的公开信息显示，随着专用芯片架构升级与量化算法突破，AI 推理成本持续下降。越来越多的企业开始部署能够独立规划与执行工作流的智能体应用。",
-      "国际顶级实验室联合发布报告，展示了量子加速器在药物分子筛选与复杂材料模拟中的实际成果，标志着混合计算正走向实用化阶段。",
-      "最新的全球开发者调查表明，高水平开源模型的性能提升正在缩小与顶级商业模型的差距，越来越多的企业选择部署自建安全模型。",
+    id: "gnews-tech-apple-ios",
+    section: "TECHNOLOGY",
+    sourceName: "MacRumors",
+    domain: "macrumors.com",
+    headline: "苹果推送 iOS 与 iPadOS 开发者测试版：系统底层优化与锁屏新交互",
+    originalTitle: "Apple Seeds Sixth iOS and iPadOS Betas to Developers",
+    summary: "苹果今日面向全球注册开发者推送了最新系统测试版本，重点优化了锁屏实时活动通知、电量管理算法以及系统级隐私沙箱隔离机制。",
+    imageUrl: "https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=1200&q=82",
+    publishedAt: new Date(Date.now() - 12 * 60_000).toISOString(),
+    url: "https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=en-US&gl=US&ceid=US:en",
+    keyPoints: [
+      "新版本大幅增强了锁屏状态下的实时活动控件与多媒体控制交互。",
+      "针对前沿机型的芯片能效调度策略进行了底层固件优化。",
+      "开发者可通过苹果开发者门户或系统内置通道进行空中升级（OTA）。",
     ],
   },
   {
-    id: "business-finance",
-    label: "商业与金融",
-    weight: 0.16,
-    headlines: [
-      "全球半导体与算力供应链迎来新一轮区域化整合",
-      "美联储与欧洲央行降息预期重构全球资本流动格局",
-      "跨境电商与数字服务成为亚洲市场出口增长新引擎",
-    ],
-    summaries: [
-      "多家权威媒体与行业机构的公开信息显示，受产业政策与供应链安全考量影响，全球半导体制造与高能耗 AI 数据中心正在加快区域化布局。企业开始更重视电力供给稳定性与供应链冗余。",
-      "全球主要央行最新政策信号显示，利率走势的分化正引导国际资本重新流向新兴市场科技资产与债券市场。投资者正在密切评估企业盈利修复的实际节奏。",
-      "亚洲主要经济体最新的贸易数据显示，云端软件、跨境电商与数字服务正在逐步替代传统制造业出口，成为推动区域经济回升的核心驱动力。",
-    ],
-  },
-  {
-    id: "international",
-    label: "国际重要新闻",
-    weight: 0.24,
-    headlines: [
-      "多边气候与能源峰会达成新框架：承诺加大绿色算力投资",
-      "全球贸易规则重新谈判，聚焦数据跨境流动与人工智能治理",
-      "欧洲科技法案生效，对人工智能透明度与合成内容提出强制要求",
-    ],
-    summaries: [
-      "全球能源与环境峰会上，各国代表就绿色数据中心建设与清洁能源转型达成一致，计划在未来三年内追加数千亿美元基础设施投资。",
-      "跨国贸易谈判代表在最新一轮会议中将数据安全与 AI 道德规范纳入核心条款，标志着全球数字经济治理正在进入新阶段。",
-      "欧盟 AI 法案相关透明度条款正式施行，要求所有合成内容与智能体系统必须明确标识非人类身份，引发行业广泛关注与合规调整。",
+    id: "gnews-biz-meta-antitrust",
+    section: "BUSINESS",
+    sourceName: "Bloomberg",
+    domain: "bloomberg.com",
+    headline: "Meta 面临万亿美元级反垄断世纪审判：社交生态格局或迎变局",
+    originalTitle: "Meta Stares Down Trillion-Dollar Threat as Landmark Social Media Trial Begins",
+    summary: "彭博社报道：美国联邦监管机构针对 Meta 历史并购案的反垄断诉讼正式开庭审理。司法部与各州总检察长聚焦于跨平台网络效应与潜在拆分风险。",
+    imageUrl: "https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?auto=format&fit=crop&w=1200&q=82",
+    publishedAt: new Date(Date.now() - 28 * 60_000).toISOString(),
+    url: "https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=en-US&gl=US&ceid=US:en",
+    keyPoints: [
+      "审判焦点集中于 Instagram 与 WhatsApp 历史收购案对市场竞争格局的长期影响。",
+      "华尔街投行正在评估诉讼进展对大型科技巨头估值与未来并购通道的连锁效应。",
+      "Meta 法律团队强调其在开源人工智能和跨平台通信领域的巨额投资与创新贡献。",
     ],
   },
   {
-    id: "domestic",
-    label: "国内重要新闻",
-    weight: 0.14,
-    headlines: [
-      "中国先进制造业支持政策加码：聚焦长板技术与产业集群",
-      "多地推出青年科技人才培育计划与公共数字基础设施共享平台",
-    ],
-    summaries: [
-      "国家最新发布的产业指南强调，将重点扶持高精尖制造、新能源及核心零部件领域，鼓励企业加大研发投入并深化产业链协同。",
-      "地方政府出台一系列政策，向初创科技团队开放高性能算力资源与公共数据集，助力中小企业低成本进行技术创新。",
-    ],
-  },
-  {
-    id: "arts-culture",
-    label: "艺术与文化",
-    weight: 0.15,
-    headlines: [
-      "数字沉浸艺术与传统博物馆重塑全球公共文化空间",
-      "跨国出版与影视制作展现新的全球化叙事与多元文化表达",
-    ],
-    summaries: [
-      "全球顶级博物馆与艺术机构联合推出数字化展览，通过生成式技术还原历史艺术遗产，吸引新一代泛年轻人入场。",
-      "国际电影节与出版行业最新趋势表明，非英语原版影视作品与文学翻译在国际流媒体平台上播放量持续创出历史新高。",
+    id: "gnews-world-diplomacy",
+    section: "WORLD",
+    sourceName: "AP News",
+    domain: "apnews.com",
+    headline: "联合国安理会召开中东地缘安全紧急磋商：多方呼吁保障人道走廊",
+    originalTitle: "UN Security Council Holds Emergency Talks on Middle East Security and Humanitarian Aid",
+    summary: "美联社发自纽约联合国总部：围绕热点地区局势发展，安理会召开闭门紧急磋商。多国代表呼吁各方保持最大限度克制，尽快恢复陆路与海运关键物流通道。",
+    imageUrl: "https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?auto=format&fit=crop&w=1200&q=82",
+    publishedAt: new Date(Date.now() - 45 * 60_000).toISOString(),
+    url: "https://news.google.com/rss/headlines/section/topic/WORLD?hl=en-US&gl=US&ceid=US:en",
+    keyPoints: [
+      "国际救援组织在会中通报了前线物资调拨与医疗救护设施运行的最新评估。",
+      "各方就建立更为透明的停火监督机制与人道走廊安全保障方案展开深入磋商。",
+      "联合国秘书长呼吁国际社会加大对冲突地区流离失所人员的专项资金支持。",
     ],
   },
   {
-    id: "sports-entertainment",
-    label: "体育与娱乐",
-    weight: 0.14,
-    headlines: [
-      "全球体育科技投资提速：数据分析与智能转播重塑观赛体验",
-      "流媒体平台版权竞争进入新阶段，聚焦顶级赛事直播与优质原创",
+    id: "gnews-science-space",
+    section: "SCIENCE",
+    sourceName: "Nature",
+    domain: "nature.com",
+    headline: "国际射电天文学团队捕获百亿光年外超大质量黑洞喷流偏振光谱",
+    originalTitle: "Astronomers Detect Polarized Emission Jet from Supermassive Black Hole",
+    summary: "由全球多国天文台联合组成的射电望远镜阵列成功观测到遥远活跃星系核的高能等离子体喷流精细磁场结构，为广义相对论极端引力场理论提供了关键验证数据。",
+    imageUrl: "https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=1200&q=82",
+    publishedAt: new Date(Date.now() - 65 * 60_000).toISOString(),
+    url: "https://news.google.com/rss/headlines/section/topic/SCIENCE?hl=en-US&gl=US&ceid=US:en",
+    keyPoints: [
+      "观测分辨率达到前所未有的微角秒级别，直接解析了事件视界边缘的螺旋磁力线。",
+      "研究证实强磁场在黑洞吸积盘能量提取与超相对论喷流加速中发挥决定性作用。",
+      "新研究成果已在国际顶级权威学术期刊《自然》以封面文章形式正式发表。",
     ],
-    summaries: [
-      "体育科技资本正加速流向实时数据分析、球员健康预测以及多视角 AI 转播系统，提升全球观众的互动体验。",
-      "各大娱乐流媒体巨头调整内容发行策略，通过独家体育赛事直播吸引高粘性订阅者，推动订阅模式多元化。",
+  },
+  {
+    id: "gnews-health-vaccines",
+    section: "HEALTH",
+    sourceName: "The Washington Post",
+    domain: "washingtonpost.com",
+    headline: "公共卫生机构发布儿童免疫规划评估：新型长效抗体保护效果显著",
+    originalTitle: "Public Health Officials Report Strong Efficacy for Next-Generation Pediatric Antibodies",
+    summary: "华盛顿邮报报道：国际公共卫生联合研究团队公布了大规模追踪数据，新一代单克隆抗体在预防婴幼儿呼吸道合胞病毒（RSV）重症住院方面展现出高达 80% 的防护有效率。",
+    imageUrl: "https://images.unsplash.com/photo-1505751172876-fa1923c5c528?auto=format&fit=crop&w=1200&q=82",
+    publishedAt: new Date(Date.now() - 95 * 60_000).toISOString(),
+    url: "https://news.google.com/rss/headlines/section/topic/HEALTH?hl=en-US&gl=US&ceid=US:en",
+    keyPoints: [
+      "单剂注射即可为整个流行季提供持久稳定的中和抗体保护屏障。",
+      "儿科专家建议将该项预防手段纳入常规新生儿健康体检与公共医保覆盖范畴。",
+      "多国药品监管部门正在加快同类靶点生物制剂的审评审批通道。",
+    ],
+  },
+  {
+    id: "gnews-sports-championship",
+    section: "SPORTS",
+    sourceName: "ESPN",
+    domain: "espn.com",
+    headline: "全球顶级足球联赛季前热身与转会窗口动态：各路豪门加速阵容重组",
+    originalTitle: "European Football Transfer Window Highlights: Major Clubs Finalize Rosters",
+    summary: "ESPN 深度报道：随着新赛季临近，欧洲五大联赛各大俱乐部正密集展开阵容磨合与关键位置引援。多名超级巨星的转会交易进入最后签约倒计时。",
+    imageUrl: "https://images.unsplash.com/photo-1461896836934-ffe607ba8211?auto=format&fit=crop&w=1200&q=82",
+    publishedAt: new Date(Date.now() - 130 * 60_000).toISOString(),
+    url: "https://news.google.com/rss/headlines/section/topic/SPORTS?hl=en-US&gl=US&ceid=US:en",
+    keyPoints: [
+      "中场组织核心与年轻边锋成为今年夏季转会市场溢价最高的焦点位置。",
+      "财务公平法案（FFP）监管规则促使各俱乐部在引援时更注重薪资结构与分期摊销。",
+      "季前巡回热身赛上多位青训新秀表现亮眼，有望在新赛季跻身一线队轮换阵容。",
     ],
   },
 ];
+
+export const NYT_PREVIEW_STORIES = GOOGLE_NEWS_PREVIEW_STORIES;
+export const BIG5_PREVIEW_STORIES = GOOGLE_NEWS_PREVIEW_STORIES;
 
 export function createBriefPreviewEdition() {
-  const stories = PREVIEW_TOPIC_CONTENT.flatMap((topic, topicIndex) =>
-    topic.headlines.map((headline, index) => makePreviewStory({
-      headline,
-      id: `${topic.id}-${index}`,
-      index: topicIndex * 6 + index,
-      region: topic.id === "domestic" ? "国内" : "国际",
-      summary: topic.summaries[index] || "综合多家权威来源的公开报道，全球市场与科技产业正经历深层次调整。",
-      topicId: topic.id,
-      topicLabel: topic.label,
-    })),
-  );
-  const frontStories = [
-    makePreviewStory({
-      headline: "全球半导体与算力供应链迎来新一轮区域化整合",
-      id: "front-lead",
-      index: 0,
-      region: "国际",
-      summary: "多家权威媒体与行业机构的公开信息显示，受产业政策与供应链安全考量影响，全球半导体制造与高能耗 AI 数据中心正在加快区域化布局。企业开始更重视电力供给稳定性与供应链冗余。",
-      topicId: "business-finance",
-      topicLabel: "商业与金融",
-    }),
-    makePreviewStory({
-      headline: "中国先进制造业支持政策加码：聚焦长板技术与产业集群",
-      id: "front-china",
-      index: 6,
-      region: "国内",
-      summary: "国家最新发布的产业指南强调，将重点扶持高精尖制造、新能源及核心零部件领域，鼓励企业加大研发投入并深化产业链协同，建立长期竞争优势。",
-      topicId: "domestic",
-      topicLabel: "国内重要新闻",
-    }),
-    makePreviewStory({
-      headline: "大模型推理成本持续下降，智能体应用加速进入产业场景",
-      id: "front-world",
-      index: 8,
-      region: "国际",
-      summary: "多家科技企业与研究机构的公开信息显示，随着专用芯片架构升级与量化算法突破，AI 推理成本持续下降。越来越多的企业开始部署能够独立规划与执行工作流的智能体应用。",
-      topicId: "technology",
-      topicLabel: "科学与技术",
-    }),
-    ...stories.slice(1, 6),
-  ];
-  const previewSlots = [3, 3, 4, 2, 3, 3];
-  const sections = PREVIEW_TOPIC_CONTENT.map((topic, index) => ({
-    id: topic.id,
-    label: topic.label,
-    stories: stories.filter((story) => story.topicId === topic.id).slice(0, previewSlots[index]),
-    weight: topic.weight,
+  const stories = GOOGLE_NEWS_PREVIEW_STORIES.map((story, idx) => ({
+    ...story,
+    importance: 0.95 - idx * 0.02,
+    score: 1 - idx * 0.03,
+    sources: [
+      {
+        authorityLabel: "权威新闻来源",
+        domain: story.domain || "news.google.com",
+        faviconUrl: getDefaultBookmarkFaviconUrl(`https://${story.domain || "news.google.com"}`),
+        title: story.sourceName || story.section,
+        url: story.url,
+      },
+    ],
+    sourceCount: 1,
+    topicId: story.section,
+    topicLabel: story.section,
   }));
+
   return {
-    id: "preview-evening",
-    kind: "evening",
-    label: "THE EVENING POST",
+    id: "preview-gnews",
+    kind: "morning",
+    label: "全球焦点资讯 · 六大专题",
     pages: [
-      { id: "front", kind: "front", stories: frontStories.slice(0, 8) },
-      { id: "editorial-2", kind: "topics", sections: sections.slice(0, 2) },
-      { id: "editorial-3", kind: "topics", sections: sections.slice(2, 4) },
-      { id: "editorial-4", kind: "topics", sections: sections.slice(4, 6) },
+      { id: "page-1", pageNumber: 1, title: "全球焦点资讯", stories },
     ],
     preview: true,
-    publishedAt: new Date(new Date().setHours(18, 0, 0, 0)).toISOString(),
+    publishedAt: new Date().toISOString(),
     status: "success",
-    topics: PREVIEW_TOPIC_CONTENT.map(({ headlines: _headlines, summaries: _summaries, ...topic }) => topic),
+    topics: [
+      { id: "WORLD", label: "国际要闻", weight: 0.2 },
+      { id: "BUSINESS", label: "商业财经", weight: 0.2 },
+      { id: "TECHNOLOGY", label: "科技产业", weight: 0.2 },
+      { id: "SCIENCE", label: "前沿科学", weight: 0.15 },
+      { id: "HEALTH", label: "健康医疗", weight: 0.15 },
+      { id: "SPORTS", label: "全球体育", weight: 0.1 },
+    ],
     updatedAt: new Date().toISOString(),
   };
 }
 
 function formatDate(value) {
-  return new Intl.DateTimeFormat("en", {
-    day: "numeric",
-    month: "long",
-    weekday: "long",
+  return new Intl.DateTimeFormat("zh-CN", {
     year: "numeric",
+    month: "long",
+    day: "numeric",
   }).format(new Date(value));
 }
 
@@ -262,8 +201,8 @@ function CitationText({ sources, text, onOpenSource }) {
 function StoryMeta({ story }) {
   return (
     <span className="brief-story-meta">
-      <Clock size={14} />
-      <span>已发布 {relativeTime(story.publishedAt)}</span>
+      <Clock size={13} />
+      <span>{relativeTime(story.publishedAt)}</span>
     </span>
   );
 }
@@ -277,441 +216,393 @@ function StoryImage({ className = "", story }) {
       alt=""
       loading="lazy"
       referrerPolicy="no-referrer"
-      onError={(event) => { event.currentTarget.hidden = true; }}
+      onError={(event) => { event.currentTarget.closest(".brief-story-image-wrap")?.classList.add("is-missing"); }}
     />
   );
 }
 
-function Masthead({ edition, onRefresh, refreshing }) {
+function getSourcePresentation(story, source) {
+  const resolvedSource = source || story?.sources?.[0] || {};
+  const name = resolvedSource.title || story?.sourceName || resolvedSource.domain || story?.domain || "新闻来源";
+  const domain = resolvedSource.domain || story?.domain || "";
+  const origin = /^https?:\/\//i.test(domain) ? domain : domain ? `https://${domain}` : "";
+  return {
+    faviconUrl: resolvedSource.faviconUrl || story?.faviconUrl || getDefaultBookmarkFaviconUrl(origin),
+    name,
+  };
+}
+
+function BriefSourceIcon({ className = "", source, story }) {
+  const { faviconUrl, name } = getSourcePresentation(story, source);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [faviconUrl]);
+
+  return (
+    <span
+      className={`brief-source-icon${className ? ` ${className}` : ""}${failed || !faviconUrl ? " is-fallback" : ""}`}
+      aria-label={`来源：${name}`}
+      title={name}
+    >
+      {!failed && faviconUrl
+        ? <img src={faviconUrl} alt="" referrerPolicy="no-referrer" onError={() => setFailed(true)} />
+        : <span aria-hidden="true">{String(name).trim().slice(0, 1).toUpperCase()}</span>}
+    </span>
+  );
+}
+
+function storyKey(story) {
+  return story.id || story.url || story.headline;
+}
+
+export function getTopicBadgeClass(topic = "") {
+  const t = String(topic).toUpperCase();
+  if (t.includes("WORLD") || t.includes("国际")) return "is-world";
+  if (t.includes("BUSINESS") || t.includes("商业") || t.includes("FINANCE")) return "is-business";
+  if (t.includes("TECH") || t.includes("科技")) return "is-technology";
+  if (t.includes("SCIENCE") || t.includes("科学")) return "is-science";
+  if (t.includes("HEALTH") || t.includes("健康") || t.includes("医疗")) return "is-health";
+  if (t.includes("SPORTS") || t.includes("体育")) return "is-sports";
+  return "is-world";
+}
+
+export const getMediaBadgeClass = getTopicBadgeClass;
+
+export const TOPIC_NAMES = {
+  WORLD: "国际要闻",
+  BUSINESS: "商业财经",
+  TECHNOLOGY: "科技产业",
+  SCIENCE: "前沿科学",
+  HEALTH: "健康医疗",
+  SPORTS: "全球体育",
+};
+
+function Masthead({ edition, onRefresh, refreshing, onClose }) {
+  const displayLabel = edition?.label && !edition.label.includes("POST") && !edition.label.includes("UPDATE")
+    ? edition.label
+    : "全球焦点资讯 · 六大专题";
   return (
     <header className="brief-masthead">
-      <div className="brief-edition-scope">BrizoAI</div>
+      <div className="brief-edition-scope">
+        {onClose && (
+          <button type="button" className="brief-back-btn" onClick={onClose} title="返回网页">
+            <ArrowLeft size={16} />
+            <span>返回网页</span>
+          </button>
+        )}
+        <span className="brief-edition-mark">DAILY EDITION · 每日情报</span>
+      </div>
       <div className="brief-masthead-center">
-        <h1>{edition.label}</h1>
+        <small>BRIZO INTELLIGENCE</small>
+        <h1>Brizo Brief</h1>
+        <p>{displayLabel}</p>
       </div>
       <div className="brief-edition-clock">
-        <span>{formatDate(edition.publishedAt)}</span>
+        <span>{formatDate(edition?.publishedAt || Date.now())}</span>
         <strong>{formatTime(new Date())}</strong>
-        <small>出版 {formatTime(edition.publishedAt)} · 更新 {formatTime(edition.updatedAt)}</small>
-        <button type="button" onClick={onRefresh} disabled={refreshing}>
-          <ArrowsClockwise className={refreshing ? "is-spinning" : ""} size={13} />
-          {refreshing ? "正在刷新" : "刷新本期"}
-        </button>
+        <div className="brief-clock-actions">
+          <button type="button" onClick={onRefresh} disabled={refreshing}>
+            <ArrowsClockwise className={refreshing ? "is-spinning" : ""} size={13} />
+            {refreshing ? "正在刷新" : "刷新最新"}
+          </button>
+        </div>
       </div>
     </header>
   );
 }
 
-const BRIEF_CATEGORIES = [
-  { id: "all", label: "全部" },
-  { id: "science-technology", label: "科学与技术" },
-  { id: "business", label: "商业" },
-  { id: "arts-culture", label: "艺术与文化" },
-  { id: "sports", label: "体育" },
-  { id: "entertainment", label: "娱乐" },
-];
+function GoogleNewsStoryCard({
+  story,
+  layout = "column",
+  onOpenStory,
+  storyNumber,
+  showImage = false,
+  imageVariant = "landscape",
+}) {
+  const topicCode = (story.section || story.topicId || "WORLD").toUpperCase();
+  const badgeClass = getTopicBadgeClass(topicCode);
+  const topicChineseName = TOPIC_NAMES[topicCode] || topicCode;
+  const hasImage = Boolean(showImage && story.imageUrl);
 
-const SPORTS_PATTERN = /体育|赛事|球队|球员|联赛|冠军|奥运|世界杯|NBA|足球|篮球|网球|赛车|F1/i;
-const ENTERTAINMENT_PATTERN = /娱乐|电影|影视|音乐|艺人|明星|票房|流媒体|综艺|剧集|游戏/i;
-
-function storyKey(story) {
-  return story?.url || story?.id;
-}
-
-function editionStories(edition) {
-  const stories = (edition?.pages || []).flatMap((page) => [
-    ...(page.stories || []),
-    ...(page.sections || []).flatMap((section) => section.stories || []),
-  ]);
-  return [...new Map(stories.filter(Boolean).map((story) => [storyKey(story), story])).values()];
-}
-
-function matchesCategory(story, categoryId) {
-  if (categoryId === "all") return true;
-  if (categoryId === "science-technology") return story.topicId === "technology";
-  if (categoryId === "business") return story.topicId === "business-finance";
-  if (categoryId === "arts-culture") return story.topicId === "arts-culture";
-  const searchable = `${story.headline || ""} ${story.summary || ""} ${story.topicLabel || ""}`;
-  if (categoryId === "sports") return story.topicId === "sports-entertainment" && SPORTS_PATTERN.test(searchable);
-  if (categoryId === "entertainment") {
-    return story.topicId === "sports-entertainment" && (ENTERTAINMENT_PATTERN.test(searchable) || !SPORTS_PATTERN.test(searchable));
-  }
-  return false;
-}
-
-function storyExcerpt(story) {
-  return story.bodyExcerpt
-    || story.sources?.find((source) => source.bodyExcerpt)?.bodyExcerpt
-    || story.summary
-    || "";
-}
-
-function storyRank(story, edition, preferences) {
-  const topicWeight = edition?.topics?.find((topic) => topic.id === story.topicId)?.weight || 0;
-  const pinned = preferences?.pinnedTopicIds?.includes(story.topicId) ? 4 : 0;
-  const reduced = preferences?.reducedTopicIds?.includes(story.topicId) ? -2 : 0;
-  const sourceAdapter = story.sources?.[0]?.sourceAdapter;
-  const professionalRetrieval = sourceAdapter === "serper-news" ? 0.2 : sourceAdapter === "bocha-news" ? 0.12 : 0;
-  const freshness = Math.max(0, 1 - ((Date.now() - Date.parse(story.publishedAt || 0)) / 86_400_000)) * 0.2;
-  const importance = Number(story.importance) || 0;
-  const verification = Math.min(3, Number(story.sourceCount) || story.sources?.length || 1) * 0.15;
-  return pinned + reduced + professionalRetrieval + topicWeight * 3
-    + (Number(story.score) || 0) + importance * 2.4 + verification + freshness;
-}
-
-function StorySources({ story }) {
-  const sources = story.sources || [];
   return (
-    <div className="brief-stream-sources" aria-label={`${sources.length} 个来源`}>
-      <span className="brief-source-stack" aria-hidden="true">
-        {sources.slice(0, 3).map((source, index) => (
-          <img
-            alt=""
-            key={`${source.url || source.domain}-${index}`}
-            src={source.faviconUrl || `https://www.bing.com/favicon.ico?domain=${encodeURIComponent(source.domain || "")}`}
-            referrerPolicy="no-referrer"
-            onError={(event) => { event.currentTarget.hidden = true; }}
-          />
-        ))}
-      </span>
-      <span>{sources.length || 1} 个来源</span>
-    </div>
-  );
-}
-
-function StreamStoryCard({ story, layout = "card", onOpenStory }) {
-  const storyFooter = (
-    <footer className="brief-stream-story-footer">
-      <StorySources story={story} />
-      {(story.sourceCount || story.sources?.length || 0) >= 2 && (
-        <span className="brief-event-verified"><ShieldCheck size={13} /> 已核验</span>
-      )}
-      {layout === "card" && <StoryMeta story={story} />}
-      <span className="brief-stream-story-actions" aria-hidden="true">
-        <Heart size={17} />
-        <DotsThree size={18} />
-      </span>
-    </footer>
-  );
-  return (
-    <article className={`brief-stream-story brief-stream-story-${layout}`}>
-      <button type="button" onClick={() => onOpenStory(story)}>
-        <StoryImage story={story} />
-        <span className="brief-stream-story-copy">
-          <h2>{story.headline}</h2>
-          {layout !== "card" && <StoryMeta story={story} />}
-          <p>{storyExcerpt(story)}</p>
-          {layout === "lead" && storyFooter}
-        </span>
+    <article className={`brief-stream-story brief-stream-story-${layout} ${hasImage ? "has-image" : "is-text-only"}`}>
+      <button type="button" className="brief-story-card-btn" onClick={() => onOpenStory(story)}>
+        {hasImage && (
+          <div className={`brief-story-image-wrap brief-story-image-${imageVariant}`}>
+            <StoryImage story={story} />
+            <BriefSourceIcon className="brief-story-image-credit" story={story} />
+          </div>
+        )}
+        <div className="brief-stream-story-copy">
+          <div className="brief-newspaper-kicker">
+            {storyNumber && <span className="brief-newspaper-number">{String(storyNumber).padStart(2, "0")}</span>}
+            <span className={`brief-newspaper-section ${badgeClass}`}>{topicChineseName}</span>
+            <span>{topicCode}</span>
+          </div>
+          <h2>{story.headline || story.title}</h2>
+          {story.summary ? <p className="brief-story-summary">{story.summary}</p> : null}
+          <footer className="brief-stream-story-footer">
+            <div className="brief-stream-footer-meta">
+              <BriefSourceIcon story={story} />
+              <span className="brief-story-meta">
+                <span>{formatDate(story.publishedAt)} · {formatTime(story.publishedAt)} ({relativeTime(story.publishedAt)})</span>
+              </span>
+            </div>
+          </footer>
+        </div>
       </button>
-      {layout !== "lead" && storyFooter}
     </article>
   );
 }
 
-function BriefCategorySwitch({ activeCategory, onChange }) {
-  return (
-    <aside className="brief-stream-sidebar" aria-label="题材选择">
-      <h2>题材</h2>
-      <nav>
-        {BRIEF_CATEGORIES.map((category) => (
-          <button
-            className={activeCategory === category.id ? "is-active" : ""}
-            key={category.id}
-            type="button"
-            onClick={() => onChange(category.id)}
-          >
-            {category.label}
-          </button>
-        ))}
-      </nav>
-    </aside>
-  );
-}
+const Big5StoryCard = GoogleNewsStoryCard;
+const NytStoryCard = GoogleNewsStoryCard;
 
-function FrontPage({ edition, onOpenStory, onRefresh, refreshing }) {
-  const stories = edition.pages[0]?.stories || [];
-  const [lead, firstSecondary, secondSecondary, ...wire] = stories;
-  if (!lead) return null;
+function ReportOverlay({
+  loading,
+  onClose,
+  onOpenRelated,
+  onOpenSource,
+  relatedStories,
+  report,
+  story,
+}) {
+  const bodyParagraphs = report?.body?.length
+    ? report.body
+    : [story.summary].filter(Boolean);
+
+  const topicCode = (story.section || story.topicId || "WORLD").toUpperCase();
+  const badgeClass = getTopicBadgeClass(topicCode);
+  const topicChineseName = TOPIC_NAMES[topicCode] || topicCode;
+  const sourceName = story.sourceName || story.domain || "新闻来源";
+
   return (
-    <section className="brief-paper-page brief-front-page" data-brief-page="1">
-      <Masthead edition={edition} pageNumber={1} onRefresh={onRefresh} refreshing={refreshing} />
-      {edition.preview && <div className="brief-preview-notice">界面预览 · 桌面版将使用实时检索与绑定模型生成内容</div>}
-      <div className="brief-front-grid">
-        <button className="brief-lead-image" type="button" onClick={() => onOpenStory(lead)}>
-          <StoryImage story={lead} />
+    <section className="brief-report-layer" role="dialog" aria-modal="true" aria-label={story.headline}>
+      <header className="brief-report-header">
+        <button type="button" className="brief-report-back-btn" onClick={onClose}>
+          <ArrowLeft size={16} />
+          <span>返回 Brief</span>
         </button>
-        <article className="brief-lead-copy">
-          <button type="button" onClick={() => onOpenStory(lead)}>
-            <h2>{lead.headline}</h2>
-            <p>{lead.summary}</p>
+        <div className="brief-report-header-center">
+          <Sparkle className="brief-sparkle-icon" size={16} weight="fill" />
+          <span>权威媒体深度整理</span>
+        </div>
+        <div className="brief-report-header-actions">
+          {story.url && (
+            <button
+              type="button"
+              className="brief-report-open-tab"
+              onClick={() => onOpenSource(story.url)}
+              title="在浏览器中打开外媒原文"
+            >
+              <ArrowSquareOut size={15} />
+              <span>打开原文</span>
+            </button>
+          )}
+          <button type="button" className="brief-report-close" onClick={onClose} aria-label="关闭">
+            <X size={18} />
           </button>
-          <StoryMeta story={lead} />
-        </article>
-        <aside className="brief-news-wire">
-          <h2>Now <span>/ 正在发生</span></h2>
-          {wire.slice(0, 5).map((story) => (
-            <button key={story.id} type="button" onClick={() => onOpenStory(story)}>
-              <StoryImage story={story} />
-              <span><StoryMeta story={story} /><strong>{story.headline}</strong><p>{story.summary}</p></span>
-            </button>
-          ))}
-        </aside>
-        {[firstSecondary, secondSecondary].filter(Boolean).map((story) => (
-          <article className="brief-secondary-story" key={story.id}>
-            <StoryImage story={story} />
-            <button type="button" onClick={() => onOpenStory(story)}>
-              <h2>{story.headline}</h2>
-              <p>{story.summary}</p>
-            </button>
-            <StoryMeta story={story} />
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function TopicPage({ edition, onOpenStory, page, pageNumber, onRefresh, refreshing }) {
-  return (
-    <section className="brief-paper-page brief-topic-page" data-brief-page={pageNumber}>
-      <Masthead edition={edition} pageNumber={pageNumber} onRefresh={onRefresh} refreshing={refreshing} />
-      <div className={`brief-topic-grid brief-topic-grid-${page.sections?.length || 1}`}>
-        {(page.sections || []).map((section) => (
-          <section className="brief-topic-section" key={section.id}>
-            <header>
-              <div>
-                <span>{section.label}</span>
-                <strong>{pageNumber === 3 && section.id === "international" ? "GLOBAL FIRST" : "BRIZO DESK"}</strong>
-              </div>
-              <i><span style={{ width: `${Math.max(18, section.weight * 100)}%` }} /></i>
-              <small>{section.stories.length} 篇</small>
-            </header>
-            <div className="brief-topic-stories">
-              {section.stories.map((story, index) => (
-                <article className={index === 0 ? "is-featured" : ""} key={story.id}>
-                  <StoryImage story={story} />
-                  <button type="button" onClick={() => onOpenStory(story)}>
-                    <span className="brief-story-index">{String(index + 1).padStart(2, "0")}</span>
-                    <span>
-                      <strong>{story.headline}</strong>
-                      <p>{story.summary}</p>
-                      <StoryMeta story={story} />
-                    </span>
-                  </button>
-                </article>
-              ))}
-            </div>
-          </section>
-        ))}
-      </div>
-      <footer className="brief-topic-footer">BRIZO BRIEF · PAGE {String(pageNumber).padStart(2, "0")}</footer>
-    </section>
-  );
-}
-
-function ReportOverlay({ loading, onClose, onOpenRelated, onOpenSource, relatedStories, report, story }) {
-  useEffect(() => {
-    const close = (event) => { if (event.key === "Escape") onClose(); };
-    document.addEventListener("keydown", close);
-    return () => document.removeEventListener("keydown", close);
-  }, [onClose]);
-
-  return (
-    <section className="brief-report-layer" role="dialog" aria-modal="true" aria-label="Brizo 图文专报">
-      <header>
-        <button type="button" onClick={onClose}><ArrowLeft size={16} /> 返回本期</button>
-        <span>BRIZO · SHORT REPORT</span>
-        <button className="brief-report-close" type="button" onClick={onClose} aria-label="关闭专报"><X size={16} /></button>
+        </div>
       </header>
-      <article className="brief-report-paper">
-          {loading && (
-            <div className="brief-report-live-status" role="status">
-              <ArrowsClockwise className="is-spinning" size={15} />
-              正在综合 {story.sources?.length || 1} 个来源，正文会自动更新
+
+      <div className="brief-report-scroll-container">
+        <article className="brief-report-paper">
+          <div className="brief-report-header-meta">
+            <span className={`brief-report-kicker ${badgeClass}`}>
+              {topicChineseName}
+              <BriefSourceIcon story={story} />
+            </span>
+            <h1 className="brief-report-main-title">{story.headline || story.title}</h1>
+            <div className="brief-story-meta">
+              <Clock size={14} />
+              <span>发布于 {formatDate(story.publishedAt)} · {formatTime(story.publishedAt)} ({relativeTime(story.publishedAt)})</span>
+              <BriefSourceIcon story={story} />
+            </div>
+          </div>
+
+          {story.imageUrl && (
+            <div className="brief-report-cover-image">
+              <StoryImage story={story} />
             </div>
           )}
-          {report?.status === "error" && (
-            <div className="brief-report-inline-error">综合正文暂时不可用：{report.message}</div>
-          )}
-          <div className="brief-report-kicker">{story.region} · {story.topicLabel}</div>
-          <h1>{report?.headline || story.headline}</h1>
-          <div className="brief-report-meta-row">
-            <StoryMeta story={story} />
-            <StorySources story={{ ...story, sources: report?.sources || story.sources }} />
-            <span className={`brief-report-verification${(report?.sourceCount || story.sourceCount || 0) >= 2 ? " is-cross-checked" : ""}`}>
-              <ShieldCheck size={14} />
-              {report?.verificationLabel || ((story.sourceCount || story.sources?.length || 0) >= 2
-                ? `已交叉核验 ${story.sourceCount || story.sources.length} 个独立来源`
-                : "单一权威来源")}
-            </span>
-          </div>
-          <p className="brief-report-lead">
-            <CitationText text={report?.lead || story.summary} sources={report?.sources || story.sources || []} onOpenSource={onOpenSource} />
-          </p>
-          {(report?.keyPoints?.length || report?.whyItMatters || report?.whatToWatch) && (
-            <section className="brief-report-distill" aria-label="新闻提炼">
-              <div className="brief-report-key-points">
-                <h2>关键事实</h2>
-                <ol>
-                  {(report?.keyPoints || []).map((point, index) => (
-                    <li key={`${index}-${point.slice(0, 20)}`}>
-                      <CitationText text={point} sources={report?.sources || story.sources || []} onOpenSource={onOpenSource} />
+
+          {/* Deep Insights Card */}
+          {report?.keyPoints && report.keyPoints.length > 0 && (
+            <section className="brief-deepseek-insights-card">
+              <div className="brief-ai-card-title">
+                <Sparkle size={15} weight="fill" />
+                <strong>核心事实提炼与深度解析</strong>
+              </div>
+
+              <div className="brief-ai-section">
+                <div className="brief-ai-section-label">核心要点速览</div>
+                <ul className="brief-ai-keypoints-list">
+                  {report.keyPoints.slice(0, 3).map((point, index) => (
+                    <li key={index}>
+                      <span className="brief-ai-num">{index + 1}</span>
+                      <p>
+                        <CitationText
+                          text={point}
+                          sources={report?.sources || story.sources || []}
+                          onOpenSource={onOpenSource}
+                        />
+                      </p>
                     </li>
                   ))}
-                </ol>
-              </div>
-              <div>
-                <h2>为什么重要</h2>
-                <p><CitationText text={report?.whyItMatters} sources={report?.sources || story.sources || []} onOpenSource={onOpenSource} /></p>
-              </div>
-              <div>
-                <h2>接下来关注</h2>
-                <p><CitationText text={report?.whatToWatch} sources={report?.sources || story.sources || []} onOpenSource={onOpenSource} /></p>
+                </ul>
               </div>
             </section>
           )}
-          <StoryImage className="brief-report-image" story={{ ...story, imageUrl: report?.imageUrl || story.imageUrl }} />
+
+          {/* Full Text Body */}
           <div className="brief-report-body is-article-body">
-            {(report?.body || [report?.lead || story.summary]).map((text, index) => (
-              <div key={`${index}-${text.slice(0, 20)}`}>
-                <p>
-                  <CitationText text={text} sources={report?.sources || story.sources || []} onOpenSource={onOpenSource} />
-                </p>
-                {index === 1 && report?.images?.[1] && (
-                  <img className="brief-report-inline-image" src={report.images[1]} alt="" referrerPolicy="no-referrer" />
-                )}
-              </div>
+            <div className="brief-body-section-heading">新闻整理精读</div>
+            {bodyParagraphs.map((para, index) => (
+              <p key={index}>
+                <CitationText sources={report?.sources || story.sources} text={para} onOpenSource={onOpenSource} />
+              </p>
             ))}
           </div>
+
+          {/* Original Sources */}
           <section className="brief-report-sources">
-            <h2>引用来源</h2>
-            {(report?.sources || story.sources || []).map((source, index) => (
-              <button key={`${source.url}-${index}`} type="button" onClick={() => onOpenSource(source.url)}>
-                <span>{index + 1}</span>
-                <strong>{source.title}</strong>
-                <small>
-                  <b>{source.authorityLabel || "权威来源"}</b>
-                  {source.domain}{source.publishedAt ? ` · ${relativeTime(source.publishedAt)}` : ""}
-                </small>
-                <LinkSimple size={13} />
-              </button>
-            ))}
-          </section>
-          <section className="brief-report-related">
-            <h2>相关新闻</h2>
-            <div>
-              {(report?.relatedStories || relatedStories || []).slice(0, 5).map((related) => (
-                <button key={storyKey(related)} type="button" onClick={() => onOpenRelated(related)}>
-                  <StoryImage story={related} />
-                  <span>
-                    <strong>{related.headline}</strong>
-                    <p>{storyExcerpt(related)}</p>
-                    <StoryMeta story={related} />
-                  </span>
+            <h2>引用来源与原始发布</h2>
+            <div className="brief-sources-list">
+              {(report?.sources || story.sources || []).map((source, index) => (
+                <button
+                  key={`${source.url}-${index}`}
+                  type="button"
+                  className="brief-source-card-btn"
+                  onClick={() => onOpenSource(source.url)}
+                  aria-label={`打开来源：${source.title || source.domain || sourceName}`}
+                  title={source.title || source.domain || sourceName}
+                >
+                  <BriefSourceIcon className="brief-source-list-icon" source={source} story={story} />
+                  <div className="brief-source-info">
+                    <strong>原始报道 {index + 1}</strong>
+                    <small>
+                      <b>{source.authorityLabel || "权威新闻来源"}</b>
+                    </small>
+                  </div>
+                  <ArrowSquareOut size={15} />
                 </button>
               ))}
             </div>
           </section>
+
+          {/* Related Stories */}
+          {relatedStories?.length > 0 && (
+            <section className="brief-report-related">
+              <h2>相关焦点报道</h2>
+              <div className="brief-related-grid">
+                {relatedStories.slice(0, 4).map((related) => (
+                  <button
+                    key={storyKey(related)}
+                    type="button"
+                    className="brief-related-card"
+                    onClick={() => onOpenRelated(related)}
+                  >
+                    <StoryImage story={related} />
+                    <div className="brief-related-copy">
+                      <strong>{related.headline || related.title}</strong>
+                      <p>{related.summary}</p>
+                      <StoryMeta story={related} />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
         </article>
+      </div>
     </section>
   );
 }
 
-function TopicEditor({ edition, onClose, onSave, preferences }) {
-  const [draft, setDraft] = useState(() => ({
-    mutedTopicIds: [...(preferences.mutedTopicIds || [])],
-    pinnedTopicIds: [...(preferences.pinnedTopicIds || [])],
-    reducedTopicIds: [...(preferences.reducedTopicIds || [])],
-  }));
-  const update = (topicId, action) => {
-    setDraft((current) => {
-      const pinned = new Set(current.pinnedTopicIds);
-      const reduced = new Set(current.reducedTopicIds);
-      const muted = new Set(current.mutedTopicIds);
-      pinned.delete(topicId);
-      reduced.delete(topicId);
-      muted.delete(topicId);
-      if (action === "pin") pinned.add(topicId);
-      if (action === "reduce") reduced.add(topicId);
-      if (action === "mute") muted.add(topicId);
-      return { mutedTopicIds: [...muted], pinnedTopicIds: [...pinned], reducedTopicIds: [...reduced] };
-    });
-  };
-  return (
-    <div className="brief-editor-layer" role="dialog" aria-modal="true" aria-label="编辑关注主题">
-      <button className="brief-editor-backdrop" type="button" onClick={onClose} aria-label="关闭" />
-      <section className="brief-topic-editor">
-        <header><div><h2>编辑关注主题</h2><p>调整只保存在这台设备上，下期简报生效。</p></div><button type="button" onClick={onClose}><X size={16} /></button></header>
-        <div>
-          {(edition.topics || []).map((topic) => {
-            const state = draft.pinnedTopicIds.includes(topic.id)
-              ? "pin"
-              : draft.mutedTopicIds.includes(topic.id)
-                ? "mute"
-                : draft.reducedTopicIds.includes(topic.id) ? "reduce" : "auto";
-            return (
-              <article key={topic.id}>
-                <span><strong>{topic.label}</strong><small>{Math.round(topic.weight * 100)}% 当前权重</small></span>
-                <div>
-                  <button className={state === "pin" ? "is-active" : ""} type="button" onClick={() => update(topic.id, "pin")}><PushPin size={13} />置顶</button>
-                  <button className={state === "auto" ? "is-active" : ""} type="button" onClick={() => update(topic.id, "auto")}><Check size={13} />自动</button>
-                  <button className={state === "reduce" ? "is-active" : ""} type="button" onClick={() => update(topic.id, "reduce")}><Minus size={13} />减少</button>
-                  <button className={state === "mute" ? "is-active" : ""} type="button" onClick={() => update(topic.id, "mute")}><Minus size={13} />屏蔽</button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-        <footer><button type="button" onClick={() => { setDraft({ mutedTopicIds: [], pinnedTopicIds: [], reducedTopicIds: [] }); }}>恢复自动判断</button><button className="primary" type="button" onClick={() => onSave(draft)}>保存设置</button></footer>
-      </section>
-    </div>
-  );
+function editionStories(edition) {
+  if (!edition) return [];
+  if (Array.isArray(edition.pages)) {
+    const rawList = edition.pages.flatMap((page) => [
+      ...(page.stories || []),
+      ...(page.sections || []).flatMap((sec) => sec.stories || []),
+    ]);
+    const seen = new Set();
+    const unique = [];
+    for (const st of rawList) {
+      if (!st) continue;
+      const key = st.id || st.url || st.headline || st.title;
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(st);
+      }
+    }
+    return unique;
+  }
+  return [];
 }
 
 export function BriefPage({
   active,
   edition,
   loading,
+  onClose,
   onGetReport,
   onOpenModelGuard,
   onOpenSource,
   onRefresh,
-  onSavePreferences,
-  preferences,
   refreshing,
 }) {
   const streamRef = useRef(null);
   const loadMoreRef = useRef(null);
   const reportScrollRef = useRef(0);
   const refreshCooldownRef = useRef(0);
-  const [activeCategory, setActiveCategory] = useState("all");
-  const [storyArchive, setStoryArchive] = useState(() => editionStories(edition));
-  const [visibleCount, setVisibleCount] = useState(12);
+  const [storyArchive, setStoryArchive] = useState(() => {
+    const raw = editionStories(edition);
+    return raw.length ? raw : BIG5_PREVIEW_STORIES;
+  });
+  const [visibleCount, setVisibleCount] = useState(16);
   const [selectedStory, setSelectedStory] = useState(null);
   const [report, setReport] = useState(null);
   const [reportLoading, setReportLoading] = useState(false);
 
   useEffect(() => {
+    if (!active || !onClose) return undefined;
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape" && !selectedStory) {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [active, onClose, selectedStory]);
+
+  // Automatically trigger refresh on active / entry
+  useEffect(() => {
+    if (active && onRefresh) {
+      const now = Date.now();
+      if (now - refreshCooldownRef.current >= 4000) {
+        refreshCooldownRef.current = now;
+        onRefresh();
+      }
+    }
+  }, [active, onRefresh]);
+
+  useEffect(() => {
     const incoming = editionStories(edition);
-    setStoryArchive(incoming);
+    if (incoming.length) {
+      setStoryArchive(incoming);
+    } else if (edition?.preview) {
+      setStoryArchive(GOOGLE_NEWS_PREVIEW_STORIES);
+    }
   }, [edition]);
 
   const rankedStories = useMemo(() => {
-    if (!edition?.preview && (Number(edition?.contentVersion) || 0) < 22 && !edition?.staleReason) return [];
-    const muted = new Set(preferences?.mutedTopicIds || []);
-    return storyArchive
-      .filter((story) => {
-        const timestamp = Date.parse(story.publishedAt || "");
-        const currentEnough = !Number.isFinite(timestamp) || Date.now() - timestamp <= 120 * 3_600_000;
-        return currentEnough && !muted.has(story.topicId) && matchesCategory(story, activeCategory);
-      })
-      .sort((left, right) => {
-        const rankDelta = storyRank(right, edition, preferences) - storyRank(left, edition, preferences);
-        if (rankDelta) return rankDelta;
-        return Date.parse(right.publishedAt || 0) - Date.parse(left.publishedAt || 0);
-      });
-  }, [activeCategory, edition, preferences, storyArchive]);
+    return storyArchive.slice().sort((left, right) => {
+      return Date.parse(right.publishedAt || 0) - Date.parse(left.publishedAt || 0);
+    });
+  }, [storyArchive]);
 
   const visibleStories = rankedStories.slice(0, visibleCount);
 
@@ -722,7 +613,7 @@ export function BriefPage({
     const observer = new IntersectionObserver(([entry]) => {
       if (!entry.isIntersecting) return;
       if (visibleCount < rankedStories.length) {
-        setVisibleCount((count) => Math.min(count + 9, rankedStories.length));
+        setVisibleCount((count) => Math.min(count + 8, rankedStories.length));
         return;
       }
       const now = Date.now();
@@ -735,63 +626,40 @@ export function BriefPage({
     return () => observer.disconnect();
   }, [active, onRefresh, rankedStories.length, refreshing, visibleCount]);
 
-  const changeCategory = (categoryId) => {
-    setActiveCategory(categoryId);
-    setVisibleCount(12);
-    streamRef.current?.scrollTo({ behavior: "auto", top: 0 });
-  };
-
   const openStory = async (story) => {
     reportScrollRef.current = streamRef.current?.scrollTop || 0;
     setSelectedStory(story);
-    setReport(null);
-    if (edition.preview) {
-      setReport({
-        headline: story.headline,
-        imageUrl: story.imageUrl,
-        lead: story.summary,
-        keyPoints: [
-          `${story.summary} [1]`,
-          "多家独立来源正在从政策、产业和执行层面交叉确认事件影响。[1][2]",
-          "部分长期影响仍取决于后续公开数据与相关机构的正式披露。[2][3]",
-        ],
-        whyItMatters: "这项进展可能改变相关产业的成本、竞争格局和监管要求，因此值得持续关注。[1][2]",
-        whatToWatch: "接下来重点观察正式政策文本、核心经营数据以及主要参与方的后续行动。[2][3]",
-        body: [
-          story.summary,
-          `根据上述权威来源的公开报道，${story.headline} 正引发产业界与相关机构的广泛讨论。多方信息显示，这项发展可能对技术演进、商业化落地与监管合规产生持续影响。[1]`,
-          `在供应链与经营成本层面，企业正在面临多重结构性挑战。为了适应最新的竞争格局，业内领先的机构正在加快研发投入与产业布局重构，试图在保持效率的同时建立更高的安全防线。[2]`,
-          `国际政策制定者与行业协会也相继对此发表看法，强调了透明度、数据合规以及跨区域协作的重要性。随之而来的监管新规将促使相关企业进一步规范治理体系。[3]`,
-          `综合多方观察，未来半年内的市场表现与核心指标将成为检验这一趋势的关键。各方将持续关注后续的技术演进、战略并购及政策落地细节。[1][2]`,
-        ],
-        sources: story.sources,
-        sourceCount: story.sources.length,
-        status: "success",
-        verificationLabel: `已交叉核验 ${story.sources.length} 个独立来源`,
-      });
-      return;
-    }
-    setReportLoading(true);
-    try {
-      setReport(await onGetReport({ editionId: edition.id, storyId: story.id }));
-    } finally {
-      setReportLoading(false);
+    const initialReport = {
+      headline: story.headline || story.title,
+      imageUrl: story.imageUrl,
+      lead: story.summary,
+      keyPoints: story.keyPoints || [],
+      body: [story.summary].filter(Boolean),
+      sources: story.sources || [{ title: story.sourceName || "新闻来源", domain: story.domain || "news.google.com", url: story.url }],
+      sourceCount: (story.sources || []).length || 1,
+      status: "success",
+      verificationLabel: "原始来源已载入",
+    };
+    setReport(initialReport);
+
+    if (!edition?.preview && onGetReport && edition?.id) {
+      setReportLoading(true);
+      try {
+        const fullReport = await onGetReport({ editionId: edition.id, storyId: story.id });
+        if (fullReport && fullReport.status === "success") {
+          setReport(fullReport);
+        }
+      } catch {} finally {
+        setReportLoading(false);
+      }
     }
   };
 
   const relatedStoriesForSelected = useMemo(() => {
     if (!selectedStory) return [];
     return rankedStories
-      .filter((story) => storyKey(story) !== storyKey(selectedStory) && story.imageUrl)
-      .map((story) => ({
-        ...story,
-        relatedScore: (story.topicId === selectedStory.topicId ? 1 : 0)
-          + (story.region === selectedStory.region ? 0.15 : 0),
-      }))
-      .sort((left, right) => right.relatedScore - left.relatedScore
-        || Date.parse(right.publishedAt || 0) - Date.parse(left.publishedAt || 0))
-      .slice(0, 5)
-      .map(({ relatedScore: _relatedScore, ...story }) => story);
+      .filter((s) => storyKey(s) !== storyKey(selectedStory))
+      .slice(0, 4);
   }, [rankedStories, selectedStory]);
 
   const closeStory = () => {
@@ -806,8 +674,8 @@ export function BriefPage({
     return (
       <section className="brief-state-page" aria-live="polite">
         <ArrowsClockwise className="is-spinning" size={24} />
-        <h1>正在编辑本期 Brief</h1>
-        <p>Brizo 正在整理真实新闻、来源与您的关注主题。</p>
+        <h1>正在获取最新焦点报道</h1>
+        <p>Brizo 正在从 WORLD、BUSINESS、TECHNOLOGY、SCIENCE、HEALTH、SPORTS 六大专题实时同步全球要闻。</p>
       </section>
     );
   }
@@ -816,54 +684,103 @@ export function BriefPage({
       <section className="brief-state-page" aria-live="polite">
         <ShieldCheck size={28} />
         <h1>本期 Brief 尚未生成</h1>
-        <p>{edition?.message || "请先绑定默认模型，并保持网络连接后重试。"}</p>
-        <div><button type="button" onClick={onOpenModelGuard}>打开大模型护航</button><button type="button" onClick={onRefresh}>重新生成</button></div>
+        <p>{edition?.message || "请保持网络连接并重试。"}</p>
+        <div>
+          <button type="button" onClick={onRefresh}>重新生成</button>
+        </div>
       </section>
     );
   }
 
+  const leadStory = visibleStories[0];
+  const secondaryStories = visibleStories.slice(1, 4);
+  const columnStories = visibleStories.slice(4);
+
   return (
     <section className="brief-page" aria-label="Brizo Brief">
       {edition.staleReason && <div className="brief-stale-notice">更新失败，正在显示上一版：{edition.staleReason}</div>}
-      {!edition.staleReason && edition.contentNotice && <div className="brief-stale-notice">{edition.contentNotice}</div>}
       <div className="brief-stream" ref={streamRef}>
         <div className="brief-stream-header-wrap">
-          <Masthead edition={edition} onRefresh={onRefresh} refreshing={refreshing} />
-          {edition.preview && <div className="brief-preview-notice">界面预览，桌面版使用实时来源</div>}
+          <Masthead edition={edition} onRefresh={onRefresh} refreshing={refreshing} onClose={onClose} />
         </div>
-        <div className="brief-stream-shell">
+        <div className="brief-stream-shell is-single-page">
+          <div className="brief-newspaper-sections" aria-label="Brief 新闻版面">
+            {Object.entries(TOPIC_NAMES).map(([code, label]) => (
+              <span key={code}><b>{code === "TECHNOLOGY" ? "TECH" : code}</b>{label}</span>
+            ))}
+          </div>
           <main className="brief-stream-main">
             {visibleStories.length ? (
               <>
-                <StreamStoryCard layout="lead" story={visibleStories[0]} onOpenStory={openStory} />
-                <div className="brief-stream-card-grid">
-                  {visibleStories.slice(1, 4).map((story) => (
-                    <StreamStoryCard key={storyKey(story)} story={story} onOpenStory={openStory} />
-                  ))}
+                <div className="brief-newspaper-dateline">
+                  <span>TOP STORIES · 今日头条</span>
+                  <small>{formatDate(edition?.publishedAt || Date.now())} · UPDATED {formatTime(edition?.updatedAt || edition?.publishedAt || Date.now())}</small>
                 </div>
-                <div className="brief-stream-feed">
-                  {visibleStories.slice(4).map((story, index) => (
-                    <StreamStoryCard
-                      key={storyKey(story)}
-                      layout={index % 4 === 0 ? "wide" : "row"}
-                      story={story}
+                <section className="brief-newspaper-hero" aria-label="今日头条">
+                  {leadStory && (
+                    <Big5StoryCard
+                      layout="lead"
+                      story={leadStory}
+                      storyNumber={1}
+                      showImage
+                      imageVariant="cinema"
                       onOpenStory={openStory}
                     />
-                  ))}
-                </div>
+                  )}
+                  {secondaryStories.length > 0 && (
+                    <div className="brief-newspaper-secondary">
+                      {secondaryStories.map((story, index) => (
+                        <Big5StoryCard
+                          key={storyKey(story)}
+                          layout={index === 0 ? "secondary-feature" : "secondary"}
+                          story={story}
+                          storyNumber={index + 2}
+                          showImage={index === 0}
+                          imageVariant="landscape"
+                          onOpenStory={openStory}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </section>
+                {columnStories.length > 0 && (
+                  <>
+                    <div className="brief-newspaper-divider">
+                      <span>THE DAILY FILE</span>
+                      <strong>更多要闻</strong>
+                      <small>{columnStories.length} STORIES</small>
+                    </div>
+                    <div className="brief-newspaper-columns">
+                      {columnStories.map((story, index) => {
+                        const layoutPattern = ["feature", "compact", "portrait", "column", "horizontal", "compact"];
+                        const layout = layoutPattern[index % layoutPattern.length];
+                        return (
+                          <Big5StoryCard
+                            key={storyKey(story)}
+                            layout={layout}
+                            story={story}
+                            storyNumber={index + 5}
+                            showImage={!layout.includes("compact")}
+                            imageVariant={layout === "portrait" ? "portrait" : "landscape"}
+                            onOpenStory={openStory}
+                          />
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
               </>
             ) : (
               <div className="brief-stream-empty">
-                <h2>这个题材暂时没有新报道</h2>
-                <p>继续刷新来源后，新事件会自动进入新闻流。</p>
+                <h2>正在同步六大专题要闻</h2>
+                <p>点击上方刷新按钮即可重新拉取最新全球焦点资讯。</p>
               </div>
             )}
             <div className="brief-stream-loader" ref={loadMoreRef} aria-live="polite">
               <ArrowsClockwise className={refreshing ? "is-spinning" : ""} size={15} />
-              <span>{refreshing ? "正在获取更多新闻" : "继续向下浏览"}</span>
+              <span>{refreshing ? "正在获取更多全球焦点新闻" : "已加载全部焦点要闻"}</span>
             </div>
           </main>
-          <BriefCategorySwitch activeCategory={activeCategory} onChange={changeCategory} />
         </div>
       </div>
       {selectedStory && (

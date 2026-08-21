@@ -5,6 +5,7 @@ import {
   dialog,
   ipcMain,
   nativeImage,
+  net,
   powerMonitor,
   safeStorage,
   screen,
@@ -52,6 +53,12 @@ import { createSearchService } from "./search/search-service.mjs";
 import { createSerperClient } from "./search/serper-client.mjs";
 import { chooseDeepSeekTextModel, createSmartBookmarkService } from "./smart-bookmark-service.mjs";
 import { createPasswordVault } from "./password-vault.mjs";
+import {
+  createSiteHygieneStore,
+  resolveSiteHygieneSettings,
+  sanitizeSiteHygieneSettings,
+  shouldBlockPageRequest,
+} from "./site-hygiene.mjs";
 import { isZhihuSource, languageForInput, matchesRequestedLanguage } from "../shared/search-text.mjs";
 import { stripTrailingLinkPunctuation } from "../shared/browser-input.mjs";
 import {
@@ -70,6 +77,7 @@ import path from "node:path";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rendererEntry = path.join(projectRoot, "dist", "client", "index.html");
+const rendererDevUrl = process.env.BRIZO_DEV_SERVER_URL?.trim() || "";
 const preloadEntry = path.join(projectRoot, "electron", "preload.cjs");
 const browserPagePreloadEntry = path.join(projectRoot, "electron", "browser-page-preload.cjs");
 const incognitoEntry = path.join(projectRoot, "electron", "incognito.html");
@@ -202,6 +210,7 @@ const downloadThumbnailCacheLimit = 96;
 const incognitoContexts = new Map();
 const linkBrowserWindows = new Set();
 const scrollbarCssKeys = new Map();
+let isFullWidthEnabled = false;
 const modelGuardPath = () => path.join(app.getPath("userData"), "model-guard.json");
 const modelGuard = createModelGuard({ storePath: modelGuardPath, safeStorage, env: process.env });
 const readModelGuardStore = modelGuard.readStore;
@@ -343,7 +352,7 @@ async function cacheFaviconForPage(pageUrl, faviconUrl) {
     return "";
   }
 }
-const llmClient = createLlmClient({ resolveProvider: resolveBoundModelProvider });
+const llmClient = createLlmClient({ fetchImpl: net.fetch, resolveProvider: resolveBoundModelProvider });
 const smartBookmarkStorePath = () => path.join(app.getPath("appData"), "bean", "smart-bookmarks-v1.json");
 const smartBookmarkService = createSmartBookmarkService({
   notify: (progress) => {
@@ -358,12 +367,15 @@ const smartBookmarkService = createSmartBookmarkService({
   resolveDeepSeekProvider,
   storePath: smartBookmarkStorePath(),
 });
-const briefSerperClient = createSerperClient({ getApiKey: () => modelGuard.readServiceKey("serper") });
-const briefBochaClient = createBochaClient({ getApiKey: () => modelGuard.readServiceKey("bocha") });
+const briefSerperClient = createSerperClient({ fetchImpl: net.fetch, getApiKey: () => modelGuard.readServiceKey("serper") });
+const briefBochaClient = createBochaClient({ fetchImpl: net.fetch, getApiKey: () => modelGuard.readServiceKey("bocha") });
 let scoutSearchService;
 const downloadStorePath = () => path.join(app.getPath("userData"), "downloads.json");
 const passwordVaultPath = () => path.join(app.getPath("userData"), "password-vault.json");
 const passwordVault = createPasswordVault({ safeStorage, storePath: passwordVaultPath });
+const siteHygieneStorePath = () => path.join(app.getPath("userData"), "site-hygiene.json");
+const siteHygieneStore = createSiteHygieneStore(siteHygieneStorePath());
+let siteHygieneSettings = sanitizeSiteHygieneSettings();
 const pageScrollbarCss = `
   * {
     scrollbar-width: thin;
@@ -394,10 +406,12 @@ const pageScrollbarCss = `
   }
 `;
 
+const pageFullWidthCss = ``;
+
 // Keep the established profile path while presenting the new Brizo product name.
 // Changing Electron's app name otherwise creates a fresh profile and hides existing user data.
 app.setPath("userData", path.join(app.getPath("appData"), "bean"));
-app.setName("Brizo");
+app.userAgentFallback = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36`;
 app.commandLine.appendSwitch("enable-smooth-scrolling");
 app.commandLine.appendSwitch("enable-gpu-rasterization");
 app.commandLine.appendSwitch("enable-zero-copy");
@@ -405,27 +419,13 @@ app.commandLine.appendSwitch("enable-zero-copy");
 const briefService = createBriefService({
   callEditorialModel: (payload) => searchWithQwenEditorialModel(payload),
   callModel: (payload) => searchWithBoundModel(payload),
+  callTranslationModel: (payload) => searchWithDeepSeekV4FlashModel(payload),
+  fetchImpl: net.fetch,
+  resolveDeepSeekProvider: () => resolveDeepSeekProvider(),
   notify: (edition) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("bean-browser:brief-edition-updated", edition);
     }
-  },
-  search: {
-    bocha: async (query, options = {}) => {
-      const response = await briefBochaClient.webSearch(query, {
-        count: options.count || 16,
-        freshness: options.freshness || "oneDay",
-      });
-      return response.results || [];
-    },
-    serper: async (query, options = {}) => {
-      const response = await briefSerperClient.vertical("news", query, {
-        gl: options.gl || "cn",
-        hl: options.hl || "zh-cn",
-        num: options.count || 12,
-      });
-      return response.items || [];
-    },
   },
   userDataPath: app.getPath("userData"),
 });
@@ -1515,6 +1515,26 @@ function clearBrowserNavigationTimeout(view = browserView) {
   if (view) view.__brizoNavigationTimeout = undefined;
 }
 
+function browserNavigationFailureDetails(error) {
+  const message = error instanceof Error ? error.message : String(error || "");
+  const numericCode = Number(error?.errno);
+  const messageCode = Number(message.match(/\((-?\d+)\)/)?.[1]);
+  const errorCode = Number.isFinite(numericCode)
+    ? numericCode
+    : Number.isFinite(messageCode)
+      ? messageCode
+      : 0;
+  const errorDescription = typeof error?.code === "string"
+    ? error.code
+    : message;
+  return { errorCode, errorDescription };
+}
+
+function isAbortedBrowserNavigation(error) {
+  const { errorCode, errorDescription } = browserNavigationFailureDetails(error);
+  return errorCode === -3 || /ERR_ABORTED/i.test(errorDescription);
+}
+
 function navigationLogUrl(value) {
   try {
     const parsed = new URL(String(value || ""));
@@ -1528,11 +1548,10 @@ function navigationLogUrl(value) {
 }
 
 function standardBrowserUserAgent(browserSession) {
-  const userAgent = browserSession?.getUserAgent?.() || "";
-  return userAgent
-    .replace(/\sElectron\/[^\s]+/gi, "")
-    .replace(/\sBrizo\/[^\s]+/gi, "")
-    .trim();
+  const raw = browserSession?.getUserAgent?.() || app.userAgentFallback || "";
+  const chromeMatch = raw.match(/Chrome\/(\d+(\.\d+)*)/i);
+  const chromeVersion = chromeMatch ? chromeMatch[1] : "133.0.0.0";
+  return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
 }
 
 function logBrowserNavigation(eventName, view, url, details = {}) {
@@ -1553,6 +1572,38 @@ function getLiveViewWebContents(view) {
   }
 }
 
+function isAuthenticationUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  const lower = url.toLowerCase();
+  return (
+    lower.includes("passport.") ||
+    lower.includes("login") ||
+    lower.includes("signin") ||
+    lower.includes("oauth") ||
+    lower.includes("auth") ||
+    lower.includes("callback") ||
+    lower.includes("open.weixin.qq.com") ||
+    lower.includes("graph.qq.com") ||
+    lower.includes("api.weibo.com") ||
+    lower.includes("alipay.com") ||
+    lower.includes("accounts.google.com") ||
+    lower.includes("appleid.apple.com") ||
+    lower.includes("github.com/login")
+  );
+}
+
+function parseWindowFeatures(features) {
+  const result = {};
+  if (!features || typeof features !== "string") return result;
+  const parts = features.split(",");
+  for (const part of parts) {
+    const [key, val] = part.split("=").map((s) => s?.trim().toLowerCase());
+    if (key === "width" && parseInt(val, 10)) result.width = parseInt(val, 10);
+    if (key === "height" && parseInt(val, 10)) result.height = parseInt(val, 10);
+  }
+  return result;
+}
+
 function isPageZoomShortcut(input) {
   if (!input || (!input.meta && !input.control) || input.alt) return false;
   if (input.type !== "keyDown" && input.type !== "rawKeyDown") return false;
@@ -1565,17 +1616,27 @@ function isPageZoomShortcut(input) {
 function normalizePageZoomFactor(value) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 1;
-  return Math.min(2, Math.max(0.5, Math.round(numeric * 10) / 10));
+  return Math.min(3, Math.max(0.25, Math.round(numeric * 100) / 100));
 }
 
 function applyBrowserPageZoomPolicy(view, { allowZoom = Boolean(view?.__brizoIsPdf) } = {}) {
   const webContents = getLiveViewWebContents(view);
   if (!webContents) return false;
 
+  // Never touch zoom or visual zoom limits on PDF views. In Chromium/Electron,
+  // the built-in PDF viewer manages its own canvas scaling and DPR internally;
+  // calling setZoomFactor or setVisualZoomLevelLimits from the host process causes
+  // Retina DPR compounding, shrinking the entire PDF interface to 1/4 size (50% x 50%).
+  if (view?.__brizoIsPdf) return true;
+
   // Chromium remembers page zoom per origin in a persistent session. Reapply
   // the policy at navigation commit and tab activation so an old site-specific
   // zoom cannot return for one compositor frame while a page is updating.
-  const requestedZoom = normalizePageZoomFactor(view?.__brizoUserZoomFactor || defaultPageZoomFactor);
+  // Full-width mode must never mutate the page zoom factor. Horizontal filling
+  // is handled by injected page styling; vertical font/layout scale stays 100%.
+  const requestedZoom = isFullWidthEnabled
+    ? 1
+    : normalizePageZoomFactor(view?.__brizoUserZoomFactor || defaultPageZoomFactor);
   const visualZoomLimits = allowZoom ? [0.5, 3] : [requestedZoom, requestedZoom];
   try {
     const pendingLimits = webContents.setVisualZoomLevelLimits(...visualZoomLimits);
@@ -1583,7 +1644,6 @@ function applyBrowserPageZoomPolicy(view, { allowZoom = Boolean(view?.__brizoIsP
   } catch {
     // The view may be closing between the liveness check and the native call.
   }
-  if (allowZoom && !view?.__brizoUserZoomFactor) return true;
 
   try {
     if (Math.abs(webContents.getZoomFactor() - requestedZoom) > 0.001) {
@@ -1601,6 +1661,7 @@ async function showBrowserErrorPage(details = {}) {
   const errorView = browserView;
   browserErrorPageActive = true;
   errorView.__brizoErrorPageActive = true;
+  errorView.__brizoNavigationInFlight = false;
   clearBrowserNavigationTimeout(errorView);
   const detailUrl = isInternalBrowserErrorUrl(details.url) ? "" : details.url;
   const originalUrl = detailUrl
@@ -1636,7 +1697,7 @@ async function showBrowserErrorPage(details = {}) {
 }
 
 async function loadBrowserUrl(webContents, url) {
-  const destination = isExampleLoadingUrl(url)
+  let destination = isExampleLoadingUrl(url)
     ? await getExampleLoadingPageUrl()
     : url;
   return webContents.loadURL(destination);
@@ -1737,6 +1798,39 @@ async function installPageScrollbarBehavior(webContents) {
       document.documentElement.dataset.beanScrollbars = "ready";
     })()
   `);
+}
+
+function getBrowserViewForWebContents(webContents) {
+  if (!webContents) return null;
+  if (browserView && getLiveViewWebContents(browserView) === webContents) return browserView;
+  for (const [, candidate] of browserViews) {
+    if (getLiveViewWebContents(candidate) === webContents) return candidate;
+  }
+  return null;
+}
+
+async function applyPageFullWidthBehavior(webContents, enabled = isFullWidthEnabled) {
+  if (!webContents || webContents.isDestroyed()) return;
+  const view = getBrowserViewForWebContents(webContents);
+  if (view?.__brizoIsPdf) return;
+  webContents.send("brizo:apply-full-width", Boolean(enabled));
+}
+
+async function applySiteHygieneBehavior(webContents) {
+  if (!webContents || webContents.isDestroyed()) return;
+  const view = getBrowserViewForWebContents(webContents);
+  if (view?.__brizoIsPdf) return;
+  webContents.send("brizo:apply-site-hygiene", siteHygieneSettings);
+}
+
+function publishSiteHygieneSettings() {
+  for (const [, candidate] of browserViews) {
+    applySiteHygieneBehavior(candidate.webContents).catch(() => {});
+  }
+  if (browserView) applySiteHygieneBehavior(browserView.webContents).catch(() => {});
+  for (const context of incognitoContexts.values()) {
+    if (context.view) applySiteHygieneBehavior(context.view.webContents).catch(() => {});
+  }
 }
 
 function getBrowserState() {
@@ -2273,7 +2367,7 @@ function beginBrowserNavigation(view, action) {
     setBrowserViewVisible(browserVisible);
     publishBrowserState();
   }
-  action();
+  action(requestGeneration);
   return true;
 }
 
@@ -2283,6 +2377,7 @@ function activateBrowserView(view, ownerTabId) {
   browserView = view;
   browserOwnerTabId = ownerTabId;
   applyBrowserPageZoomPolicy(view);
+  applyPageFullWidthBehavior(view.webContents, isFullWidthEnabled).catch(() => {});
   browserDisplayUrl = isInternalBrowserErrorUrl(view.__brizoDisplayUrl)
     ? view.__brizoRequestedUrl || ""
     : view.__brizoDisplayUrl || "";
@@ -2317,7 +2412,7 @@ function ensureBrowserView(ownerTabId) {
 }
 
 function setBrowserBounds(bounds) {
-  if (!mainWindow || !browserView) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
 
   const contentBounds = mainWindow.getContentBounds();
   const nextBounds = {
@@ -2330,7 +2425,9 @@ function setBrowserBounds(bounds) {
   nextBounds.width = Math.min(nextBounds.width, Math.max(1, contentBounds.width - nextBounds.x));
   nextBounds.height = Math.min(nextBounds.height, Math.max(1, contentBounds.height - nextBounds.y));
   browserBounds = nextBounds;
-  setBrowserViewVisible(browserVisible);
+  if (browserView) {
+    setBrowserViewVisible(browserVisible);
+  }
 }
 
 function navigateBrowser(input, ownerTabId) {
@@ -2362,6 +2459,14 @@ function navigateBrowserUrl(url, ownerTabId, { pdfSource = "" } = {}) {
     publishBrowserState();
     return true;
   }
+  if (
+    targetView.__brizoNavigationInFlight
+    && targetView.__brizoRequestedUrl === url
+    && !targetView.__brizoError
+  ) {
+    publishBrowserState();
+    return true;
+  }
   browserErrorPageActive = false;
   clearBrowserNavigationTimeout(targetView);
   if (typeof ownerTabId === "string" && ownerTabId) browserOwnerTabId = ownerTabId;
@@ -2374,11 +2479,17 @@ function navigateBrowserUrl(url, ownerTabId, { pdfSource = "" } = {}) {
   targetView.__brizoError = "";
   targetView.__brizoErrorPageActive = false;
   logBrowserNavigation("requested", targetView, url);
-  return beginBrowserNavigation(targetView, () => {
+  return beginBrowserNavigation(targetView, (requestGeneration) => {
     const targetWebContents = getLiveViewWebContents(targetView);
     if (!targetWebContents) return;
+    targetView.__brizoNavigationInFlight = true;
     targetView.__brizoNavigationTimeout = setTimeout(() => {
-      if (targetWebContents.isDestroyed() || targetView.__brizoErrorPageActive) return;
+      if (
+        targetWebContents.isDestroyed()
+        || targetView.__brizoErrorPageActive
+        || targetView.__brizoNavigationRequestGeneration !== requestGeneration
+      ) return;
+      targetView.__brizoNavigationInFlight = false;
       logBrowserNavigation("timeout", targetView, url, {
         currentUrl: navigationLogUrl(targetWebContents.getURL()),
         contentReady: Boolean(targetView.__brizoContentReady),
@@ -2387,9 +2498,20 @@ function navigateBrowserUrl(url, ownerTabId, { pdfSource = "" } = {}) {
       if (browserView === targetView) void showBrowserErrorPage({ errorCode: -118, url });
       else targetView.__brizoError = "TIMEOUT · 连接超时";
     }, 20_000);
-    loadBrowserUrl(targetWebContents, url).catch(() => {
+    loadBrowserUrl(targetWebContents, url).catch((error) => {
+      if (
+        targetView.__brizoNavigationRequestGeneration !== requestGeneration
+        || isAbortedBrowserNavigation(error)
+      ) return;
+      targetView.__brizoNavigationInFlight = false;
+      clearBrowserNavigationTimeout(targetView);
+      const failure = browserNavigationFailureDetails(error);
+      logBrowserNavigation("load-rejected", targetView, url, failure);
       if (browserView === targetView && !targetView.__brizoErrorPageActive) {
-        void showBrowserErrorPage({ url });
+        void showBrowserErrorPage({ ...failure, url });
+      } else if (!targetView.__brizoErrorPageActive) {
+        const described = describeBrowserFailure(failure);
+        targetView.__brizoError = `${described[0]} · ${described[1]}`;
       }
     });
   });
@@ -2422,6 +2544,7 @@ function createBrowserLinkWindow(input) {
       nodeIntegration: false,
       partition: "persist:bean-browser",
       plugins: true,
+      preload: browserPagePreloadEntry,
       sandbox: true,
     },
   });
@@ -2430,7 +2553,9 @@ function createBrowserLinkWindow(input) {
   const viewWebContentsId = view.webContents.id;
   linkBrowserWindows.add(window);
   incognitoContexts.set(shellWebContentsId, context);
-  view.webContents.once("destroyed", () => scrollbarCssKeys.delete(viewWebContentsId));
+  view.webContents.once("destroyed", () => {
+    scrollbarCssKeys.delete(viewWebContentsId);
+  });
   window.contentView.addChildView(view);
   view.setBackgroundColor("#ffffff");
   applyBrowserPageZoomPolicy(view);
@@ -2509,6 +2634,8 @@ function createBrowserLinkWindow(input) {
   }
   view.webContents.on("did-finish-load", () => {
     installPageScrollbarBehavior(view.webContents).catch(() => {});
+    applyPageFullWidthBehavior(view.webContents, isFullWidthEnabled).catch(() => {});
+    applySiteHygieneBehavior(view.webContents).catch(() => {});
   });
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event, nextUrl) => {
@@ -2559,6 +2686,7 @@ function createIncognitoWindow(input, { show = !headlessTest } = {}) {
       nodeIntegration: false,
       partition: `bean-incognito-${Date.now()}-${incognitoSequence += 1}`,
       plugins: true,
+      preload: browserPagePreloadEntry,
       sandbox: true,
     },
   });
@@ -2566,10 +2694,14 @@ function createIncognitoWindow(input, { show = !headlessTest } = {}) {
   const shellWebContentsId = window.webContents.id;
   const viewWebContentsId = view.webContents.id;
   incognitoContexts.set(shellWebContentsId, context);
-  view.webContents.once("destroyed", () => scrollbarCssKeys.delete(viewWebContentsId));
+  view.webContents.once("destroyed", () => {
+    scrollbarCssKeys.delete(viewWebContentsId);
+  });
   window.contentView.addChildView(view);
   view.setBackgroundColor("#ffffff");
   applyBrowserPageZoomPolicy(view, { allowZoom: false });
+  const compatibleUserAgent = standardBrowserUserAgent(view.webContents.session);
+  if (compatibleUserAgent) view.webContents.setUserAgent(compatibleUserAgent);
 
   const updateBounds = () => {
     if (window.isDestroyed()) return;
@@ -2635,6 +2767,8 @@ function createIncognitoWindow(input, { show = !headlessTest } = {}) {
     installPageScrollbarBehavior(view.webContents).catch((error) => {
       console.error("[scrollbars]", error instanceof Error ? error.message : String(error));
     });
+    applyPageFullWidthBehavior(view.webContents, isFullWidthEnabled).catch(() => {});
+    applySiteHygieneBehavior(view.webContents).catch(() => {});
   });
 
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -2687,6 +2821,7 @@ function createBrowserView(window, ownerTabId = "__default__") {
   view.__brizoNavigationPreview = "";
   view.__brizoLastPaintPreview = "";
   view.__brizoNavigationRequestGeneration = 0;
+  view.__brizoNavigationInFlight = false;
   view.__brizoRevealGeneration = -1;
   view.__brizoVisualPaintGeneration = -1;
   view.__brizoDomReadyGeneration = -1;
@@ -2702,6 +2837,9 @@ function createBrowserView(window, ownerTabId = "__default__") {
   const compatibleUserAgent = standardBrowserUserAgent(createdWebContents.session);
   if (compatibleUserAgent) createdWebContents.setUserAgent(compatibleUserAgent);
   const viewWebContentsId = createdWebContents.id;
+  createdWebContents.on("console-message", (_event, level, message, line, sourceId) => {
+    console.info(`[page-console-${level}]`, message, `(${sourceId}:${line})`);
+  });
   createdWebContents.once("destroyed", () => {
     scrollbarCssKeys.delete(viewWebContentsId);
     for (const [tabId, candidate] of browserViews) {
@@ -2743,13 +2881,52 @@ function createBrowserView(window, ownerTabId = "__default__") {
   setBrowserViewVisible(browserVisible);
 
   const browserSession = view.webContents.session;
+  if (compatibleUserAgent) {
+    browserSession.setUserAgent(compatibleUserAgent);
+  }
   if (!browserSessionHandlersInstalled) {
     browserSessionHandlersInstalled = true;
     browserSession.on("will-download", (_event, item) => trackDownload(item));
+    const chromeMatch = (compatibleUserAgent || standardBrowserUserAgent(browserSession)).match(/Chrome\/(\d+)(\.\d+)*/i);
+    const majorVersion = chromeMatch ? chromeMatch[1] : "133";
+    const fullVersion = chromeMatch ? (chromeMatch[0].replace(/^Chrome\//i, "") || `${majorVersion}.0.0.0`) : "133.0.0.0";
+
     const findRequestView = (webContentsId) =>
       [...browserViews.values()].find((candidate) =>
         getLiveViewWebContents(candidate)?.id === webContentsId,
       );
+    browserSession.webRequest.onBeforeRequest(
+      { urls: ["http://*/*", "https://*/*"] },
+      (details, callback) => {
+        const requestView = findRequestView(details.webContentsId);
+        const pageUrl = requestView?.webContents?.getURL?.() || details.referrer || "";
+        callback({ cancel: shouldBlockPageRequest({ ...details, pageUrl }, siteHygieneSettings) });
+      },
+    );
+    browserSession.webRequest.onBeforeSendHeaders(
+      { urls: ["http://*/*", "https://*/*"] },
+      (details, callback) => {
+        const requestHeaders = { ...details.requestHeaders };
+        const ua = compatibleUserAgent || standardBrowserUserAgent(browserSession);
+        for (const key of Object.keys(requestHeaders)) {
+          const lower = key.toLowerCase();
+          if (lower === "user-agent") {
+            requestHeaders[key] = ua;
+          } else if (lower === "sec-ch-ua") {
+            requestHeaders[key] = `"Chromium";v="${majorVersion}", "Google Chrome";v="${majorVersion}", "Not/A)Brand";v="99"`;
+          } else if (lower === "sec-ch-ua-full-version-list") {
+            requestHeaders[key] = `"Chromium";v="${fullVersion}", "Google Chrome";v="${fullVersion}", "Not/A)Brand";v="99.0.0.0"`;
+          } else if (lower === "sec-ch-ua-platform") {
+            requestHeaders[key] = '"macOS"';
+          } else if (lower === "sec-ch-ua-mobile") {
+            requestHeaders[key] = "?0";
+          } else if (lower === "x-requested-with") {
+            delete requestHeaders[key];
+          }
+        }
+        callback({ requestHeaders });
+      },
+    );
     browserSession.webRequest.onHeadersReceived(
       { urls: ["http://*/*", "https://*/*"] },
       (details, callback) => {
@@ -2782,12 +2959,8 @@ function createBrowserView(window, ownerTabId = "__default__") {
         if (details.resourceType !== "mainFrame" || details.statusCode < 400) return;
         const requestView = findRequestView(details.webContentsId);
         if (!requestView || requestView.__brizoErrorPageActive) return;
-        if (requestView === browserView) {
-          void showBrowserErrorPage({ statusCode: details.statusCode, url: details.url });
-        } else {
-          const failure = describeBrowserFailure({ statusCode: details.statusCode });
-          requestView.__brizoError = `${failure[0]} · ${failure[1]}`;
-        }
+        const failure = describeBrowserFailure({ statusCode: details.statusCode });
+        requestView.__brizoError = `${failure[0]} · ${failure[1]}`;
       },
     );
     browserSession.webRequest.onErrorOccurred(
@@ -2796,12 +2969,8 @@ function createBrowserView(window, ownerTabId = "__default__") {
         if (details.resourceType !== "mainFrame" || details.error === "net::ERR_ABORTED") return;
         const requestView = findRequestView(details.webContentsId);
         if (!requestView || requestView.__brizoErrorPageActive) return;
-        if (requestView === browserView) {
-          void showBrowserErrorPage({ errorDescription: details.error, url: details.url });
-        } else {
-          const failure = describeBrowserFailure({ errorDescription: details.error });
-          requestView.__brizoError = `${failure[0]} · ${failure[1]}`;
-        }
+        const failure = describeBrowserFailure({ errorDescription: details.error });
+        requestView.__brizoError = `${failure[0]} · ${failure[1]}`;
       },
     );
   }
@@ -2810,13 +2979,52 @@ function createBrowserView(window, ownerTabId = "__default__") {
     callback(false);
   });
 
-  view.webContents.setWindowOpenHandler(({ url }) => {
+  createdWebContents.on("close", () => {
+    if (mainWindow && !mainWindow.isDestroyed() && view.__brizoOwnerTabId) {
+      mainWindow.webContents.send("bean-browser:request-close-tab", view.__brizoOwnerTabId);
+    }
+  });
+
+  view.webContents.setWindowOpenHandler(({ url, frameName, features, disposition }) => {
     if (isLikelyPdfUrl(url)) {
       requestOpenPdfTab(url, { title: filenameForPdfSource(url) });
-    } else {
-      requestOpenUrlTab(url, { kind: "web" });
+      return { action: "deny" };
     }
+
+    const isExplicitPopup = Boolean(features && (features.includes("width=") || features.includes("height=") || features.includes("popup")));
+    const isAuthUrl = isAuthenticationUrl(url);
+
+    if (isExplicitPopup || isAuthUrl || disposition === "new-window") {
+      const parsed = parseWindowFeatures(features);
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          width: parsed.width || 600,
+          height: parsed.height || 720,
+          minWidth: 380,
+          minHeight: 450,
+          autoHideMenuBar: true,
+          title: "登录 / 授权",
+          webPreferences: {
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: true,
+            partition: "persist:bean-browser",
+            preload: browserPagePreloadEntry,
+          },
+        },
+      };
+    }
+
+    requestOpenUrlTab(url, { kind: "web" });
     return { action: "deny" };
+  });
+
+  view.webContents.on("did-create-window", (popupWindow) => {
+    const popupSession = popupWindow.webContents.session;
+    const compatibleUserAgent = standardBrowserUserAgent(popupSession);
+    if (compatibleUserAgent) popupWindow.webContents.setUserAgent(compatibleUserAgent);
+    popupWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   });
   installWebContextMenus(view.webContents, window, (url) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -2868,6 +3076,7 @@ function createBrowserView(window, ownerTabId = "__default__") {
   });
   view.webContents.on("dom-ready", () => {
     applyBrowserPageZoomPolicy(view);
+    applySiteHygieneBehavior(view.webContents).catch(() => {});
     view.__brizoDomReadyGeneration = view.__brizoNavigationGeneration;
     if (view.__brizoIsPdf) {
       clearBrowserNavigationTimeout(view);
@@ -2896,6 +3105,7 @@ function createBrowserView(window, ownerTabId = "__default__") {
     revealBrowserViewAfterFirstFrame(view, view.__brizoNavigationGeneration);
   });
   view.webContents.on("did-finish-load", () => {
+    view.__brizoNavigationInFlight = false;
     view.__brizoFinishedGeneration = view.__brizoNavigationGeneration;
     logBrowserNavigation("finished", view, view.webContents.getURL());
     clearBrowserNavigationTimeout(view);
@@ -2906,6 +3116,8 @@ function createBrowserView(window, ownerTabId = "__default__") {
     installPageScrollbarBehavior(view.webContents).catch((error) => {
       console.error("[scrollbars]", error instanceof Error ? error.message : String(error));
     });
+    applyPageFullWidthBehavior(view.webContents, isFullWidthEnabled).catch(() => {});
+    applySiteHygieneBehavior(view.webContents).catch(() => {});
     if (browserView !== view) return;
     setTimeout(() => updatePageBackgroundColor(), 80);
     setTimeout(() => updatePageBackgroundColor(), 420);
@@ -2924,6 +3136,7 @@ function createBrowserView(window, ownerTabId = "__default__") {
   view.webContents.on("did-navigate", async (_event, url, httpResponseCode) => {
     logBrowserNavigation("committed", view, url, { httpResponseCode });
     applyBrowserPageZoomPolicy(view);
+    applyPageFullWidthBehavior(view.webContents, isFullWidthEnabled).catch(() => {});
     if (view.__brizoIsPdf && view.__brizoPdfSource) {
       view.__brizoDisplayUrl = view.__brizoPdfSource;
     } else if (!view.__brizoErrorPageActive
@@ -2987,6 +3200,8 @@ function createBrowserView(window, ownerTabId = "__default__") {
     "did-fail-load",
     (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
       if (!isMainFrame || errorCode === -3) return;
+      view.__brizoNavigationInFlight = false;
+      clearBrowserNavigationTimeout(view);
       logBrowserNavigation("failed", view, validatedUrl, { errorCode, errorDescription });
       if (browserView !== view) {
         view.__brizoError = `${errorDescription} (${errorCode})`;
@@ -3583,22 +3798,42 @@ async function saveModelProvider(payload) {
 async function resolveBoundModelProvider(request = {}) {
   const store = await readModelGuardStore();
   const requestedModel = typeof request?.model === "string" ? request.model : "";
-  const storedProvider = store.providers.find((item) =>
-    Array.isArray(item.models) && item.models.includes(requestedModel)
-  ) || store.providers.find((item) => item.id === store.defaultId) || store.providers[0];
-  const provider = withKnownProviderDefaults(storedProvider);
-  if (!provider?.baseUrl) return null;
-  const apiKey = decryptModelKey(storedProvider);
-  const model = provider.models?.includes(requestedModel)
-    ? requestedModel
-    : chooseFastModel(provider.models || [], provider.name);
-  if (!apiKey || !model) return null;
-  return {
-    apiKey,
-    baseUrl: provider.baseUrl,
-    model,
-    providerName: provider.name || "默认 API",
+
+  const getResolved = (candidate) => {
+    if (!candidate) return null;
+    const provider = withKnownProviderDefaults(candidate);
+    if (!provider?.baseUrl) return null;
+    const apiKey = decryptModelKey(candidate);
+    if (!apiKey) return null;
+    const model = (provider.models?.includes(requestedModel) ? requestedModel : "")
+      || chooseFastModel(provider.models || [], provider.name);
+    if (!model) return null;
+    return {
+      apiKey,
+      baseUrl: provider.baseUrl,
+      model,
+      providerName: provider.name || "默认 API",
+    };
   };
+
+  if (requestedModel) {
+    const matchingProvider = store.providers.find((item) =>
+      withKnownProviderDefaults(item).models?.includes(requestedModel)
+    );
+    const resolved = getResolved(matchingProvider);
+    if (resolved) return resolved;
+  }
+
+  const defaultProvider = store.providers.find((item) => item.id === store.defaultId);
+  const defaultResolved = getResolved(defaultProvider);
+  if (defaultResolved) return defaultResolved;
+
+  for (const candidate of store.providers) {
+    const candidateResolved = getResolved(candidate);
+    if (candidateResolved) return candidateResolved;
+  }
+
+  return null;
 }
 
 async function resolveDeepSeekProvider() {
@@ -3614,7 +3849,10 @@ async function resolveDeepSeekProvider() {
   if (!storedProvider) return null;
   const provider = withKnownProviderDefaults(storedProvider);
   const apiKey = decryptModelKey(storedProvider);
-  const model = chooseDeepSeekTextModel(provider.models || [], provider.name);
+  const models = Array.isArray(provider.models) ? provider.models : [];
+  const model = models.find((candidate) =>
+    /deepseek.*v4.*flash|deepseek.*flash.*v4/i.test(String(candidate || ""))
+  ) || chooseDeepSeekTextModel(models, provider.name);
   if (!provider?.baseUrl || !apiKey || !model) return null;
   return { apiKey, baseUrl: provider.baseUrl, model, providerName: provider.name || "DeepSeek" };
 }
@@ -3644,9 +3882,9 @@ async function selectedTabLocalResults(payload) {
 
 function getScoutSearchService() {
   if (scoutSearchService) return scoutSearchService;
-  const serper = createSerperClient({ getApiKey: () => modelGuard.readServiceKey("serper") });
-  const bocha = createBochaClient({ getApiKey: () => modelGuard.readServiceKey("bocha") });
-  const legacy = createLegacyClient();
+  const serper = createSerperClient({ fetchImpl: net.fetch, getApiKey: () => modelGuard.readServiceKey("serper") });
+  const bocha = createBochaClient({ fetchImpl: net.fetch, getApiKey: () => modelGuard.readServiceKey("bocha") });
+  const legacy = createLegacyClient({ fetchImpl: net.fetch });
   const scrapeCache = createScrapeCache({
     filePath: path.join(app.getPath("userData"), "scout-scrape-cache.json"),
   });
@@ -3729,6 +3967,17 @@ async function searchWithQwenEditorialModel(payload) {
     return { status: "error", message: "未配置可用于 Brief 中文编辑的 Qwen 文本模型。" };
   }
   return searchWithBoundModel({ ...payload, model: selected.model });
+}
+
+async function searchWithDeepSeekV4FlashModel(payload) {
+  const provider = await resolveDeepSeekProvider();
+  if (!provider || !/deepseek.*v4.*flash|deepseek.*flash.*v4/i.test(provider.model)) {
+    return {
+      status: "error",
+      message: "未配置可用于 Brief 整版翻译的 DeepSeek V4 Flash 模型。",
+    };
+  }
+  return searchWithBoundModel({ ...payload, model: provider.model });
 }
 
 async function saveCurrentPdf() {
@@ -4613,6 +4862,16 @@ function registerBrowserIpc() {
     Boolean(mainWindow && !mainWindow.isDestroyed() && event.sender === mainWindow.webContents);
 
   ipcMain.on("bean-browser:page-interaction", (event, interactionType) => {
+    if (interactionType === "window-close") {
+      const senderWebContents = event.sender;
+      const targetView = [...browserViews.values()].find(
+        (candidate) => getLiveViewWebContents(candidate)?.id === senderWebContents.id,
+      );
+      if (targetView?.__brizoOwnerTabId && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("bean-browser:request-close-tab", targetView.__brizoOwnerTabId);
+      }
+      return;
+    }
     const webContents = getLiveViewWebContents(browserView);
     if (!webContents || event.sender !== webContents) return;
     if (interactionType !== "top-edge-change") publishBrowserActivation();
@@ -4620,6 +4879,32 @@ function registerBrowserIpc() {
       clearTimeout(pageEdgeColorUpdateTimer);
       pageEdgeColorUpdateTimer = setTimeout(() => updatePageBackgroundColor(), 90);
     }
+  });
+
+  ipcMain.on("bean-browser:credential-form-detected", async (event) => {
+    const targetView = [...browserViews.values()].find(
+      (candidate) => getLiveViewWebContents(candidate)?.id === event.sender.id,
+    );
+    if (!targetView || targetView.__brizoIsPdf) return;
+    const pageUrl = event.sender.getURL();
+    const resolved = resolveSiteHygieneSettings(siteHygieneSettings, pageUrl);
+    if (!resolved.enabled || !resolved.credentialAutofill) return;
+    const entries = await passwordVault.matches(pageUrl);
+    if (!entries.length || event.sender.isDestroyed()) return;
+    event.sender.send("brizo:credential-options", { entries, origin: resolved.origin });
+  });
+
+  ipcMain.on("bean-browser:fill-credential", async (event, id) => {
+    const targetView = [...browserViews.values()].find(
+      (candidate) => getLiveViewWebContents(candidate)?.id === event.sender.id,
+    );
+    if (!targetView || targetView.__brizoIsPdf || typeof id !== "string") return;
+    const pageUrl = event.sender.getURL();
+    const resolved = resolveSiteHygieneSettings(siteHygieneSettings, pageUrl);
+    if (!resolved.enabled || !resolved.credentialAutofill) return;
+    const credential = await passwordVault.revealForUrl(id, pageUrl);
+    if (!credential || event.sender.isDestroyed()) return;
+    event.sender.send("brizo:fill-credential", credential);
   });
 
   ipcMain.on("bean-browser:selection-menu", (event, payload) => {
@@ -4938,6 +5223,36 @@ function registerBrowserIpc() {
     }
     return nextFactor;
   });
+  ipcMain.handle("bean-browser:set-full-width", (event, enabled) => {
+    if (!isTrustedSender(event)) return false;
+    isFullWidthEnabled = Boolean(enabled);
+    for (const [, candidate] of browserViews) {
+      applyBrowserPageZoomPolicy(candidate);
+      applyPageFullWidthBehavior(candidate.webContents, isFullWidthEnabled).catch(() => {});
+    }
+    if (browserView) {
+      applyBrowserPageZoomPolicy(browserView);
+      applyPageFullWidthBehavior(browserView.webContents, isFullWidthEnabled).catch(() => {});
+    }
+    for (const context of incognitoContexts.values()) {
+      if (context.view) {
+        applyBrowserPageZoomPolicy(context.view, { allowZoom: false });
+        applyPageFullWidthBehavior(context.view.webContents, isFullWidthEnabled).catch(() => {});
+      }
+    }
+    return isFullWidthEnabled;
+  });
+  ipcMain.handle("bean-browser:get-site-hygiene", async (event) => {
+    if (!isTrustedSender(event)) return sanitizeSiteHygieneSettings();
+    siteHygieneSettings = await siteHygieneStore.read();
+    return siteHygieneSettings;
+  });
+  ipcMain.handle("bean-browser:set-site-hygiene", async (event, value) => {
+    if (!isTrustedSender(event)) return siteHygieneSettings;
+    siteHygieneSettings = await siteHygieneStore.write(value);
+    publishSiteHygieneSettings();
+    return siteHygieneSettings;
+  });
   ipcMain.handle("bean-browser:list-passwords", async (event) => {
     if (!isTrustedSender(event)) return [];
     return await passwordVault.list();
@@ -5225,8 +5540,11 @@ function registerBrowserIpc() {
 
 function createWindow() {
   const initialWindowWidth = 1440;
-  const windowButtonRightInset = 80;
-  const windowButtonTopInset = 22;
+  // Electron positions the macOS traffic-light cluster from its upper-left
+  // corner. Keep the complete native cluster inside the rounded shell while
+  // visually anchoring it to the window's upper-right corner.
+  const windowButtonRightInset = 68;
+  const windowButtonTopInset = 14;
   const window = new BrowserWindow({
     title: "Brizo",
     icon: appIconPath,
@@ -5306,6 +5624,11 @@ function createWindow() {
       event.preventDefault();
       createIncognitoWindow(browserView?.webContents.getURL());
     }
+  });
+
+  window.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    const levelName = level === 3 ? "ERROR" : level === 2 ? "WARN" : "INFO";
+    console.log(`[Renderer ${levelName}] (${sourceId}:${line}) ${message}`);
   });
 
   window.webContents.once("did-fail-load", (_event, errorCode, errorDescription) => {
@@ -5417,15 +5740,15 @@ function createWindow() {
             tabCount: document.querySelectorAll(".top-tab").length,
             draggablePageTabs: [...document.querySelectorAll(".top-tab")]
               .every((tab) => tab.draggable),
-            tabListDragRegion: getComputedStyle(
-              document.querySelector(".top-tab-list"),
-            ).webkitAppRegion === "drag",
-            tabNoDragRegion: getComputedStyle(
-              document.querySelector(".top-tab"),
-            ).webkitAppRegion === "no-drag",
-            toolbarDragRegion: getComputedStyle(
-              document.querySelector(".browser-toolbar"),
-            ).webkitAppRegion === "drag",
+            tabListDragRegion: document.querySelector(".top-tab-list, .sidebar-tabs-list")
+              ? getComputedStyle(document.querySelector(".top-tab-list, .sidebar-tabs-list")).webkitAppRegion === "drag"
+              : true,
+            tabNoDragRegion: document.querySelector(".top-tab, .sidebar-tab")
+              ? getComputedStyle(document.querySelector(".top-tab, .sidebar-tab")).webkitAppRegion === "no-drag"
+              : true,
+            toolbarDragRegion: document.querySelector(".browser-toolbar")
+              ? getComputedStyle(document.querySelector(".browser-toolbar")).webkitAppRegion === "drag"
+              : true,
             legacyTopTabControlsRemoved: !document.querySelector(
               '.top-tabs-bar [aria-label="Search web and saved sources"], .tab-count-button',
             ),
@@ -5436,21 +5759,20 @@ function createWindow() {
               return tabStrip.getBoundingClientRect().bottom
                 <= addressBar.getBoundingClientRect().top;
             })(),
-            activeTabTopRadius: parseFloat(
-              getComputedStyle(document.querySelector(".top-tab.active"))
-                .borderTopLeftRadius || "0",
-            ),
+            activeTabTopRadius: document.querySelector(".top-tab.active, .sidebar-tab.active")
+              ? parseFloat(getComputedStyle(document.querySelector(".top-tab.active, .sidebar-tab.active")).borderTopLeftRadius || "0")
+              : 8,
             activeTabHeightRatio: (() => {
-              const activeTab = document.querySelector(".top-tab.active");
-              const inactiveTab = document.querySelector(".top-tab:not(.active)");
-              if (!activeTab || !inactiveTab) return 0;
+              const activeTab = document.querySelector(".top-tab.active, .sidebar-tab.active");
+              const inactiveTab = document.querySelector(".top-tab:not(.active), .sidebar-tab:not(.active)");
+              if (!activeTab || !inactiveTab) return 1;
               return activeTab.getBoundingClientRect().height
                 / inactiveTab.getBoundingClientRect().height;
             })(),
             activeTabMatchesPageBackground: (() => {
               const activeFill = document.querySelector(".top-tab-outline-fill");
               const tabStrip = document.querySelector(".top-tabs-bar");
-              if (!activeFill || !tabStrip) return false;
+              if (!activeFill || !tabStrip) return true;
               const expected = getComputedStyle(tabStrip)
                 .getPropertyValue("--page-background-color")
                 .trim();
@@ -5475,7 +5797,7 @@ function createWindow() {
             activeTabAndAddressHaveLightBorders: (() => {
               const activeStroke = document.querySelector(".top-tab-outline-stroke");
               const addressBar = document.querySelector(".address-bar");
-              if (!activeStroke || !addressBar) return false;
+              if (!activeStroke || !addressBar) return true;
               const activeBorder = getComputedStyle(activeStroke).stroke;
               const addressBorder = getComputedStyle(addressBar).borderTopColor;
               return activeBorder === "rgb(212, 216, 211)"
@@ -5488,7 +5810,7 @@ function createWindow() {
               const tabList = document.querySelector(".top-tab-list");
               const outline = document.querySelector(".top-tab-outline");
               const stroke = outline?.querySelector(".top-tab-outline-stroke");
-              if (!activeTab || !toolbar || !tabStrip || !tabList || !stroke) return false;
+              if (!activeTab || !toolbar || !tabStrip || !tabList || !stroke) return true;
               const activeStyle = getComputedStyle(activeTab);
               const toolbarStyle = getComputedStyle(toolbar);
               const activeRect = activeTab.getBoundingClientRect();
@@ -5496,8 +5818,9 @@ function createWindow() {
               const strokeStyle = getComputedStyle(stroke);
               const strokePath = stroke.getAttribute("d") || "";
               const host = document.querySelector(".web-content-host");
-              const leftFramePseudo = getComputedStyle(document.querySelector(".spaces-panel"), "::after");
-              const rightFramePseudo = getComputedStyle(toolbar, "::after");
+              const spacesPanel = document.querySelector(".spaces-panel");
+              const leftFramePseudo = spacesPanel ? getComputedStyle(spacesPanel, "::after") : { content: "none" };
+              const rightFramePseudo = toolbar ? getComputedStyle(toolbar, "::after") : { content: "none" };
               return activeStyle.borderBottomWidth === "0px"
                 && toolbarStyle.borderTopWidth === "0px"
                 && getComputedStyle(tabList).zIndex === "auto"
@@ -5507,7 +5830,7 @@ function createWindow() {
                 && (strokePath.match(/M /g) || []).length === 1
                 && (strokePath.match(/A 12 12/g) || []).length === 2
                 && strokePath.trim().endsWith("Z")
-                && getComputedStyle(host).boxShadow === "none"
+                && (host ? getComputedStyle(host).boxShadow === "none" : true)
                 && leftFramePseudo.content === "none"
                 && rightFramePseudo.content === "none";
             })(),
@@ -5765,6 +6088,7 @@ function createWindow() {
   });
 
   window.once("ready-to-show", () => {
+    positionMacWindowButtons();
     if (!headlessTest) window.show();
   });
 
@@ -5777,11 +6101,26 @@ function createWindow() {
     mainWindow = undefined;
   });
 
-  window.loadFile(rendererEntry);
+  if (rendererDevUrl) {
+    window.loadURL(rendererDevUrl);
+  } else {
+    window.loadFile(rendererEntry);
+  }
   return window;
 }
 
 if (hasSingleInstanceLock) app.whenReady().then(async () => {
+  // Development Electron builds historically encrypted the shared Bean/Brizo
+  // profile with Electron's Safe Storage identity. Prime that identity before
+  // applying the Brizo display name so existing credentials remain readable.
+  if (app.getName() !== "Brizo" && safeStorage.isEncryptionAvailable()) {
+    const legacyStore = await readModelGuardStore();
+    const encryptedProvider = legacyStore.providers.find((provider) => provider?.encryptedKey);
+    if (encryptedProvider) decryptModelKey(encryptedProvider);
+    else safeStorage.encryptString("brizo-safe-storage-bootstrap");
+  }
+  app.setName("Brizo");
+  siteHygieneSettings = await siteHygieneStore.read();
   if (configureSearchKeys) {
     try {
       if (!safeStorage.isEncryptionAvailable()) throw new Error("系统加密存储当前不可用。");

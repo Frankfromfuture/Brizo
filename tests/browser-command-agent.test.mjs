@@ -27,7 +27,18 @@ function mockWebContents(snapshot = { elements: [], pageText: "", title: "Test",
   const inputs = [];
   return {
     inputs,
-    executeJavaScript: async () => snapshot,
+    executeJavaScript: async (script = "") => {
+      if (script.includes("const loginPattern")) return null;
+      if (script.includes("const snapshotId")) return snapshot;
+      if (script.includes("return { filled: true, isSearch: false")) {
+        return { filled: true, isSearch: false, submit: null };
+      }
+      if (script.includes("getBoundingClientRect") && script.includes("data-brizo-agent-ref")) {
+        return { x: 20, y: 20 };
+      }
+      return snapshot;
+    },
+    getURL: () => snapshot.url,
     isDestroyed: () => false,
     isLoading: () => false,
     sendInputEvent: (event) => inputs.push(event),

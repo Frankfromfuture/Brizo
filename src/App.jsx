@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -60,6 +62,7 @@ import {
   Selection,
   ShareNetwork,
   ShieldCheck,
+  SidebarSimple,
   Sparkle,
   Square,
   SquaresFour,
@@ -79,7 +82,9 @@ import { MonitorIcon } from "./components/remocn/icon-monitor";
 import { PlusIcon } from "./components/remocn/icon-plus";
 import { RefreshCwIcon } from "./components/remocn/icon-refresh-cw";
 import { SparklesIcon } from "./components/remocn/icon-sparkles";
+import { CompassIcon } from "./components/remocn/icon-compass";
 import { SoftBlurIn } from "./components/remocn/soft-blur-in";
+import { RemocnSelect } from "./components/remocn/RemocnSelect";
 import { NewTabParticleBackground } from "./components/NewTabParticleBackground";
 import brizoLogoUrl from "../logo.svg";
 import brizoWordLogoUrl from "../logo word.svg";
@@ -103,8 +108,9 @@ import {
   matchesRequestedLanguage,
   queryFromSearchShareUrl,
 } from "../shared/search-text.mjs";
-import { BriefPage, createBriefPreviewEdition } from "./BriefPage.jsx";
 import { BookmarkSemanticIcon } from "./BookmarkSemanticIcon.jsx";
+
+const LazyBriefPage = lazy(() => import("./BriefPage.jsx").then((module) => ({ default: module.BriefPage })));
 
 const NEW_TAB_CHROME_COLOR = "rgb(252, 250, 250)";
 const BOOKMARK_FOLDER_HOVER_DELAY_MS = 45;
@@ -142,6 +148,24 @@ function getBrowserErrorCopy(error) {
       : ["无法读取", "此网页当前无法读取。", "This page cannot be read right now."]);
   return { code, reason: copy[0], chinese: copy[1], english: copy[2] };
 }
+
+const LANGUAGE_OPTIONS = [
+  { value: "zh-CN", label: "简体中文" },
+  { value: "en", label: "English" },
+  { value: "system", label: "跟随系统" },
+];
+
+const COOKIE_CHOICE_OPTIONS = [
+  { value: "essential", label: "仅必要（推荐）" },
+  { value: "ask", label: "每次询问" },
+  { value: "allow-all", label: "全部允许" },
+];
+
+const PAGE_CLEANUP_OPTIONS = [
+  { value: "balanced", label: "平衡（推荐）" },
+  { value: "strict", label: "严格" },
+  { value: "off", label: "关闭" },
+];
 
 const articles = [
   {
@@ -219,6 +243,9 @@ const starterBookmarks = articles.map((article, index) => ({
 }));
 
 function formatAddressForDisplay(address) {
+  if (!address || address.startsWith("brizo://")) {
+    return "";
+  }
   try {
     const url = new URL(address);
     return url.host;
@@ -233,6 +260,99 @@ const COMMON_WEBSITES = [
   ["zhihu.com", "知乎"], ["weibo.com", "微博"], ["douban.com", "豆瓣"],
   ["taobao.com", "淘宝"], ["jd.com", "京东"], ["xiaohongshu.com", "小红书"],
 ].map(([domain, title]) => ({ title, url: `https://${domain}` }));
+
+const SITE_BRAND_NAMES = {
+  "google.com": "Google",
+  "google.com.hk": "Google",
+  "google.cn": "Google",
+  "baidu.com": "百度",
+  "bilibili.com": "哔哩哔哩",
+  "github.com": "GitHub",
+  "youtube.com": "YouTube",
+  "wikipedia.org": "维基百科",
+  "zhihu.com": "知乎",
+  "weibo.com": "微博",
+  "douban.com": "豆瓣",
+  "taobao.com": "淘宝",
+  "jd.com": "京东",
+  "tmall.com": "天猫",
+  "xiaohongshu.com": "小红书",
+  "twitter.com": "X (Twitter)",
+  "x.com": "X",
+  "openai.com": "OpenAI",
+  "chatgpt.com": "ChatGPT",
+  "claude.ai": "Claude",
+  "anthropic.com": "Anthropic",
+  "microsoft.com": "Microsoft",
+  "bing.com": "Bing",
+  "apple.com": "Apple",
+  "v2ex.com": "V2EX",
+  "juejin.cn": "稀土掘金",
+  "sspai.com": "少数派",
+  "reddit.com": "Reddit",
+  "notion.so": "Notion",
+  "figma.com": "Figma",
+  "medium.com": "Medium",
+  "stackoverflow.com": "Stack Overflow",
+  "qq.com": "腾讯",
+  "163.com": "网易",
+  "sina.com.cn": "新浪",
+  "sohu.com": "搜狐",
+  "ftchinese.com": "FT中文网",
+  "nytimes.com": "纽约时报",
+  "wsj.com": "华尔街日报",
+  "bloomberg.com": "Bloomberg",
+  "reuters.com": "Reuters",
+  "huggingface.co": "Hugging Face",
+  "deepseek.com": "DeepSeek",
+};
+
+function getPrimaryDomain(urlOrDomain) {
+  if (!urlOrDomain || typeof urlOrDomain !== "string") return "";
+  let host = "";
+  try {
+    if (urlOrDomain.startsWith("http://") || urlOrDomain.startsWith("https://") || urlOrDomain.startsWith("brizo://")) {
+      host = new URL(urlOrDomain).hostname;
+    } else {
+      host = urlOrDomain.split("/")[0].split(":")[0];
+    }
+  } catch {
+    host = urlOrDomain;
+  }
+  if (typeof host !== "string") return "";
+  host = host.toLowerCase().replace(/^www\./, "");
+  if (!host || host === "brizo") return "";
+
+  const parts = host.split(".");
+  if (parts.length <= 2) return host;
+  const multiPartTlds = ["com.cn", "com.hk", "co.uk", "co.jp", "edu.cn", "org.cn", "net.cn", "gov.cn", "org.uk", "ac.uk"];
+  const lastTwo = parts.slice(-2).join(".");
+  if (multiPartTlds.includes(lastTwo) && parts.length >= 3) {
+    return parts.slice(-3).join(".");
+  }
+  return parts.slice(-2).join(".");
+}
+
+function getSiteDisplayName(primaryDomain, fallbackTab) {
+  if (!primaryDomain || typeof primaryDomain !== "string") return fallbackTab?.shortTitle || fallbackTab?.title || "标签组";
+  if (SITE_BRAND_NAMES[primaryDomain]) return SITE_BRAND_NAMES[primaryDomain];
+
+  if (fallbackTab?.title && typeof fallbackTab.title === "string") {
+    const parts = fallbackTab.title.split(/\s*[-|_—·]\s*/);
+    if (parts.length > 1) {
+      const lastPart = parts[parts.length - 1].trim();
+      if (lastPart && lastPart.length <= 15 && !lastPart.includes("/")) {
+        return lastPart;
+      }
+    }
+  }
+
+  const mainPart = String(primaryDomain).split(".")[0];
+  if (mainPart) {
+    return mainPart.charAt(0).toUpperCase() + mainPart.slice(1);
+  }
+  return primaryDomain;
+}
 
 function addressSuggestionsFor(rawInput, bookmarks, tabs) {
   const input = rawInput.trim().toLocaleLowerCase();
@@ -457,9 +577,10 @@ function formatHistoryTime(timestamp) {
   }
 }
 
-function Logo() {
+function Logo({ collapsed = false }) {
   return (
-    <div className="brand" aria-label="Brizo home">
+    <div className={`brand${collapsed ? " is-collapsed" : ""}`} aria-label="Brizo home">
+      <img className="brizo-mark" src={logoPicUrl} alt="Brizo" />
       <img className="brizo-wordmark" src={brizoWordLogoUrl} alt="Brizo" />
     </div>
   );
@@ -720,6 +841,16 @@ const START_TAB = {
 };
 
 const INITIAL_TABS = [
+  {
+    domain: "brief",
+    id: "pinned-brief",
+    isPinned: true,
+    isBrief: true,
+    shortTitle: "Brief",
+    title: "Brizo Brief 简报",
+    url: "brizo://brief",
+    iconKey: "brief",
+  },
   {
     domain: "calendar.google.com",
     id: "pinned-calendar",
@@ -1191,6 +1322,11 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
     };
   }, [historyMenuOpen]);
 
+  const onSearchCompleteRef = useRef(onSearchComplete);
+  useEffect(() => {
+    onSearchCompleteRef.current = onSearchComplete;
+  }, [onSearchComplete]);
+
   useEffect(() => {
     if (!window.beanBrowser?.onSearchStream) return undefined;
     const unsubscribe = window.beanBrowser.onSearchStream((event) => {
@@ -1239,7 +1375,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
           answer: result.message,
           sources: result.sources,
         }].slice(-4));
-        onSearchComplete?.({ query: searchQueryRef.current, result });
+        onSearchCompleteRef.current?.({ query: searchQueryRef.current, result });
       } else if (event.type === "error") {
         setSearchResult((current) => ({
           ...current,
@@ -1253,10 +1389,9 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
     });
     return () => {
       unsubscribe?.();
-      if (activeSearchId.current) window.beanBrowser?.cancelSearch?.(activeSearchId.current);
       if (tokenFrame.current) window.cancelAnimationFrame(tokenFrame.current);
     };
-  }, [onSearchComplete]);
+  }, []);
 
   useEffect(() => {
     if (!window.beanBrowser?.onBrizoUseProgress) return undefined;
@@ -2002,7 +2137,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
 function BrandCustomIcon({ name }) {
   if (name === "calendar") {
     return (
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
         <rect x="2" y="3" width="20" height="18" rx="4.5" fill="#4285F4" />
         <rect x="2" y="3" width="20" height="6" fill="#1A73E8" />
         <text x="12" y="17.5" fill="#ffffff" fontSize="9.5" fontWeight="bold" textAnchor="middle" fontFamily="sans-serif">31</text>
@@ -2011,7 +2146,7 @@ function BrandCustomIcon({ name }) {
   }
   if (name === "gmail") {
     return (
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
         <path d="M4 6C2.9 6 2 6.9 2 8V18C2 19.1 2.9 20 4 20H6V11.5L12 16L18 11.5V20H20C21.1 20 22 19.1 22 18V8C22 6.9 21.1 6 20 6H18L12 10.5L6 6H4Z" fill="#EA4335" />
         <path d="M2 8V18C2 19.1 2.9 20 4 20H6V11.5L2 8.5V8Z" fill="#4285F4" />
         <path d="M22 8V18C22 19.1 21.1 20 20 20H18V11.5L22 8.5V8Z" fill="#34A853" />
@@ -2021,7 +2156,7 @@ function BrandCustomIcon({ name }) {
   }
   if (name === "slack") {
     return (
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
         <path d="M5.5 10.5C6.33 10.5 7 9.83 7 9V5.5C7 4.67 6.33 4 5.5 4S4 4.67 4 5.5V9C4 9.83 4.67 10.5 5.5 10.5Z" fill="#E01E5A"/>
         <path d="M4 12.5C4 13.33 4.67 14 5.5 14H9C9.83 14 10.5 13.33 10.5 12.5S9.83 11 9 11H5.5C4.67 11 4 11.67 4 12.5Z" fill="#E01E5A"/>
         <path d="M10.5 5.5C10.5 4.67 9.83 4 9 4H5.5C4.67 4 4 4.67 4 5.5S4.67 7 5.5 7H9C9.83 7 10.5 6.33 10.5 5.5Z" fill="#36C5F0"/>
@@ -2035,7 +2170,7 @@ function BrandCustomIcon({ name }) {
   }
   if (name === "bilibili") {
     return (
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
         <rect x="2" y="5" width="20" height="15" rx="5" fill="#00AEEC" />
         <circle cx="8" cy="11.5" r="1.5" fill="#ffffff" />
         <circle cx="16" cy="11.5" r="1.5" fill="#ffffff" />
@@ -2047,7 +2182,7 @@ function BrandCustomIcon({ name }) {
   }
   if (name === "edge") {
     return (
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
         <circle cx="12" cy="12" r="10" fill="#0078D7" />
         <path d="M12 4C7.58 4 4 7.58 4 12C4 16.42 7.58 20 12 20C15.5 20 18.44 17.76 19.46 14.62C18.66 15.48 17.2 16 15.5 16C12.5 16 10 13.5 10 10.5C10 8.5 11 6.8 12.6 5.8C12.4 5.8 12.2 4 12 4Z" fill="#50E6FF" />
         <circle cx="13" cy="11" r="5" fill="#ffffff" />
@@ -2056,7 +2191,7 @@ function BrandCustomIcon({ name }) {
   }
   if (name === "chat") {
     return (
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
         <circle cx="12" cy="12" r="10" fill="#C0C5C2" />
         <path d="M12 6C8.68 6 6 8.24 6 11C6 12.56 6.86 13.94 8.22 14.85L7.5 17.5L10.3 16.1C10.84 16.24 11.41 16.3 12 16.3C15.32 16.3 18 14.06 18 11.3C18 8.54 15.32 6 12 6Z" fill="#ffffff" />
       </svg>
@@ -2064,7 +2199,7 @@ function BrandCustomIcon({ name }) {
   }
   if (name === "brizo") {
     return (
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
         <rect x="2" y="2" width="20" height="20" rx="6" fill="#111111" />
         <path d="M7 12C7 9.24 9.24 7 12 7C14.76 7 17 9.24 17 12V16C17 16.55 16.55 17 16 17H8C7.45 17 7 16.55 7 16V12Z" fill="#ffffff" />
         <circle cx="12" cy="13" r="2.5" fill="#111111" />
@@ -2073,7 +2208,7 @@ function BrandCustomIcon({ name }) {
   }
   if (name === "gemini") {
     return (
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
         <path d="M12 2C12 7.52 7.52 12 2 12C7.52 12 12 16.48 12 22C12 16.48 16.48 12 22 12C16.48 12 12 7.52 12 2Z" fill="url(#gemini-grad-brand)" />
         <defs>
           <linearGradient id="gemini-grad-brand" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
@@ -2087,7 +2222,7 @@ function BrandCustomIcon({ name }) {
   }
   if (name === "taobao") {
     return (
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
         <rect width="24" height="24" rx="5" fill="#FF5000" />
         <text x="12" y="17" fill="#ffffff" fontSize="13" fontWeight="900" textAnchor="middle" fontFamily="sans-serif">淘</text>
       </svg>
@@ -2095,20 +2230,25 @@ function BrandCustomIcon({ name }) {
   }
   if (name === "youdao") {
     return (
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
         <text x="12" y="18" fill="#E02020" fontSize="18" fontWeight="900" fontStyle="italic" textAnchor="middle" fontFamily="sans-serif">y</text>
       </svg>
     );
   }
   if (name === "maps") {
     return (
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+      <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
         <path d="M12 2C8.13 2 5 5.13 5 9C5 14.25 12 22 12 22C12 22 19 14.25 19 9C19 5.13 15.87 2 12 2Z" fill="#34A853" />
         <path d="M12 2C8.13 2 5 5.13 5 9C5 10.3 5.35 11.5 5.96 12.55L12 5.5V2Z" fill="#4285F4" />
         <path d="M12 22C12 22 19 14.25 19 9C19 8.1 18.8 7.25 18.45 6.5L12 14V22Z" fill="#FBBC05" />
         <path d="M12 5.5L5.96 12.55C7.2 14.7 9.3 18.1 12 22V14L18.45 6.5C17.65 5.1 16.3 3.9 14.7 3.1L12 5.5Z" fill="#EA4335" />
         <circle cx="12" cy="9" r="3.5" fill="#ffffff" />
       </svg>
+    );
+  }
+  if (name === "brief" || name === "news" || name === "newspaper" || name === "compass") {
+    return (
+      <CompassIcon size={35} color="#2E3330" highlightColor="#a58c5e" strokeWidth={18} />
     );
   }
   return null;
@@ -2127,6 +2267,7 @@ function SiteIcon({ id = 1, iconKey = "", url = "", faviconUrl = "", isError = f
     else if (url.includes("taobao.com")) matchedKey = "taobao";
     else if (url.includes("youdao.com")) matchedKey = "youdao";
     else if (url.includes("maps.google.com")) matchedKey = "maps";
+    else if (url.includes("brief") || url.includes("news")) matchedKey = "brief";
   }
 
   if (matchedKey) {
@@ -2162,7 +2303,7 @@ function SiteIcon({ id = 1, iconKey = "", url = "", faviconUrl = "", isError = f
 }
 
 function TabContextMenu({ contextMenu, onClose, onTogglePin, onCloseTab, onCloseOtherTabs, onNewTab, onReload, onCopyUrl }) {
-  if (!contextMenu) return null;
+  if (!contextMenu || typeof document === "undefined") return null;
   const { x, y, tab } = contextMenu;
   return createPortal(
     <>
@@ -3541,7 +3682,23 @@ export function App() {
   const [tabs, setTabs] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("bean:open-tabs") || "null");
-      return Array.isArray(saved) && saved.length ? saved : INITIAL_TABS;
+      const savedPinned = JSON.parse(localStorage.getItem("bean:pinned-tabs") || "null");
+
+      let pinnedList = Array.isArray(savedPinned) && savedPinned.length
+        ? savedPinned
+        : (Array.isArray(saved) && saved.filter((t) => t.isPinned).length
+            ? saved.filter((t) => t.isPinned)
+            : INITIAL_TABS.filter((t) => t.isPinned));
+
+      if (!pinnedList.some((t) => t.id === "pinned-brief" || t.isBrief || t.url === "brizo://brief")) {
+        pinnedList = [INITIAL_TABS[0], ...pinnedList];
+      }
+
+      const unpinnedList = Array.isArray(saved) && saved.length
+        ? saved.filter((t) => !t.isPinned && t.id !== "pinned-brief")
+        : INITIAL_TABS.filter((t) => !t.isPinned && t.id !== "pinned-brief");
+
+      return [...pinnedList, ...unpinnedList];
     } catch {
       return INITIAL_TABS;
     }
@@ -3557,6 +3714,7 @@ export function App() {
   const [activeSurface, setActiveSurface] = useState("tab");
   const [tabContextMenu, setTabContextMenu] = useState(null);
   const [draggedTabId, setDraggedTabId] = useState("");
+  const [draggedGroupId, setDraggedGroupId] = useState("");
 
   const pinnedTabs = useMemo(() => tabs.filter((tab) => tab.isPinned), [tabs]);
   const unpinnedTabs = useMemo(() => tabs.filter((tab) => !tab.isPinned), [tabs]);
@@ -3564,6 +3722,8 @@ export function App() {
   useEffect(() => {
     try {
       localStorage.setItem("bean:open-tabs", JSON.stringify(tabs));
+      const pinned = tabs.filter((t) => t.isPinned);
+      localStorage.setItem("bean:pinned-tabs", JSON.stringify(pinned));
     } catch {
       // ignore
     }
@@ -3587,16 +3747,20 @@ export function App() {
   };
 
   const closeOtherTabs = (tabId) => {
+    const targetTab = tabs.find((t) => t.id === tabId);
     const closed = tabs
       .map((t, index) => ({ tab: { ...t }, index }))
       .filter((item) => item.tab.id !== tabId && !item.tab.isPinned);
     if (closed.length > 0) {
       setClosedTabs((prev) => [...prev, ...closed]);
     }
+    closed.forEach((item) => {
+      browserApi?.closeTabView?.(item.tab.id);
+    });
     setTabs((currentTabs) =>
       currentTabs.filter((t) => t.id === tabId || t.isPinned)
     );
-    setActiveTab(tabId);
+    if (targetTab) selectArticle(targetTab);
     setTabContextMenu(null);
   };
 
@@ -3634,17 +3798,26 @@ export function App() {
   const [closedTabs, setClosedTabs] = useState([]);
   const [sidebarHistoryOpen, setSidebarHistoryOpen] = useState(false);
   const [tabHistoryOpen, setTabHistoryOpen] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
   const [appPreferences, setAppPreferences] = useState(() => {
     try {
       return {
         autoUpdate: true,
+        autoFitZoom: false,
         downloadLocation: "",
         language: "zh-CN",
         ...JSON.parse(localStorage.getItem("bean:app-preferences") || "{}"),
       };
     } catch {
-      return { autoUpdate: true, downloadLocation: "", language: "zh-CN" };
+      return { autoUpdate: true, autoFitZoom: false, downloadLocation: "", language: "zh-CN" };
     }
+  });
+  const [siteHygienePreferences, setSiteHygienePreferences] = useState({
+    cleanupLevel: "balanced",
+    cookieConsent: "essential",
+    credentialAutofill: true,
+    enabled: true,
+    siteOverrides: {},
   });
   const [addressFocused, setAddressFocused] = useState(false);
   const [addressInputDirty, setAddressInputDirty] = useState(false);
@@ -3667,6 +3840,30 @@ export function App() {
   const [pdfExporting, setPdfExporting] = useState(false);
   const [toast, setToast] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarHovered, setSidebarHovered] = useState(false);
+  const sidebarHoverTimerRef = useRef(null);
+
+  const handleSidebarPointerEnter = useCallback(() => {
+    if (sidebarHoverTimerRef.current) {
+      clearTimeout(sidebarHoverTimerRef.current);
+      sidebarHoverTimerRef.current = null;
+    }
+    if (sidebarCollapsed) {
+      setSidebarHovered(true);
+    }
+  }, [sidebarCollapsed]);
+
+  const handleSidebarPointerLeave = useCallback(() => {
+    if (sidebarHoverTimerRef.current) {
+      clearTimeout(sidebarHoverTimerRef.current);
+    }
+    sidebarHoverTimerRef.current = setTimeout(() => {
+      setSidebarHovered(false);
+      sidebarHoverTimerRef.current = null;
+    }, 420);
+  }, []);
+
   const [sidebarFoldersActive, setSidebarFoldersActive] = useState(false);
   const [systemUsesDarkAppearance, setSystemUsesDarkAppearance] = useState(() => (
     window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false
@@ -3717,7 +3914,7 @@ export function App() {
   const [modelProviderSaving, setModelProviderSaving] = useState(false);
   const [modelProviderError, setModelProviderError] = useState("");
   const [modelGuardMenuOpen, setModelGuardMenuOpen] = useState(false);
-  const [briefEdition, setBriefEdition] = useState(() => desktopMode ? null : createBriefPreviewEdition());
+  const [briefEdition, setBriefEdition] = useState(null);
   const [briefLoading, setBriefLoading] = useState(false);
   const [briefRefreshing, setBriefRefreshing] = useState(false);
   const [briefPreferences, setBriefPreferences] = useState(() => {
@@ -3795,6 +3992,14 @@ export function App() {
     ownerTabId: "",
     pdfSourceUrl: "",
   });
+  const currentSiteOrigin = useMemo(() => {
+    try {
+      const url = new URL(navigationState.documentUrl || navigationState.url || "");
+      return ["http:", "https:"].includes(url.protocol) ? url.origin.toLowerCase() : "";
+    } catch {
+      return "";
+    }
+  }, [navigationState.documentUrl, navigationState.url]);
   const addressEditing = useRef(false);
   const addressInput = useRef(null);
   const addressValue = useRef(initialAddress);
@@ -3824,6 +4029,8 @@ export function App() {
   const addressLoadWasActive = useRef(false);
   const [addressLoadPhase, setAddressLoadPhase] = useState("idle");
   const [activeIndicatorY, setActiveIndicatorY] = useState(null);
+  const [activeIndicatorX, setActiveIndicatorX] = useState(10);
+  const [activeIndicatorWidth, setActiveIndicatorWidth] = useState(null);
   const [activeIndicatorHeight, setActiveIndicatorHeight] = useState(35);
   const tabRowRefs = useRef({});
   const sidebarTabsListRef = useRef(null);
@@ -3905,7 +4112,7 @@ export function App() {
     () => tabs.find((article) => article.id === activeTab) ?? tabs[0],
     [activeTab, tabs],
   );
-  const briefOpen = activeSurface === "brief";
+  const briefOpen = Boolean(currentArticle?.isBrief || currentArticle?.url === "brizo://brief" || currentArticle?.id === "pinned-brief");
   const newTabOpen = !briefOpen && Boolean(currentArticle?.isNewTab);
   const bookmarksPageOpen = !briefOpen && Boolean(currentArticle?.isBookmarksPage);
   const canReturnToNewTab = !briefOpen
@@ -3950,7 +4157,7 @@ export function App() {
     ));
   }, [bookmarkContextEditor, bookmarkFolderRows]);
   const pageBackgroundColor = briefOpen
-    ? "#ffffff"
+    ? "var(--brizo-brief-paper)"
     : newTabOpen
     ? "#f1f1f1"
     : bookmarksPageOpen
@@ -3968,54 +4175,152 @@ export function App() {
     && (pageUsesLightForeground || systemUsesDarkAppearance);
   const filteredBookmarkLibrary = bookmarkLibrary;
 
-  useLayoutEffect(() => {
+  const groupedTabItems = useMemo(() => {
+    const domainCounts = new Map();
+    (unpinnedTabs || []).forEach((tab) => {
+      if (!tab || tab.isNewTab || tab.isBookmarksPage || !tab.url) return;
+      const pd = getPrimaryDomain(tab.url || tab.domain);
+      if (pd) {
+        domainCounts.set(pd, (domainCounts.get(pd) || 0) + 1);
+      }
+    });
+
+    const items = [];
+    const processedGroups = new Set();
+
+    (unpinnedTabs || []).forEach((tab) => {
+      if (!tab) return;
+      const pd = !tab.isNewTab && !tab.isBookmarksPage && tab.url ? getPrimaryDomain(tab.url || tab.domain) : "";
+      if (pd && domainCounts.get(pd) >= 2) {
+        if (!processedGroups.has(pd)) {
+          processedGroups.add(pd);
+          const groupTabs = (unpinnedTabs || []).filter(
+            (t) => t && !t.isNewTab && !t.isBookmarksPage && t.url && getPrimaryDomain(t.url || t.domain) === pd
+          );
+          const firstTab = groupTabs[0] || tab;
+          items.push({
+            type: "group",
+            groupId: `group-${pd}`,
+            primaryDomain: pd,
+            siteName: getSiteDisplayName(pd, firstTab),
+            iconTab: firstTab,
+            tabs: groupTabs,
+          });
+        }
+      } else {
+        items.push({
+          type: "tab",
+          tab,
+        });
+      }
+    });
+
+    return items;
+  }, [unpinnedTabs]);
+
+  const toggleGroupCollapse = useCallback((groupId) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  }, []);
+
+  const updateActiveIndicator = useCallback(() => {
     if (briefOpen || !activeTab) {
       setActiveIndicatorY(null);
       return;
     }
-    const activeEl = tabRowRefs.current[activeTab];
-    if (activeEl) {
-      setActiveIndicatorY(activeEl.offsetTop);
-      setActiveIndicatorHeight(activeEl.offsetHeight || 35);
+    const activeEl = tabRowRefs.current?.[activeTab];
+    const listEl = sidebarTabsListRef.current;
+    if (activeEl && typeof activeEl.getBoundingClientRect === "function" && listEl && typeof listEl.getBoundingClientRect === "function") {
+      try {
+        const activeRect = activeEl.getBoundingClientRect();
+        const listRect = listEl.getBoundingClientRect();
+        if (activeRect.width > 0 && activeRect.height > 0) {
+          const relativeTop = activeRect.top - listRect.top + listEl.scrollTop;
+          const relativeLeft = activeRect.left - listRect.left + listEl.scrollLeft;
+          setActiveIndicatorY(relativeTop);
+          setActiveIndicatorX(relativeLeft);
+          setActiveIndicatorWidth(activeRect.width);
+          setActiveIndicatorHeight(activeRect.height || 35);
+        } else {
+          setActiveIndicatorY(null);
+        }
+      } catch {
+        setActiveIndicatorY(null);
+      }
+    } else {
+      setActiveIndicatorY(null);
     }
+  }, [activeTab, briefOpen]);
+
+  useLayoutEffect(() => {
+    updateActiveIndicator();
     updateTabsScrollFlags();
-  }, [activeTab, briefOpen, unpinnedTabs, updateTabsScrollFlags]);
+  }, [activeTab, briefOpen, unpinnedTabs, groupedTabItems, collapsedGroups, sidebarCollapsed, sidebarHovered, updateActiveIndicator, updateTabsScrollFlags]);
 
   useEffect(() => {
     const el = sidebarTabsListRef.current;
     if (!el) return undefined;
+    updateActiveIndicator();
     updateTabsScrollFlags();
-    const rafId = requestAnimationFrame(updateTabsScrollFlags);
-    const handleScroll = () => updateTabsScrollFlags();
+    const rafId = requestAnimationFrame(() => {
+      updateActiveIndicator();
+      updateTabsScrollFlags();
+    });
+    const handleScroll = () => {
+      updateTabsScrollFlags();
+      updateActiveIndicator();
+    };
     el.addEventListener("scroll", handleScroll, { passive: true });
     let ro = null;
     if (typeof ResizeObserver !== "undefined") {
       ro = new ResizeObserver(() => {
+        updateActiveIndicator();
         updateTabsScrollFlags();
       });
       ro.observe(el);
+      const activeEl = tabRowRefs.current?.[activeTab];
+      if (activeEl) {
+        ro.observe(activeEl);
+      }
     }
+    const t1 = setTimeout(updateActiveIndicator, 40);
+    const t2 = setTimeout(updateActiveIndicator, 100);
+    const t3 = setTimeout(updateActiveIndicator, 180);
+    const t4 = setTimeout(updateActiveIndicator, 240);
     return () => {
       cancelAnimationFrame(rafId);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      clearTimeout(t4);
       el.removeEventListener("scroll", handleScroll);
       if (ro) ro.disconnect();
       stopTabsAutoScroll();
     };
-  }, [tabs, unpinnedTabs, updateTabsScrollFlags]);
+  }, [tabs, unpinnedTabs, groupedTabItems, collapsedGroups, sidebarCollapsed, sidebarHovered, activeTab, updateActiveIndicator, updateTabsScrollFlags]);
 
   useEffect(() => {
-    if (activeTab && tabRowRefs.current[activeTab] && sidebarTabsListRef.current) {
+    if (activeTab && tabRowRefs.current?.[activeTab] && sidebarTabsListRef.current) {
       const activeEl = tabRowRefs.current[activeTab];
       const listEl = sidebarTabsListRef.current;
-      const activeTop = activeEl.offsetTop;
-      const activeBottom = activeTop + activeEl.offsetHeight;
-      if (activeTop < listEl.scrollTop) {
-        listEl.scrollTo({ top: activeTop - 6, behavior: "smooth" });
-      } else if (activeBottom > listEl.scrollTop + listEl.clientHeight) {
-        listEl.scrollTo({ top: activeBottom - listEl.clientHeight + 6, behavior: "smooth" });
-      }
+      if (!activeEl || typeof activeEl.getBoundingClientRect !== "function" || !listEl || typeof listEl.getBoundingClientRect !== "function") return;
+      try {
+        const activeRect = activeEl.getBoundingClientRect();
+        const listRect = listEl.getBoundingClientRect();
+        const activeTop = activeRect.top - listRect.top + listEl.scrollTop;
+        const activeBottom = activeTop + (activeEl.offsetHeight || 35);
+        if (activeTop < listEl.scrollTop) {
+          listEl.scrollTo({ top: activeTop - 6, behavior: "smooth" });
+        } else if (activeBottom > listEl.scrollTop + listEl.clientHeight) {
+          listEl.scrollTo({ top: activeBottom - listEl.clientHeight + 6, behavior: "smooth" });
+        }
+      } catch {}
     }
-  }, [activeTab]);
+  }, [activeTab, groupedTabItems, collapsedGroups]);
 
   useEffect(() => {
     const appearanceQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -4277,12 +4582,24 @@ export function App() {
   useEffect(() => {
     localStorage.setItem("bean:app-preferences", JSON.stringify(appPreferences));
     document.documentElement.lang = appPreferences.language;
-  }, [appPreferences]);
+    browserApi?.setFullWidth?.(Boolean(appPreferences.autoFitZoom));
+  }, [appPreferences, browserApi]);
+
+  useEffect(() => {
+    if (!browserApi?.getSiteHygiene) return undefined;
+    let active = true;
+    browserApi.getSiteHygiene().then((value) => {
+      if (active && value) setSiteHygienePreferences(value);
+    });
+    return () => { active = false; };
+  }, [browserApi]);
 
   useEffect(() => {
     localStorage.setItem("bean:page-zoom", String(pageZoom));
-    browserApi?.setPageZoom?.(pageZoom);
-  }, [activeSurface, activeTab, browserApi, pageZoom]);
+    if (!appPreferences.autoFitZoom) {
+      browserApi?.setPageZoom?.(pageZoom);
+    }
+  }, [activeSurface, activeTab, appPreferences.autoFitZoom, browserApi, pageZoom]);
 
   useEffect(() => {
     try {
@@ -4325,8 +4642,11 @@ export function App() {
   useEffect(() => {
     if (!briefOpen) return undefined;
     if (!browserApi?.getBriefEdition) {
-      setBriefEdition((current) => current || createBriefPreviewEdition());
-      return undefined;
+      let cancelled = false;
+      import("./BriefPage.jsx").then(({ createBriefPreviewEdition }) => {
+        if (!cancelled) setBriefEdition((current) => current || createBriefPreviewEdition());
+      });
+      return () => { cancelled = true; };
     }
     let cancelled = false;
     setBriefLoading(true);
@@ -4558,34 +4878,50 @@ export function App() {
   }, [navigationState.error, navigationState.ownerTabId]);
 
   useEffect(() => {
-    if (!browserApi || !webContentHost.current) return undefined;
-
-    const host = webContentHost.current;
     let frame = 0;
     const publishBounds = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
+        const host = webContentHost.current
+          || document.querySelector(".browser-surface .web-content-host:not([aria-hidden='true'])")
+          || document.querySelector(".browser-surface .web-content-host")
+          || document.querySelector(".browser-surface");
+        if (!host || typeof host.getBoundingClientRect !== "function") return;
         const bounds = host.getBoundingClientRect();
-        browserApi.setBounds({
-          x: bounds.left,
-          y: bounds.top,
-          width: Math.max(1, bounds.width),
-          height: Math.max(1, bounds.height),
-        });
+        if (bounds.width > 0 && bounds.height > 0) {
+          if (browserApi) {
+            browserApi.setBounds({
+              x: bounds.left,
+              y: bounds.top,
+              width: Math.max(1, bounds.width),
+              height: Math.max(1, bounds.height),
+            });
+          }
+        }
       });
     };
 
-    const observer = new ResizeObserver(publishBounds);
-    observer.observe(host);
+    const host = webContentHost.current
+      || document.querySelector(".browser-surface .web-content-host:not([aria-hidden='true'])")
+      || document.querySelector(".browser-surface");
+    const observer = host ? new ResizeObserver(publishBounds) : null;
+    if (host && observer) observer.observe(host);
+
     window.addEventListener("resize", publishBounds);
     publishBounds();
+    const t1 = setTimeout(publishBounds, 50);
+    const t2 = setTimeout(publishBounds, 150);
+    const t3 = setTimeout(publishBounds, 300);
 
     return () => {
       window.cancelAnimationFrame(frame);
-      observer.disconnect();
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      if (observer) observer.disconnect();
       window.removeEventListener("resize", publishBounds);
     };
-  }, [bookmarksPageOpen, briefOpen, browserApi, newTabOpen, sidebarOpen]);
+  }, [bookmarksPageOpen, briefOpen, browserApi, newTabOpen, sidebarOpen, sidebarCollapsed, sidebarHovered, activeTab]);
 
   useEffect(() => {
     if (!browserApi?.capturePreview || briefOpen || newTabOpen || bookmarksPageOpen) {
@@ -5109,7 +5445,7 @@ export function App() {
       title: filename || title,
       url,
     };
-    setTabs((currentTabs) => [...currentTabs, nextTab]);
+    setTabs((currentTabs) => [nextTab, ...currentTabs]);
     setActiveSurface("tab");
     setActiveTab(nextTab.id);
     addressEditing.current = false;
@@ -5120,15 +5456,16 @@ export function App() {
   };
 
   const selectArticle = (article) => {
+    if (!article) return;
     setActiveSurface("tab");
     setActiveTab(article.id);
     addressEditing.current = false;
     addressValue.current = article.isNewTab ? "" : article.url;
     setAddressText(article.isNewTab ? "" : formatAddressForDisplay(article.url));
-    if (browserApi && !article.isNewTab && !article.isBookmarksPage) {
+    if (browserApi && !article.isNewTab && !article.isBookmarksPage && !article.isBrief && article.id !== "pinned-brief" && article.url !== "brizo://brief") {
       if (article.isPdf && browserApi.navigatePdf) browserApi.navigatePdf(article.url, article.id);
       else browserApi.navigate(article.url, article.id);
-    } else if (!browserApi && !article.isNewTab && !article.isBookmarksPage) {
+    } else if (!browserApi && !article.isNewTab && !article.isBookmarksPage && !article.isBrief && article.id !== "pinned-brief" && article.url !== "brizo://brief") {
       showToast(`Opened ${article.domain}`);
     }
   };
@@ -5157,16 +5494,21 @@ export function App() {
   }, [closedTabs]);
 
   const closeAllTabs = () => {
-    if (tabs.length === 0) return;
+    const unpinnedToClose = tabs.filter((tab) => !tab.isPinned);
+    if (unpinnedToClose.length === 0) {
+      showToast("暂无可清空的非置顶标签页");
+      return;
+    }
     setClosedTabs((prev) => [
       ...prev,
-      ...tabs.map((tab, index) => ({ tab: { ...tab }, index })),
+      ...unpinnedToClose.map((tab, index) => ({ tab: { ...tab }, index })),
     ]);
 
-    tabs.forEach((tab) => {
+    unpinnedToClose.forEach((tab) => {
       browserApi?.closeTabView?.(tab.id);
     });
 
+    const retainedPinnedTabs = tabs.filter((tab) => tab.isPinned);
     const freshTab = {
       domain: "brizo",
       id: `new-tab-${Date.now()}`,
@@ -5177,13 +5519,10 @@ export function App() {
       title: "新标签页",
       url: "",
     };
-    setTabs([freshTab]);
-    setActiveSurface("tab");
-    setActiveTab(freshTab.id);
-    addressEditing.current = false;
-    addressValue.current = "";
-    setAddressText("");
-    showToast("已清空全部标签页");
+    const nextTabs = [freshTab, ...retainedPinnedTabs];
+    setTabs(nextTabs);
+    selectArticle(freshTab);
+    showToast("已清空全部非置顶标签页");
   };
 
   const openHistoryItemInTab = (item) => {
@@ -5210,14 +5549,14 @@ export function App() {
     const existing = tabs.find((tab) => tab.isBookmarksPage);
     const tabId = existing?.id || `bookmarks-tab-${Date.now()}`;
     if (!existing) {
-      setTabs((currentTabs) => [...currentTabs, {
+      setTabs((currentTabs) => [{
         domain: "brizo",
         id: tabId,
         isBookmarksPage: true,
         shortTitle: "收藏夹",
         title: "收藏夹",
         url: "brizo://bookmarks",
-      }]);
+      }, ...currentTabs]);
     }
     setActiveSurface("tab");
     setActiveTab(tabId);
@@ -5245,7 +5584,7 @@ export function App() {
       title: title || domain,
       url,
     };
-    setTabs((currentTabs) => [...currentTabs, nextTab]);
+    setTabs((currentTabs) => [nextTab, ...currentTabs]);
     setActiveSurface("tab");
     setActiveTab(nextTab.id);
     addressEditing.current = false;
@@ -5350,7 +5689,7 @@ export function App() {
     submitAddressValue(addressValue.current);
   };
 
-  const saveCompletedSearch = ({ query: completedQuery, result }) => {
+  const saveCompletedSearch = useCallback(({ query: completedQuery, result }) => {
     const snapshot = createSearchHistorySnapshot(result);
     if (!snapshot) return;
     setSearchHistory((current) => {
@@ -5360,7 +5699,7 @@ export function App() {
         ...current.filter((item) => item.query !== completedQuery),
       ]);
     });
-  };
+  }, []);
 
   const submitNewTabPrompt = async ({ attachments, contextTab, depth, model, searchId, tabId, thread, value }) => {
     const looksLikeDestination = looksLikeWebsiteInput(value);
@@ -5532,6 +5871,10 @@ export function App() {
   };
 
   const navigateBack = () => {
+    if (briefOpen) {
+      setActiveSurface("tab");
+      return;
+    }
     if (restoreNewTabSession()) return;
     if (desktopMode) browserApi.back();
     else showToast("Back");
@@ -5589,6 +5932,25 @@ export function App() {
     const next = Math.min(2, Math.max(0.5, Math.round(Number(nextValue) * 10) / 10));
     setPageZoom(next);
     showToast(`页面缩放 ${Math.round(next * 100)}%`);
+  };
+
+  const updateSiteHygiene = async (changes) => {
+    const next = { ...siteHygienePreferences, ...changes };
+    setSiteHygienePreferences(next);
+    const saved = await browserApi?.setSiteHygiene?.(next);
+    if (saved) setSiteHygienePreferences(saved);
+  };
+
+  const toggleSiteHygieneForCurrentSite = () => {
+    if (!currentSiteOrigin) return;
+    const currentlyEnabled = siteHygienePreferences.siteOverrides?.[currentSiteOrigin]?.enabled !== false;
+    void updateSiteHygiene({
+      siteOverrides: {
+        ...(siteHygienePreferences.siteOverrides || {}),
+        [currentSiteOrigin]: { enabled: !currentlyEnabled },
+      },
+    });
+    showToast(currentlyEnabled ? "已暂停此网站的智能处理" : "已恢复此网站的智能处理");
   };
 
   const removeBrowserHistoryItem = (url) => {
@@ -6177,7 +6539,7 @@ export function App() {
       title: bookmark.title,
       url: bookmark.url,
     };
-    setTabs((currentTabs) => [...currentTabs, nextTab]);
+    setTabs((currentTabs) => [nextTab, ...currentTabs]);
     selectArticle(nextTab);
   };
 
@@ -6194,11 +6556,44 @@ export function App() {
     if (tabId !== activeTab) return;
 
     const nextArticle = nextTabs[Math.min(closingIndex, nextTabs.length - 1)];
-    if (briefOpen) {
-      setActiveTab(nextArticle.id);
-      return;
-    }
     selectArticle(nextArticle);
+  };
+
+  const closeTabGroup = (groupTabs) => {
+    if (!groupTabs || groupTabs.length === 0) return;
+    const groupRecords = groupTabs.map((t) => {
+      const idx = tabs.findIndex((item) => item.id === t.id);
+      return { tab: { ...t }, index: idx >= 0 ? idx : 0 };
+    });
+    setClosedTabs((prev) => [...prev, ...groupRecords]);
+
+    const closingIds = new Set(groupTabs.map((t) => t.id));
+    groupTabs.forEach((t) => {
+      browserApi?.closeTabView?.(t.id);
+    });
+
+    const nextTabs = tabs.filter((t) => !closingIds.has(t.id));
+    if (nextTabs.length === 0) {
+      const freshTab = {
+        domain: "brizo",
+        id: `new-tab-${Date.now()}`,
+        isNewTab: true,
+        isPinned: false,
+        useTodayGreeting: false,
+        shortTitle: "新标签页",
+        title: "新标签页",
+        url: "",
+      };
+      setTabs([freshTab]);
+      selectArticle(freshTab);
+    } else {
+      setTabs(nextTabs);
+      if (closingIds.has(activeTab)) {
+        const nextActive = nextTabs[0];
+        selectArticle(nextActive);
+      }
+    }
+    showToast(`已关闭「${getSiteDisplayName(getPrimaryDomain(groupTabs[0]?.url), groupTabs[0])}」分组 (${groupTabs.length} 个标签)`);
   };
 
   const moveTabBefore = (draggedId, targetId) => {
@@ -6210,6 +6605,26 @@ export function App() {
       const nextTabs = [...currentTabs];
       const [draggedTab] = nextTabs.splice(draggedIndex, 1);
       nextTabs.splice(targetIndex, 0, draggedTab);
+      return nextTabs;
+    });
+  };
+
+  const moveGroupBefore = (groupTabs, targetTabId) => {
+    if (!groupTabs || groupTabs.length === 0 || !targetTabId) return;
+    const groupIds = new Set(groupTabs.map((t) => t.id));
+    if (groupIds.has(targetTabId)) return;
+
+    setTabs((currentTabs) => {
+      const remainingTabs = currentTabs.filter((t) => !groupIds.has(t.id));
+      const targetIndex = remainingTabs.findIndex((t) => t.id === targetTabId);
+      if (targetIndex < 0) return currentTabs;
+
+      const orderedGroupTabs = groupTabs
+        .map((t) => currentTabs.find((ct) => ct.id === t.id))
+        .filter(Boolean);
+
+      const nextTabs = [...remainingTabs];
+      nextTabs.splice(targetIndex, 0, ...orderedGroupTabs);
       return nextTabs;
     });
   };
@@ -6230,19 +6645,31 @@ export function App() {
   };
 
   const openBrief = () => {
-    const shouldRefreshAgain = activeSurface === "brief";
-    setActiveSurface("brief");
-    setAddressFocused(false);
-    addressEditing.current = false;
-    addressValue.current = "";
-    setAddressText("");
+    const existing = tabs.find((tab) => tab.id === "pinned-brief" || tab.isBrief || tab.url === "brizo://brief");
+    const tabId = existing?.id || "pinned-brief";
+    if (!existing) {
+      setTabs((currentTabs) => [{
+        domain: "brief",
+        id: tabId,
+        isBrief: true,
+        shortTitle: "Brief",
+        title: "Brizo Brief 简报",
+        url: "brizo://brief",
+        iconKey: "brief",
+      }, ...currentTabs]);
+    }
+    setActiveSurface("tab");
+    setActiveTab(tabId);
     setSettingsMenuOpen(false);
     setSettingsPanel("");
-    if (shouldRefreshAgain) void refreshBrief();
+    addressEditing.current = false;
+    addressValue.current = "brizo://brief";
+    setAddressText(formatAddressForDisplay("brizo://brief"));
   };
 
   const refreshBrief = async () => {
     if (!browserApi?.getBriefEdition) {
+      const { createBriefPreviewEdition } = await import("./BriefPage.jsx");
       setBriefEdition(createBriefPreviewEdition());
       showToast("界面预览已刷新");
       return;
@@ -6290,7 +6717,7 @@ export function App() {
         title: "图片",
         url,
       };
-      setTabs((currentTabs) => [...currentTabs, nextTab]);
+      setTabs((currentTabs) => [nextTab, ...currentTabs]);
       setActiveSurface("tab");
       setActiveTab(nextTab.id);
       addressEditing.current = false;
@@ -6299,6 +6726,15 @@ export function App() {
       browserApi.navigateImage(url, nextTab.id);
     });
   }, [browserApi]);
+
+  useEffect(() => {
+    if (!browserApi?.onRequestCloseTab) return undefined;
+    return browserApi.onRequestCloseTab((tabId) => {
+      if (typeof tabId === "string" && tabId) {
+        closeTab(tabId);
+      }
+    });
+  }, [browserApi, closeTab]);
 
   useEffect(() => {
     if (!browserApi?.onAskSelection) return undefined;
@@ -6327,7 +6763,7 @@ export function App() {
   return (
     <SoftBlurIn
       as="main"
-      className={`app-shell ${sidebarOpen ? "" : "spaces-collapsed"}${shellUsesLightForeground ? " uses-light-shell-foreground" : ""}`}
+      className={`app-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""} ${sidebarCollapsed && sidebarHovered ? "is-sidebar-hover-expanded" : ""} ${sidebarOpen ? "" : "spaces-collapsed"}${shellUsesLightForeground ? " uses-light-shell-foreground" : ""}`}
       style={{
         "--tab-seam-color": pageUsesLightForeground
           ? "rgba(255, 255, 255, 0.44)"
@@ -6337,15 +6773,19 @@ export function App() {
     >
       <aside
         className="spaces-panel"
+        onPointerEnter={handleSidebarPointerEnter}
+        onPointerLeave={handleSidebarPointerLeave}
       >
         <header className="spaces-header">
-          <Logo />
+          <Logo collapsed={sidebarCollapsed && !sidebarHovered} />
         </header>
 
         {pinnedTabs.length > 0 && (
           <div className="pinned-tabs-grid" role="tablist" aria-label="常驻标签">
             {pinnedTabs.map((tab) => {
-              const isSelected = !briefOpen && activeTab === tab.id;
+              const isSelected = briefOpen
+                ? Boolean(tab.isBrief || tab.id === "pinned-brief" || tab.url === "brizo://brief")
+                : activeTab === tab.id;
               return (
                 <button
                   key={tab.id}
@@ -6406,13 +6846,186 @@ export function App() {
               <div
                 className={`sidebar-tab-active-indicator${pageUsesLightForeground ? " uses-light-foreground" : ""}`}
                 style={{
+                  "--indicator-x": `${activeIndicatorX}px`,
                   "--indicator-y": `${activeIndicatorY}px`,
+                  ...(activeIndicatorWidth ? { width: `${activeIndicatorWidth}px` } : {}),
                   height: `${activeIndicatorHeight}px`,
                 }}
                 aria-hidden="true"
               />
             )}
-            {unpinnedTabs.map((tab) => {
+            {groupedTabItems.map((item) => {
+              if (item.type === "group") {
+                const isCollapsed = collapsedGroups.has(item.groupId);
+                return (
+                  <div
+                    className={`sidebar-tab-group${isCollapsed ? " is-collapsed" : ""}${draggedGroupId === item.groupId ? " is-dragging" : ""}`}
+                    key={item.groupId}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                    }}
+                    onDragEnter={() => {
+                      if (draggedGroupId && draggedGroupId !== item.groupId) {
+                        const draggedGroup = groupedTabItems.find((g) => g.type === "group" && g.groupId === draggedGroupId);
+                        if (draggedGroup && draggedGroup.tabs && item.tabs?.[0]?.id) {
+                          moveGroupBefore(draggedGroup.tabs, item.tabs[0].id);
+                        }
+                      } else if (draggedTabId && !item.tabs.some((t) => t.id === draggedTabId)) {
+                        moveTabBefore(draggedTabId, item.tabs[0].id);
+                      }
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      setDraggedGroupId("");
+                      setDraggedTabId("");
+                    }}
+                  >
+                    <div
+                      className="sidebar-tab-group-header"
+                      role="button"
+                      tabIndex={0}
+                      draggable
+                      aria-expanded={!isCollapsed}
+                      onClick={() => toggleGroupCollapse(item.groupId)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          toggleGroupCollapse(item.groupId);
+                        }
+                      }}
+                      onDragStart={(event) => {
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("application/x-brizo-group-id", item.groupId);
+                        setDraggedGroupId(item.groupId);
+                      }}
+                      onDragEnd={() => {
+                        setDraggedGroupId("");
+                      }}
+                    >
+                      <span className="sidebar-tab-group-icon">
+                        <SiteIcon
+                          id={item.iconTab.id}
+                          iconKey={item.iconTab.iconKey}
+                          url={item.iconTab.url}
+                          faviconUrl={item.iconTab.faviconUrl}
+                          isError={item.iconTab.loadError}
+                          isNewTab={item.iconTab.isNewTab}
+                          isPdf={item.iconTab.isPdf}
+                        />
+                      </span>
+                      <span className="sidebar-tab-group-title" title={`${item.siteName} (${item.tabs.length})`}>
+                        {item.siteName}
+                      </span>
+                      <span className="sidebar-tab-group-toggle" aria-hidden="true">
+                        <CaretDown size={13} weight="bold" />
+                      </span>
+                      <button
+                        type="button"
+                        className="sidebar-tab-group-close"
+                        aria-label={`关闭 ${item.siteName} 标签组`}
+                        title="关闭标签组"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          closeTabGroup(item.tabs);
+                        }}
+                      >
+                        <X size={13} weight="bold" />
+                      </button>
+                    </div>
+
+                    {!isCollapsed && (
+                      <div className="sidebar-tab-group-items">
+                        {item.tabs.map((tab) => {
+                          const isSelected = !briefOpen && activeTab === tab.id;
+                          return (
+                            <div
+                              key={tab.id}
+                              ref={(el) => {
+                                if (el) {
+                                  tabRowRefs.current[tab.id] = el;
+                                } else {
+                                  delete tabRowRefs.current[tab.id];
+                                }
+                              }}
+                              className={`sidebar-tab-row${isSelected ? " is-active" : ""}${isSelected && pageUsesLightForeground ? " uses-light-foreground" : ""}${draggedTabId === tab.id ? " is-dragging" : ""}`}
+                              draggable
+                              onDragStart={(event) => {
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("application/x-brizo-tab-id", tab.id);
+                                setDraggedTabId(tab.id);
+                              }}
+                              onDragEnter={() => {
+                                if (draggedGroupId) {
+                                  const draggedGroup = groupedTabItems.find((g) => g.type === "group" && g.groupId === draggedGroupId);
+                                  if (draggedGroup && !draggedGroup.tabs.some((t) => t.id === tab.id)) {
+                                    moveGroupBefore(draggedGroup.tabs, tab.id);
+                                  }
+                                } else if (draggedTabId) {
+                                  moveTabBefore(draggedTabId, tab.id);
+                                }
+                              }}
+                              onDragOver={(event) => {
+                                event.preventDefault();
+                                event.dataTransfer.dropEffect = "move";
+                              }}
+                              onDrop={(event) => {
+                                event.preventDefault();
+                                setDraggedTabId("");
+                                setDraggedGroupId("");
+                              }}
+                              onDragEnd={() => {
+                                setDraggedTabId("");
+                                setDraggedGroupId("");
+                              }}
+                              onContextMenu={(e) => handleTabContextMenu(e, tab)}
+                              onMouseEnter={startTabTitleMarquee}
+                              onMouseLeave={stopTabTitleMarquee}
+                            >
+                              <button
+                                type="button"
+                                className="sidebar-tab-select"
+                                role="tab"
+                                aria-selected={isSelected}
+                                title={tab.title || tab.shortTitle}
+                                onClick={() => selectArticle(tab)}
+                              >
+                                <SiteIcon
+                                  id={tab.id}
+                                  iconKey={tab.iconKey}
+                                  url={tab.url}
+                                  faviconUrl={tab.faviconUrl}
+                                  isError={tab.loadError}
+                                  isNewTab={tab.isNewTab}
+                                  isPdf={tab.isPdf}
+                                />
+                                <span className="sidebar-tab-title"><span>{tab.shortTitle || tab.title}</span></span>
+                                {tab.unread && <span className="sidebar-tab-unread" aria-label="Updated" />}
+                              </button>
+                              {tabs.length > 1 && (
+                                <button
+                                  type="button"
+                                  className="sidebar-tab-close"
+                                  aria-label={`关闭 ${tab.shortTitle || tab.title}`}
+                                  title="关闭标签页"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    closeTab(tab.id);
+                                  }}
+                                >
+                                  <X size={13} weight="bold" />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+
+              const tab = item.tab;
               const isSelected = !briefOpen && activeTab === tab.id;
               return (
                 <div
@@ -6431,7 +7044,16 @@ export function App() {
                     event.dataTransfer.setData("application/x-brizo-tab-id", tab.id);
                     setDraggedTabId(tab.id);
                   }}
-                  onDragEnter={() => moveTabBefore(draggedTabId, tab.id)}
+                  onDragEnter={() => {
+                    if (draggedGroupId) {
+                      const draggedGroup = groupedTabItems.find((g) => g.type === "group" && g.groupId === draggedGroupId);
+                      if (draggedGroup) {
+                        moveGroupBefore(draggedGroup.tabs, tab.id);
+                      }
+                    } else if (draggedTabId) {
+                      moveTabBefore(draggedTabId, tab.id);
+                    }
+                  }}
                   onDragOver={(event) => {
                     event.preventDefault();
                     event.dataTransfer.dropEffect = "move";
@@ -6439,8 +7061,12 @@ export function App() {
                   onDrop={(event) => {
                     event.preventDefault();
                     setDraggedTabId("");
+                    setDraggedGroupId("");
                   }}
-                  onDragEnd={() => setDraggedTabId("")}
+                  onDragEnd={() => {
+                    setDraggedTabId("");
+                    setDraggedGroupId("");
+                  }}
                   onContextMenu={(e) => handleTabContextMenu(e, tab)}
                   onMouseEnter={startTabTitleMarquee}
                   onMouseLeave={stopTabTitleMarquee}
@@ -6665,39 +7291,50 @@ export function App() {
             className={`browser-toolbar${pageUsesLightForeground ? " uses-light-foreground" : ""}`}
             style={{ "--page-background-color": toolbarBackgroundColor }}
           >
-          <div className="browser-toolbar-center">
-            <div className="browser-nav">
+            <div className="browser-toolbar-left">
               <IconButton
-                label="Back"
-                disabled={briefOpen || newTabOpen || bookmarksPageOpen || (desktopMode && !navigationState.canGoBack && !canReturnToNewTab)}
-                onClick={navigateBack}
+                label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+                title={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+                className="browser-sidebar-toggle-btn"
+                onClick={() => setSidebarCollapsed((prev) => !prev)}
               >
-                <ArrowLeftIcon className="remocn-toolbar-icon remocn-arrow-left-icon" size={20} strokeWidth={1.9} />
-              </IconButton>
-              <IconButton
-                label="Forward"
-                disabled={briefOpen || newTabOpen || bookmarksPageOpen || (desktopMode && !navigationState.canGoForward)}
-                onClick={() => desktopMode ? browserApi.forward() : showToast("Forward")}
-              >
-                <ArrowRightIcon className="remocn-toolbar-icon remocn-arrow-right-icon" size={20} strokeWidth={1.9} />
-              </IconButton>
-              <IconButton
-                label="Reload"
-                disabled={briefOpen || newTabOpen || bookmarksPageOpen}
-                onClick={() => desktopMode ? browserApi.reload() : showToast("Page refreshed")}
-              >
-                <RefreshCwIcon className="remocn-toolbar-icon remocn-refresh-icon" size={20} strokeWidth={1.8} />
+                <SidebarSimple className="remocn-toolbar-icon" size={18} weight={sidebarCollapsed ? "fill" : "regular"} />
               </IconButton>
             </div>
 
+            <div className="browser-toolbar-center">
+              <div className="browser-nav">
+                <IconButton
+                  label="Back"
+                  disabled={briefOpen || newTabOpen || bookmarksPageOpen || (desktopMode && !navigationState.canGoBack && !canReturnToNewTab)}
+                  onClick={navigateBack}
+                >
+                  <ArrowLeftIcon className="remocn-toolbar-icon remocn-arrow-left-icon" size={20} strokeWidth={1.9} />
+                </IconButton>
+                <IconButton
+                  label="Forward"
+                  disabled={briefOpen || newTabOpen || bookmarksPageOpen || (desktopMode && !navigationState.canGoForward)}
+                  onClick={() => desktopMode ? browserApi.forward() : showToast("Forward")}
+                >
+                  <ArrowRightIcon className="remocn-toolbar-icon remocn-arrow-right-icon" size={20} strokeWidth={1.9} />
+                </IconButton>
+                <IconButton
+                  label="Reload"
+                  disabled={briefOpen || newTabOpen || bookmarksPageOpen}
+                  onClick={() => desktopMode ? browserApi.reload() : showToast("Page refreshed")}
+                >
+                  <RefreshCwIcon className="remocn-toolbar-icon remocn-refresh-icon" size={20} strokeWidth={1.8} />
+                </IconButton>
+              </div>
+
             <form
               ref={addressBarRef}
-              className={`address-bar address-load-${addressLoadPhase}${!briefOpen && !newTabOpen ? " is-site-address" : ""}${addressFocused ? " is-editing" : ""}`}
+              className={`address-bar address-load-${addressLoadPhase}${currentPageUrl && /^https?:\/\//i.test(currentPageUrl) && !newTabOpen && !bookmarksPageOpen && !briefOpen ? " is-site-address" : ""}${addressFocused ? " is-editing" : ""}`}
               onSubmit={submitAddress}
             >
-              {briefOpen || newTabOpen
-                ? <MagnifyingGlass className="address-search-icon" size={15} />
-                : null}
+              {newTabOpen || bookmarksPageOpen || briefOpen || !(currentPageUrl && /^https?:\/\//i.test(currentPageUrl)) || addressFocused ? (
+                <MagnifyingGlass className="address-search-icon" size={15} />
+              ) : null}
               <input
                 ref={addressInput}
                 value={addressText}
@@ -6710,13 +7347,16 @@ export function App() {
                   addressEditing.current = true;
                   setAddressInputDirty(false);
                   setAddressFocused(true);
+                  if (briefOpen || bookmarksPageOpen || newTabOpen) {
+                    setAddressText(addressValue.current || "");
+                  }
                 }}
                 onPointerDown={(event) => {
                   const input = event.currentTarget;
                   addressEditing.current = true;
                   setAddressInputDirty(false);
                   setAddressFocused(true);
-                  setAddressText(addressValue.current);
+                  setAddressText(addressValue.current || "");
                   window.requestAnimationFrame(() => {
                     input.focus();
                     input.select();
@@ -6729,7 +7369,7 @@ export function App() {
                   setAddressText(formatAddressForDisplay(addressValue.current));
                 }}
                 aria-label="Address"
-                placeholder={briefOpen || newTabOpen ? "搜索或输入网址" : ""}
+                placeholder={!(currentPageUrl && /^https?:\/\//i.test(currentPageUrl)) || newTabOpen || bookmarksPageOpen || briefOpen ? "搜索或输入网址" : ""}
               />
               {addressSuggestions.length > 0 && (
                 <button
@@ -7070,17 +7710,43 @@ export function App() {
                   <div className="settings-menu-group">
                     <div className="settings-zoom-row" role="group" aria-label="页面缩放">
                       <ArrowsOut size={20} />
-                      <span>缩放</span>
-                      <button type="button" aria-label="缩小" disabled={pageZoom <= 0.5} onClick={() => updatePageZoom(pageZoom - 0.1)}>
-                        <Minus size={14} weight="bold" />
-                      </button>
-                      <button className="settings-zoom-value" type="button" aria-label="恢复 100%" onClick={() => updatePageZoom(1)}>
-                        {Math.round(pageZoom * 100)}%
-                      </button>
-                      <button type="button" aria-label="放大" disabled={pageZoom >= 2} onClick={() => updatePageZoom(pageZoom + 0.1)}>
-                        <Plus size={14} weight="bold" />
-                      </button>
+                      <span>页面缩放</span>
+                      <div className="settings-zoom-controls">
+                        <button type="button" aria-label="缩小" disabled={pageZoom <= 0.5} onClick={() => updatePageZoom(pageZoom - 0.1)}>
+                          <Minus size={13} weight="bold" />
+                        </button>
+                        <button
+                          className="settings-zoom-value"
+                          type="button"
+                          aria-label="恢复 100%"
+                          onClick={() => updatePageZoom(1)}
+                        >
+                          {Math.round(pageZoom * 100)}%
+                        </button>
+                        <button type="button" aria-label="放大" disabled={pageZoom >= 2} onClick={() => updatePageZoom(pageZoom + 0.1)}>
+                          <Plus size={13} weight="bold" />
+                        </button>
+                      </div>
                     </div>
+                    <button
+                      className={appPreferences.autoFitZoom ? "is-selected" : ""}
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={Boolean(appPreferences.autoFitZoom)}
+                      onClick={() => {
+                        const next = !appPreferences.autoFitZoom;
+                        setAppPreferences((curr) => ({ ...curr, autoFitZoom: next }));
+                        if (next) {
+                          showToast("已开启网页横向满铺（纵向不变）");
+                        } else {
+                          showToast("已恢复默认网页布局");
+                        }
+                      }}
+                    >
+                      <ArrowsOut size={20} />
+                      <span>网页横向满铺</span>
+                      {appPreferences.autoFitZoom ? <Check size={16} weight="bold" /> : null}
+                    </button>
                   </div>
 
                   <div className="settings-menu-group">
@@ -7211,29 +7877,118 @@ export function App() {
                   <section className="settings-menu-side-popover settings-preferences-side" role="menu" aria-label="设置">
                     <header><GearSix size={17} /><strong>设置</strong></header>
                     <div className="preferences-settings">
-                      <label className="preference-row">
-                        <span><strong>语言</strong></span>
-                        <select value={appPreferences.language} onChange={(event) => setAppPreferences((current) => ({ ...current, language: event.target.value }))}>
-                          <option value="zh-CN">简体中文</option><option value="en">English</option><option value="system">跟随系统</option>
-                        </select>
-                      </label>
-                      <div className="preference-row">
-                        <span><strong>下载位置</strong><small title={appPreferences.downloadLocation}>{appPreferences.downloadLocation || "系统默认下载文件夹"}</small></span>
-                        <button type="button" onClick={chooseDownloadLocation}>选择…</button>
-                      </div>
-                      <label className="preference-row">
-                        <span><strong>自动更新</strong></span>
-                        <input type="checkbox" checked={appPreferences.autoUpdate} onChange={(event) => setAppPreferences((current) => ({ ...current, autoUpdate: event.target.checked }))} />
-                      </label>
-                      <div className="preference-row">
-                        <span><strong>当前版本</strong><small>{appInfo?.version || "Brizo 0.0.0"}</small></span>
-                        <button type="button" onClick={() => openSettingsPanel("about")}>关于</button>
-                      </div>
+                      <section className="preference-section">
+                        <h3><Sparkle size={14} />智能浏览</h3>
+                        <div className="preference-row">
+                          <span><strong>自动选择 Cookie</strong></span>
+                          <RemocnSelect
+                            value={siteHygienePreferences.cookieConsent}
+                            options={COOKIE_CHOICE_OPTIONS}
+                            onChange={(value) => void updateSiteHygiene({ cookieConsent: value })}
+                            ariaLabel="自动选择 Cookie"
+                          />
+                        </div>
+                        <div className="preference-row">
+                          <span><strong>页面智能清理</strong></span>
+                          <RemocnSelect
+                            value={siteHygienePreferences.cleanupLevel}
+                            options={PAGE_CLEANUP_OPTIONS}
+                            onChange={(value) => void updateSiteHygiene({ cleanupLevel: value })}
+                            ariaLabel="页面智能清理"
+                          />
+                        </div>
+                        <label className="preference-row">
+                          <span><strong>智能收藏夹</strong></span>
+                          <input
+                            type="checkbox"
+                            checked={smartBookmarkConsent}
+                            onChange={(event) => {
+                              const enabled = event.target.checked;
+                              setSmartBookmarkConsent(enabled);
+                              window.localStorage.setItem("bean:smart-bookmark-consent", enabled ? "accepted" : "declined");
+                              if (enabled) void syncSmartBookmarks(false);
+                            }}
+                          />
+                        </label>
+                        <label className="preference-row">
+                          <span><strong>登录信息智能填充</strong></span>
+                          <input
+                            type="checkbox"
+                            checked={siteHygienePreferences.credentialAutofill !== false}
+                            onChange={(event) => void updateSiteHygiene({ credentialAutofill: event.target.checked })}
+                          />
+                        </label>
+                        {currentSiteOrigin && (
+                          <label className="preference-row">
+                            <span><strong>当前网站</strong><small>{new URL(currentSiteOrigin).hostname}</small></span>
+                            <input
+                              type="checkbox"
+                              checked={siteHygienePreferences.siteOverrides?.[currentSiteOrigin]?.enabled !== false}
+                              onChange={toggleSiteHygieneForCurrentSite}
+                            />
+                          </label>
+                        )}
+                      </section>
+
+                      <section className="preference-section">
+                        <h3><Brain size={14} />搜索与 AI</h3>
+                        <button type="button" className="preference-destination" onClick={() => openSettingsPanel("model-guard")}>
+                          <span>模型与检索服务</span><CaretRight size={14} />
+                        </button>
+                      </section>
+
+                      <section className="preference-section">
+                        <h3><ShieldCheck size={14} />隐私与安全</h3>
+                        <button type="button" className="preference-destination" onClick={() => openSettingsPanel("password-vault")}>
+                          <span>密码箱</span><CaretRight size={14} />
+                        </button>
+                        <button type="button" className="preference-destination" onClick={() => browserApi?.openIncognito?.()}>
+                          <span>打开无痕窗口</span><CaretRight size={14} />
+                        </button>
+                      </section>
+
+                      <section className="preference-section">
+                        <h3><Leaf size={14} />外观与性能</h3>
+                        <div className="preference-row">
+                          <span><strong>语言</strong></span>
+                          <RemocnSelect
+                            value={appPreferences.language}
+                            options={LANGUAGE_OPTIONS}
+                            onChange={(val) => setAppPreferences((current) => ({ ...current, language: val }))}
+                            ariaLabel="语言"
+                          />
+                        </div>
+                        <label className="preference-row">
+                          <span><strong>网页横向满铺</strong></span>
+                          <input type="checkbox" checked={Boolean(appPreferences.autoFitZoom)} onChange={(event) => setAppPreferences((current) => ({ ...current, autoFitZoom: event.target.checked }))} />
+                        </label>
+                      </section>
+
+                      <section className="preference-section">
+                        <h3><DownloadSimple size={14} />下载与数据</h3>
+                        <div className="preference-row">
+                          <span><strong>下载位置</strong><small title={appPreferences.downloadLocation}>{appPreferences.downloadLocation || "系统默认"}</small></span>
+                          <button type="button" onClick={chooseDownloadLocation}>选择…</button>
+                        </div>
+                        <button type="button" className="preference-destination" onClick={() => openSettingsPanel("history")}><span>历史记录</span><CaretRight size={14} /></button>
+                        <button type="button" className="preference-destination" onClick={openBookmarkOrganizerPage}><span>整理收藏夹</span><CaretRight size={14} /></button>
+                      </section>
+
+                      <section className="preference-section">
+                        <h3><Compass size={14} />关于</h3>
+                        <label className="preference-row">
+                          <span><strong>自动更新</strong></span>
+                          <input type="checkbox" checked={appPreferences.autoUpdate} onChange={(event) => setAppPreferences((current) => ({ ...current, autoUpdate: event.target.checked }))} />
+                        </label>
+                        <button type="button" className="preference-destination" onClick={() => openSettingsPanel("about")}>
+                          <span>{appInfo?.version || "Brizo 0.0.0"}</span><CaretRight size={14} />
+                        </button>
+                      </section>
                     </div>
                   </section>
                 )}
               </>,
-              document.getElementById("root"),
+              document.body,
             )}
           </div>
           </header>
@@ -7259,21 +8014,24 @@ export function App() {
           aria-hidden={!briefOpen}
         >
           <div className="page-zoom-layer" style={{ height: `${100 / pageZoom}%`, width: `${100 / pageZoom}%`, zoom: pageZoom }}>
-            <BriefPage
-              active={briefOpen}
-              edition={briefEdition}
-              loading={briefLoading}
-              onGetReport={(payload) => browserApi?.getBriefReport?.(payload)}
-              onOpenModelGuard={() => {
-                setActiveSurface("tab");
-                openSettingsPanel("model-guard");
-              }}
-              onOpenSource={(url) => openUrlInNewTab(url, "Brief 来源")}
-              onRefresh={refreshBrief}
-              onSavePreferences={saveBriefPreferences}
-              preferences={briefPreferences}
-              refreshing={briefRefreshing}
-            />
+            <Suspense fallback={<div className="brief-loading-state"><strong>正在打开 Brizo Brief</strong></div>}>
+              <LazyBriefPage
+                active={briefOpen}
+                edition={briefEdition}
+                loading={briefLoading}
+                onClose={() => setActiveSurface("tab")}
+                onGetReport={(payload) => browserApi?.getBriefReport?.(payload)}
+                onOpenModelGuard={() => {
+                  setActiveSurface("tab");
+                  openSettingsPanel("model-guard");
+                }}
+                onOpenSource={(url) => openUrlInNewTab(url, "Brief 来源")}
+                onRefresh={refreshBrief}
+                onSavePreferences={saveBriefPreferences}
+                preferences={briefPreferences}
+                refreshing={briefRefreshing}
+              />
+            </Suspense>
           </div>
         </div>
 
@@ -7511,17 +8269,15 @@ export function App() {
           onClose={() => setSettingsPanel("")}
         >
           <div className="preferences-settings">
-            <label className="preference-row">
+            <div className="preference-row">
               <span><strong>语言</strong></span>
-              <select
+              <RemocnSelect
                 value={appPreferences.language}
-                onChange={(event) => setAppPreferences((current) => ({ ...current, language: event.target.value }))}
-              >
-                <option value="zh-CN">简体中文</option>
-                <option value="en">English</option>
-                <option value="system">跟随系统</option>
-              </select>
-            </label>
+                options={LANGUAGE_OPTIONS}
+                onChange={(val) => setAppPreferences((current) => ({ ...current, language: val }))}
+                ariaLabel="语言"
+              />
+            </div>
             <div className="preference-row">
               <span><strong>下载位置</strong><small title={appPreferences.downloadLocation}>{appPreferences.downloadLocation || "系统默认下载文件夹"}</small></span>
               <button type="button" onClick={chooseDownloadLocation}>选择…</button>
@@ -7532,6 +8288,22 @@ export function App() {
                 type="checkbox"
                 checked={appPreferences.autoUpdate}
                 onChange={(event) => setAppPreferences((current) => ({ ...current, autoUpdate: event.target.checked }))}
+              />
+            </label>
+            <label className="preference-row">
+              <span><strong>网页横向满铺</strong><small>纵向尺寸不变，网页横向从左到右铺满</small></span>
+              <input
+                type="checkbox"
+                checked={Boolean(appPreferences.autoFitZoom)}
+                onChange={(event) => {
+                  const next = event.target.checked;
+                  setAppPreferences((current) => ({ ...current, autoFitZoom: next }));
+                  if (next) {
+                    showToast("已开启网页横向满铺（纵向不变）");
+                  } else {
+                    showToast("已恢复默认网页布局");
+                  }
+                }}
               />
             </label>
             <div className="preference-row">

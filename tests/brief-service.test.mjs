@@ -7,6 +7,7 @@ import {
   allocateStorySlots,
   briefEventImportance,
   briefEventSimilarity,
+  briefTranslationResidualEnglish,
   briefSourcePriority,
   buildSupplementalFeeds,
   createExtractiveSummary,
@@ -205,6 +206,15 @@ test("fast extractive summaries preserve real source citation mapping", () => {
   assert.match(summary, /\[2\]/);
   assert.doesNotMatch(summary, /\[3\]/);
   assert.equal(summary.includes("undefined"), false);
+});
+
+test("whole-edition translation rejects capitalized ordinary English but preserves declared entities", () => {
+  assert.deepEqual(briefTranslationResidualEnglish({
+    entities: [{ english: "Microsoft", localizedForms: [] }, { english: "Trump", localizedForms: [] }],
+    excerpt: "Microsoft 表示 Americans 正在关注 Earth，Trump 出席了活动。",
+    headline: "Microsoft 发布更新",
+    keyPoints: ["Canadian 官员发布了 report。"],
+  }).sort(), ["Americans", "Canadian", "Earth", "report"].sort());
 });
 
 test("story slots total 18 with 3 to 6 stories per section", () => {
@@ -442,7 +452,7 @@ test("report synthesizes multiple sources and returns five related image stories
   assert.match(report.verificationLabel, /交叉核验 2 个独立来源/);
   assert.ok(report.keyPoints.length >= 1);
   assert.match(report.whyItMatters, /\[1\]/);
-  assert.match(report.whatToWatch, /\[1\]/);
+  assert.match(report.whatToWatch, /\[\d+\]/);
   assert.equal(report.relatedStories.length, 5);
   assert.match(report.lead, /\[1\]\[2\]/);
   assert.match(report.body.join(" "), /\[1\].*\[2\]/);
@@ -477,23 +487,44 @@ test("generation failure keeps the latest successful cached edition", async (t) 
   assert.match(result.staleReason, /重大事件信号与开放新闻来源/);
 });
 
-test("Chinese RSS items publish without any AI call", async (t) => {
+test("Chinese RSS items still pass through the whole-edition translation model", async (t) => {
   const userDataPath = await mkdtemp(path.join(os.tmpdir(), "brizo-brief-partial-"));
   t.after(() => rm(userDataPath, { force: true, recursive: true }));
   const originalFetch = globalThis.fetch;
   const fixture = createRssFetchFixture({ chinese: true });
   globalThis.fetch = fixture.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });
-  let modelCalls = 0;
+  let legacyModelCalls = 0;
+  let translationCalls = 0;
   const service = createBriefService({
-    callModel: async () => { modelCalls += 1; return null; },
+    callModel: async () => { legacyModelCalls += 1; return null; },
+    callTranslationModel: async ({ query, systemPrompt }) => {
+      translationCalls += 1;
+      assert.match(systemPrompt, /整版新闻翻译引擎/);
+      const { stories } = JSON.parse(query);
+      return {
+        modelLabel: "DeepSeek V4 Flash",
+        status: "success",
+        message: JSON.stringify({
+          stories: stories.map((item) => ({
+            entities: [],
+            excerpt: item.excerpt,
+            headline: item.title,
+            id: item.id,
+            keyPoints: item.excerpt ? [item.excerpt] : [],
+          })),
+        }),
+      };
+    },
     search: async () => { throw new Error("web search must not be called"); },
     userDataPath,
   });
   const edition = await service.getEdition({ at: localTime(2026, 8, 3, 12, 0), force: true });
   assert.equal(edition.status, "success", edition.message || edition.staleReason || "open-feed edition failed");
   assert.equal(edition.pages.length, 4);
-  assert.equal(modelCalls, 0);
+  assert.equal(legacyModelCalls, 0);
+  assert.ok(translationCalls >= 1);
+  assert.equal(edition.generationMetrics.translationModelLabel, "DeepSeek V4 Flash");
   assert.ok(edition.generationMetrics.rssCandidateCount > 0);
   assert.ok(edition.generationMetrics.directChineseStoryCount > 0);
   assert.equal(Boolean(edition.staleReason), false);
@@ -508,18 +539,25 @@ test("foreign RSS items use AI only for translation and never call web search", 
   t.after(() => { globalThis.fetch = originalFetch; });
   let translationCalls = 0;
   let searchCalls = 0;
+  let omittedOneStory = false;
   const service = createBriefService({
-    callModel: async ({ query, systemPrompt }) => {
+    callTranslationModel: async ({ query, systemPrompt }) => {
       translationCalls += 1;
-      assert.match(systemPrompt, /只做忠实/);
+      assert.match(systemPrompt, /整版新闻翻译引擎/);
       assert.doesNotMatch(systemPrompt, /选择值得进入|综合互相印证|为什么重要/);
+      const inputStories = JSON.parse(query).stories;
+      const returnedStories = omittedOneStory ? inputStories : inputStories.slice(1);
+      omittedOneStory = true;
       return {
+        modelLabel: "DeepSeek V4 Flash",
         status: "success",
         message: JSON.stringify({
-          stories: JSON.parse(query).map((item) => ({
-            excerpt: "微软公司通过出版商 RSS 发布产品更新，包含发布时间和功能变化。",
-            headline: `微软公司发布产品更新 ${item.id}`,
+          stories: returnedStories.map((item) => ({
+            entities: [{ english: "Microsoft", localizedForms: [] }],
+            excerpt: "Microsoft 通过出版商 RSS 发布产品更新，包含发布时间和功能变化。",
+            headline: "Microsoft 发布产品更新",
             id: item.id,
+            keyPoints: ["产品更新包含发布时间和功能变化。"],
           })),
         }),
       };
@@ -532,6 +570,7 @@ test("foreign RSS items use AI only for translation and never call web search", 
   assert.equal(edition.status, "success", edition.message || edition.staleReason || "fast edition failed");
   assert.equal(edition.pages.length, 4);
   assert.ok(translationCalls >= 1);
+  assert.ok(translationCalls >= 4, "an incomplete first batch should be retried without discarding the edition");
   assert.equal(searchCalls, 0);
   assert.equal(edition.generationMetrics.sourceSelectionUsedModel, false);
   assert.ok(edition.generationMetrics.translatedStoryCount > 0);

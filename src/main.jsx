@@ -31,14 +31,36 @@ class BrizoErrorBoundary extends React.Component {
         color: "#343a35",
         overflow: "hidden",
       }}>
-        <section style={{ maxWidth: "520px", textAlign: "center" }} role="alert">
+        <section style={{ maxWidth: "600px", textAlign: "center" }} role="alert">
           <h1 style={{ margin: "0 0 12px", fontSize: "20px", fontWeight: 500 }}>Brizo 界面需要恢复</h1>
-          <p style={{ margin: "0 0 20px", color: "#6f756f", fontSize: "13px", lineHeight: 1.7 }}>
+          <p style={{ margin: "0 0 12px", color: "#6f756f", fontSize: "13px", lineHeight: 1.7 }}>
             当前页面状态出现异常。窗口仍保持可见，重新载入即可恢复。
           </p>
+          {this.state.error && (
+            <pre style={{
+              margin: "0 0 16px",
+              padding: "12px",
+              background: "rgba(0,0,0,0.05)",
+              borderRadius: "8px",
+              fontSize: "11px",
+              color: "#c23",
+              textAlign: "left",
+              maxHeight: "180px",
+              overflow: "auto",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-all",
+            }}>
+              {String(this.state.error.stack || this.state.error.message || this.state.error)}
+            </pre>
+          )}
           <button
             type="button"
-            onClick={() => window.location.reload()}
+            onClick={() => {
+              try {
+                localStorage.removeItem("bean:open-tabs");
+              } catch {}
+              window.location.reload();
+            }}
             style={{
               height: "34px",
               padding: "0 16px",
@@ -49,7 +71,7 @@ class BrizoErrorBoundary extends React.Component {
               cursor: "pointer",
             }}
           >
-            重新载入 Brizo
+            重置并重新载入 Brizo
           </button>
         </section>
       </main>

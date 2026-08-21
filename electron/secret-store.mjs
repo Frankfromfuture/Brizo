@@ -56,12 +56,12 @@ export function withKnownProviderDefaults(provider) {
   if (name.includes("deepseek") || name.includes("deep seek")) {
     const models = Array.isArray(provider.models) && provider.models.length
       ? provider.models
-      : ["deepseek-v4-flash"];
+      : ["deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"];
     return {
       ...provider,
       baseUrl: provider.baseUrl || "https://api.deepseek.com",
       models,
-      selectedModel: chooseFastModel(models, provider.name),
+      selectedModel: provider.selectedModel || chooseFastModel(models, provider.name) || "deepseek-v4-flash",
     };
   }
   return provider;

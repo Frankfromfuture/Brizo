@@ -26,6 +26,13 @@ test("password vault encrypts, masks, edits without replacement, reveals and del
   const edited = await vault.save({ id, site: "login.example.com", username: "alex", password: "" });
   assert.equal(edited.entries[0].site, "login.example.com");
   assert.equal(await vault.reveal(id), "secret");
+  assert.equal((await vault.matches("https://login.example.com/account")).length, 1);
+  assert.equal((await vault.matches("https://evil-example.com/login")).length, 0);
+  assert.deepEqual(await vault.revealForUrl(id, "https://login.example.com/sign-in"), {
+    password: "secret",
+    username: "alex",
+  });
+  assert.equal(await vault.revealForUrl(id, "https://phishing.example.net/"), null);
 
   assert.deepEqual(await vault.remove(id), []);
 });

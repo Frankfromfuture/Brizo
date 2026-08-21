@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   forward: () => ipcRenderer.invoke("bean-browser:forward"),
   getAppInfo: () => ipcRenderer.invoke("bean-browser:get-app-info"),
   getPageZoom: () => ipcRenderer.invoke("bean-browser:get-page-zoom"),
+  getSiteHygiene: () => ipcRenderer.invoke("bean-browser:get-site-hygiene"),
   getState: () => ipcRenderer.invoke("bean-browser:get-state"),
   getSmartBookmarkSnapshot: () => ipcRenderer.invoke("bean-browser:smart-bookmarks-get"),
   importBookmarks: (sourceIds) =>
@@ -62,6 +63,11 @@ contextBridge.exposeInMainWorld("beanBrowser", {
     const listener = () => callback();
     ipcRenderer.on("bean-browser:open-downloads", listener);
     return () => ipcRenderer.removeListener("bean-browser:open-downloads", listener);
+  },
+  onRequestCloseTab: (callback) => {
+    const listener = (_event, tabId) => callback(tabId);
+    ipcRenderer.on("bean-browser:request-close-tab", listener);
+    return () => ipcRenderer.removeListener("bean-browser:request-close-tab", listener);
   },
   onOpenUrlTab: (callback) => {
     const listener = (_event, url) => callback(url);
@@ -117,6 +123,8 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   setDefaultModelProvider: (id) => ipcRenderer.invoke("bean-browser:set-default-model-provider", id),
   setDownloadDirectory: (directory) => ipcRenderer.invoke("bean-browser:set-download-directory", directory),
   setPageZoom: (factor) => ipcRenderer.invoke("bean-browser:set-page-zoom", factor),
+  setSiteHygiene: (value) => ipcRenderer.invoke("bean-browser:set-site-hygiene", value),
+  setFullWidth: (enabled) => ipcRenderer.invoke("bean-browser:set-full-width", enabled),
   copyPassword: (id) => ipcRenderer.invoke("bean-browser:copy-password", id),
   deletePassword: (id) => ipcRenderer.invoke("bean-browser:delete-password", id),
   deleteModelProvider: (id) => ipcRenderer.invoke("bean-browser:delete-model-provider", id),

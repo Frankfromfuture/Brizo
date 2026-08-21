@@ -163,7 +163,7 @@ async function settle(webContents, timeout = 8_000) {
 
 async function findLoginModalDismissTarget(webContents) {
   if (!webContents || webContents.isDestroyed()) return null;
-  return await webContents.executeJavaScript(`
+  const target = await webContents.executeJavaScript(`
     (() => {
       const loginPattern = ${LOGIN_MODAL_PATTERN.toString()};
       const dismissPattern = ${LOGIN_DISMISS_PATTERN.toString()};
@@ -242,6 +242,12 @@ async function findLoginModalDismissTarget(webContents) {
       return scored.sort((left, right) => right.score - left.score)[0] || null;
     })()
   `);
+  return target
+    && Number.isFinite(Number(target.x))
+    && Number.isFinite(Number(target.y))
+    && String(target.label || "").trim()
+    ? target
+    : null;
 }
 
 async function dismissLoginModal(webContents, target) {
@@ -704,7 +710,7 @@ export async function runBrowserCommandAgent({ command, onProgress = () => {}, p
     const loginDismissTarget = await findLoginModalDismissTarget(webContents);
     if (loginDismissTarget) {
       const loginDismissFingerprint = JSON.stringify([
-        webContents.getURL(),
+        typeof webContents.getURL === "function" ? webContents.getURL() : "",
         loginDismissTarget.label,
         loginDismissTarget.x,
         loginDismissTarget.y,
