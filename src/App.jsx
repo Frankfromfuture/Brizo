@@ -38,7 +38,6 @@ import {
   EyeSlash,
   FilePdf,
   Flask,
-  FolderSimple,
   FolderOpen,
   GearSix,
   GlobeHemisphereWest,
@@ -71,7 +70,7 @@ import {
   Trash,
   X,
 } from "@phosphor-icons/react";
-import { BorderBeam } from "border-beam";
+import { BrizoBorderBeam } from "./components/BrizoBorderBeam.jsx";
 import { ArrowLeftIcon } from "./components/remocn/icon-arrow-left";
 import { ArrowRightIcon } from "./components/remocn/icon-arrow-right";
 import { BookmarkIcon } from "./components/remocn/icon-bookmark";
@@ -86,6 +85,7 @@ import { CompassIcon } from "./components/remocn/icon-compass";
 import { SoftBlurIn } from "./components/remocn/soft-blur-in";
 import { RemocnSelect } from "./components/remocn/RemocnSelect";
 import { NewTabParticleBackground } from "./components/NewTabParticleBackground";
+import { BookmarkFolderIcon } from "./components/BookmarkFolderIcon.jsx";
 import brizoLogoUrl from "../logo.svg";
 import brizoWordLogoUrl from "../logo word.svg";
 import logoPicUrl from "../logo pic.svg";
@@ -103,22 +103,16 @@ import { shouldUseLightForeground } from "../shared/page-color.mjs";
 import {
   canonicalizeUrl,
   createSearchShareUrl,
-  isZhihuSource,
   languageForInput,
   matchesRequestedLanguage,
   queryFromSearchShareUrl,
 } from "../shared/search-text.mjs";
-import { BookmarkSemanticIcon } from "./BookmarkSemanticIcon.jsx";
 
 const LazyBriefPage = lazy(() => import("./BriefPage.jsx").then((module) => ({ default: module.BriefPage })));
 
+const IDLE_BENCHMARK_MODE = window.location.hash === "#idle-benchmark";
 const NEW_TAB_CHROME_COLOR = "rgb(252, 250, 250)";
-const BOOKMARK_FOLDER_HOVER_DELAY_MS = 45;
-const BOOKMARK_SIDEBAR_EXPAND_MS = 140;
 const BOOKMARK_CASCADE_EXIT_DELAY_MS = 650;
-const BOOKMARK_FLYOUT_ROW_HEIGHT = 35;
-const BOOKMARK_FLYOUT_WIDTH = 180;
-const BOOKMARK_FLYOUT_VIEWPORT_INSET = 8;
 
 const BROWSER_ERROR_COPY = {
   401: ["需要授权", "请登录或取得授权后再访问。", "Sign in or request access to view this page."],
@@ -399,65 +393,7 @@ function looksLikePdfInput(value) {
   }
 }
 
-const browserSuggestionCache = new Map();
-const BROWSER_SUGGESTION_CACHE_TTL = 5 * 60 * 1000;
-
-function requestJsonpSuggestions({ callbackParam, endpoint, params, scriptCharset }) {
-  return new Promise((resolve) => {
-    const callbackName = `__brizoSuggest${Date.now()}${Math.random().toString(36).slice(2)}`;
-    const script = document.createElement("script");
-    const finish = (suggestions) => {
-      window.clearTimeout(timeout);
-      script.remove();
-      delete window[callbackName];
-      resolve(Array.isArray(suggestions) ? suggestions : []);
-    };
-    const timeout = window.setTimeout(() => finish([]), 3500);
-    window[callbackName] = (payload) => finish(payload?.[1] || payload?.s);
-    script.onerror = () => finish([]);
-    if (scriptCharset) script.charset = scriptCharset;
-    const query = new URLSearchParams({ ...params, [callbackParam]: callbackName });
-    script.src = `${endpoint}?${query}`;
-    document.head.appendChild(script);
-  });
-}
-
-async function requestBrowserSuggestions(input) {
-  const inputLanguage = languageForInput(input);
-  const cacheKey = `${inputLanguage}:${String(input || "").trim().toLocaleLowerCase()}`;
-  const cached = browserSuggestionCache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return cached.suggestions;
-  let suggestions;
-  if (inputLanguage === "zh") {
-    suggestions = await requestJsonpSuggestions({
-      callbackParam: "cb",
-      endpoint: "https://suggestion.baidu.com/su",
-      params: { wd: input },
-      scriptCharset: "gbk",
-    });
-  } else {
-    suggestions = await requestJsonpSuggestions({
-      callbackParam: "JsonCallback",
-      endpoint: "https://api.bing.com/osjson.aspx",
-      params: {
-        JsonType: "callback",
-        language: inputLanguage === "ja" ? "ja-JP" : inputLanguage === "ko" ? "ko-KR" : "en-US",
-        query: input,
-      },
-    });
-  }
-  suggestions = suggestions.filter((item) => matchesRequestedLanguage(item, inputLanguage));
-  browserSuggestionCache.set(cacheKey, {
-    suggestions,
-    expiresAt: Date.now() + BROWSER_SUGGESTION_CACHE_TTL,
-  });
-  if (browserSuggestionCache.size > 200) {
-    browserSuggestionCache.delete(browserSuggestionCache.keys().next().value);
-  }
-  return suggestions;
-}
-
-function newTabSuggestionsFor(rawInput, bookmarks, tabs, history, onlineSuggestions) {
+function newTabSuggestionsFor(rawInput, bookmarks, tabs, history) {
   const input = rawInput.trim();
   if (!input) return [];
   const websiteMatches = addressSuggestionsFor(input, bookmarks, tabs);
@@ -482,9 +418,8 @@ function newTabSuggestionsFor(rawInput, bookmarks, tabs, history, onlineSuggesti
       return rightPrefix - leftPrefix || right.count - left.count || right.updatedAt - left.updatedAt;
     })
     .map((item) => ({ title: "你的记录", type: "query", value: item.query }));
-  const onlineMatches = onlineSuggestions.map((value) => ({ title: "热门联想", type: "query", value }));
   const seen = new Set();
-  return [...historyMatches, ...onlineMatches].filter((item) => {
+  return historyMatches.filter((item) => {
     const key = item.value.trim().toLocaleLowerCase();
     if (!key || seen.has(key)) return false;
     seen.add(key);
@@ -507,7 +442,7 @@ function createSearchHistorySnapshot(result) {
           ...item,
           title: String(item?.title || "").slice(0, 500),
           url: String(item?.url || "").slice(0, 4_000),
-          imageUrl: String(item?.imageUrl || item?.thumbnailUrl || "").slice(0, 4_000),
+          imageUrl: "",
         })) : [],
       }))
       : [],
@@ -522,7 +457,7 @@ function createSearchHistorySnapshot(result) {
       ? result.entityImages.slice(0, 3).map((item) => ({
         authority: String(item?.authority || "").slice(0, 40),
         domain: String(item?.domain || "").slice(0, 300),
-        imageUrl: String(item?.imageUrl || item?.thumbnailUrl || "").slice(0, 4_000),
+        imageUrl: "",
         source: String(item?.source || "").slice(0, 300),
         title: String(item?.title || "").slice(0, 500),
         url: String(item?.url || "").slice(0, 4_000),
@@ -535,7 +470,7 @@ function createSearchHistorySnapshot(result) {
     sources: Array.isArray(result.sources)
       ? result.sources.slice(0, 12).map((source) => ({
         domain: String(source?.domain || "").slice(0, 300),
-        imageUrl: String(source?.imageUrl || "").slice(0, 4_000),
+        imageUrl: "",
         rank: Number.isInteger(source?.rank) ? source.rank : null,
         snippet: String(source?.snippet || "").slice(0, 2_000),
         title: String(source?.title || "").slice(0, 500),
@@ -756,7 +691,7 @@ function SearchEntityImages({ entity, images, onOpenSource }) {
 
 function SourceFavicon({ className = "", source }) {
   const [failed, setFailed] = useState(false);
-  const faviconUrl = source.imageUrl || getDefaultBookmarkFaviconUrl(source.url);
+  const faviconUrl = /^(?:data:image\/|blob:)/iu.test(source.imageUrl || "") ? source.imageUrl : "";
   const fallback = (source.domain || source.title || "网").slice(0, 1).toUpperCase();
   return (
     <span className={className}>
@@ -770,7 +705,7 @@ function SourceFavicon({ className = "", source }) {
 function SearchSources({ expanded, id, onOpenSource, onToggle, sources }) {
   const rankedSources = useMemo(() => sources.map((source, citationIndex) => ({
     ...source,
-    citationIndex: citationIndex + 1,
+    citationIndex: Number.isInteger(source?.rank) ? source.rank + 1 : citationIndex + 1,
     displayRank: Number.isInteger(source?.rank) ? source.rank : citationIndex,
   })).sort((left, right) => left.displayRank - right.displayRank), [sources]);
   const visibleSources = expanded ? rankedSources : rankedSources.slice(0, 3);
@@ -1235,7 +1170,7 @@ function SearchLoadingState({ label, startedAt }) {
   );
 }
 
-function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, initialMode = "ask", initialPrompt, initialUseCommand = "", onNotify, onOpenSource, onRestoreHistory, onSearchComplete, onSubmit, onUseSubmit, prefillPrompt = "", restoredResult = null, tabs, useExecutionSpace = false, useTodayGreeting }) {
+function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, initialContextTab = null, initialMode = "ask", initialPrompt, initialUseCommand = "", onNotify, onOpenSource, onRestoreHistory, onSearchComplete, onSubmit, onUseSubmit, prefillPrompt = "", restoredResult = null, tabs, useExecutionSpace = false, useTodayGreeting }) {
   const [greeting] = useState(() => {
     const pair = NEW_TAB_GREETINGS[Math.floor(Math.random() * NEW_TAB_GREETINGS.length)];
     return pair[useTodayGreeting ? 0 : 1];
@@ -1243,9 +1178,8 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
   const [prompt, setPrompt] = useState(prefillPrompt || initialUseCommand || restoredResult?.query || "");
   const [commandMode, setCommandMode] = useState(initialMode === "use" ? "use" : "ask");
   const [promptFocused, setPromptFocused] = useState(false);
-  const [onlineSuggestions, setOnlineSuggestions] = useState([]);
   const [attachments, setAttachments] = useState([]);
-  const [contextTab, setContextTab] = useState(null);
+  const [contextTab, setContextTab] = useState(() => initialContextTab);
   const [tabMenuOpen, setTabMenuOpen] = useState(false);
   const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
   const model = availableModels[0] || "";
@@ -1264,7 +1198,6 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
   }] : []);
   const [sourcesExpanded, setSourcesExpanded] = useState(false);
   const [resultPdfExporting, setResultPdfExporting] = useState(false);
-  const fileInputRef = useRef(null);
   const historyMenuRef = useRef(null);
   const promptInputRef = useRef(null);
   const resultsRef = useRef(null);
@@ -1284,27 +1217,10 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
     .slice(0, 3);
   const promptSuggestions = useMemo(
     () => commandMode === "ask" && promptFocused && searchState === "idle"
-      ? newTabSuggestionsFor(prompt, bookmarks, tabs, history, onlineSuggestions)
+      ? newTabSuggestionsFor(prompt, bookmarks, tabs, history)
       : [],
-    [bookmarks, commandMode, history, onlineSuggestions, prompt, promptFocused, searchState, tabs],
+    [bookmarks, commandMode, history, prompt, promptFocused, searchState, tabs],
   );
-
-  useEffect(() => {
-    const query = prompt.trim();
-    setOnlineSuggestions([]);
-    if (commandMode !== "ask" || !promptFocused || searchState !== "idle" || query.length < 2) return undefined;
-    let cancelled = false;
-    const timer = window.setTimeout(async () => {
-      const suggestions = window.beanBrowser?.suggestQueries
-        ? await window.beanBrowser.suggestQueries(query)
-        : await requestBrowserSuggestions(query);
-      if (!cancelled && Array.isArray(suggestions)) setOnlineSuggestions(suggestions);
-    }, 450);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [commandMode, prompt, promptFocused, searchState]);
 
   useEffect(() => {
     if (!historyMenuOpen) return undefined;
@@ -1499,7 +1415,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
     setSourcesExpanded(false);
     followStream.current = true;
     setSearchStage("正在启动检索");
-    const result = await onSubmit({ attachments, contextTab, depth: "fast", model, searchId, tabId: activeTabId, thread: searchThread, value });
+    const result = await onSubmit({ attachments, contextTab, depth: "auto", model, searchId, tabId: activeTabId, thread: searchThread, value });
     if (searchSequence.current !== sequence || result?.status === "navigated") return;
     if (result?.status === "started" || result?.status === "streaming") return;
     activeSearchId.current = "";
@@ -1551,6 +1467,20 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
     setUsePaused(false);
     setSearchState(result?.status === "success" || result?.status === "preview" ? "success" : "error");
     setSearchStage("");
+  };
+
+  const chooseAttachments = async () => {
+    if (!window.beanBrowser?.chooseSearchAttachments) {
+      onNotify?.("本地附件读取仅在 Brizo 桌面版可用");
+      return;
+    }
+    const result = await window.beanBrowser.chooseSearchAttachments();
+    if (result?.status === "cancelled") return;
+    const selected = Array.isArray(result?.attachments) ? result.attachments : [];
+    setAttachments(selected);
+    if (selected.length) onNotify?.(`已选择 ${selected.length} 个本地附件`);
+    const firstError = Array.isArray(result?.errors) ? result.errors[0] : null;
+    if (firstError) onNotify?.(`${firstError.name}：${firstError.message}`);
   };
 
   useEffect(() => {
@@ -1619,7 +1549,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
 
   const hasResults = searchState !== "idle";
   const sourceItems = Array.isArray(searchResult?.sources) ? searchResult.sources : [];
-  const visibleSourceItems = sourceItems.filter((source) => !isZhihuSource(source));
+  const visibleSourceItems = sourceItems;
   const waitingForEvidence = searchState === "loading" && !sourceItems.length && !searchResult?.message;
   const copyText = async (value) => {
     if (window.beanBrowser?.copyText) return await window.beanBrowser.copyText(value);
@@ -1631,7 +1561,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
   };
   const copySearchResult = async () => {
     const sourceText = commandMode === "use" ? "" : visibleSourceItems.map((source, index) =>
-      `[${index + 1}] ${source.title || source.domain || "网页来源"}\n${source.url || ""}`
+      `[${Number.isInteger(source?.rank) ? source.rank + 1 : index + 1}] ${source.title || source.domain || "网页来源"}\n${source.url || ""}`
     ).join("\n\n");
     const text = [searchQuery, searchResult?.message, sourceText ? `来源\n${sourceText}` : ""]
       .filter(Boolean)
@@ -1937,14 +1867,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
           <h1>{greeting}</h1>
         </div>
 
-        <BorderBeam
-          className="new-tab-beam"
-          size="md"
-          colorVariant="colorful"
-          theme="light"
-          strength={0.7}
-          borderRadius={10}
-        >
+        <BrizoBorderBeam active={active} className="new-tab-beam">
           <form className={`new-tab-command-surface is-${commandMode}-mode`} onSubmit={submitPrompt}>
           <NewTabCommandLight active={active && !hasResults} />
           <div className="new-tab-prompt-row">
@@ -2010,7 +1933,6 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
                       onChange={() => {
                         setCommandMode(mode);
                         setTabMenuOpen(false);
-                        setOnlineSuggestions([]);
                         window.requestAnimationFrame(() => promptInputRef.current?.focus());
                       }}
                     />
@@ -2020,22 +1942,13 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
               </div>
 
               <div className={`new-tab-ask-tools${commandMode === "ask" ? " is-visible" : ""}`} aria-hidden={commandMode !== "ask"}>
-                <input
-                  ref={fileInputRef}
-                  className="new-tab-file-input"
-                  type="file"
-                  multiple
-                  accept="image/*,.pdf,.txt,.md,.doc,.docx"
-                  tabIndex={commandMode === "ask" ? 0 : -1}
-                  onChange={(event) => setAttachments(Array.from(event.target.files || []))}
-                />
                 <button
                   className={attachments.length ? "new-tab-tool-button has-selection" : "new-tab-tool-button"}
                   type="button"
                   tabIndex={commandMode === "ask" ? 0 : -1}
-                  aria-label="插入文件或图片"
-                  title={attachments.length ? `已插入 ${attachments.length} 个文件` : "插入文件或图片"}
-                  onClick={() => fileInputRef.current?.click()}
+                  aria-label="插入本地文档"
+                  title={attachments.length ? `已选择 ${attachments.length} 个文档` : "插入 PDF 或文本文件"}
+                  onClick={() => void chooseAttachments()}
                 >
                   <Paperclip size={20} />
                   {attachments.length > 0 && <span className="new-tab-tool-count">{attachments.length}</span>}
@@ -2106,13 +2019,13 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
                 {commandMode === "use" && (searchState === "loading" || searchState === "streaming")
                   ? (usePaused ? <Play size={18} weight="fill" /> : <Pause size={18} weight="fill" />)
                   : commandMode === "ask"
-                    ? <SparklesIcon className="new-tab-submit-sparkles" size={20.4} strokeWidth={1.9} />
+                    ? <SparklesIcon className="new-tab-submit-sparkles" size={20.4} softLoop={active} strokeWidth={1.9} />
                     : <MonitorIcon className="new-tab-submit-monitor" size={20.4} strokeWidth={1.9} />}
               </button>
             </div>
           </div>
           </form>
-        </BorderBeam>
+        </BrizoBorderBeam>
       </div>
       {!hasResults && (
         <SoftBlurIn
@@ -2693,7 +2606,7 @@ function HorizontalBookmarksBar({
               })}
               onDragEnd={onDragEnd}
             >
-              <FolderSimple size={18} weight="fill" />
+              <BookmarkFolderIcon size={18} aria-hidden="true" />
               <span>{folderName}</span>
               <CaretDown size={10} weight="bold" />
             </button>
@@ -2754,7 +2667,7 @@ function HorizontalBookmarksBar({
                         })}
                         onDragEnd={onDragEnd}
                       >
-                        <FolderSimple size={18} weight="fill" />
+                        <BookmarkFolderIcon size={18} aria-hidden="true" />
                         <span className="bookmarks-bar-dropdown-folder-name"><span>{subFolderName}</span></span>
                         <CaretRight size={11} weight="bold" />
                       </button>
@@ -3052,7 +2965,7 @@ function BookmarkDropdownCascade({
               })}
               onDragEnd={onDragEnd}
             >
-              <FolderSimple size={18} weight="fill" />
+              <BookmarkFolderIcon size={18} aria-hidden="true" />
               <span className="bookmarks-bar-dropdown-folder-name"><span>{subFolderName}</span></span>
               <CaretRight size={11} weight="bold" />
             </button>
@@ -3265,7 +3178,7 @@ function BookmarkManagerTree({ bookmarks, expanded, folder, folders, onDragEnd, 
               className={`bookmark-organizer-caret${hasChildren ? "" : " is-empty"}`}
               onClick={(event) => { event.stopPropagation(); if (hasChildren) onToggle(path); }}
             >{hasChildren ? (isExpanded ? <CaretDown size={11} /> : <CaretRight size={11} />) : null}</span>
-            {folder === path ? <FolderOpen size={17} weight="fill" /> : <FolderSimple size={17} />}
+            {folder === path ? <FolderOpen size={17} weight="fill" /> : <BookmarkFolderIcon size={17} aria-hidden="true" />}
             <span>{name}</span>
             <small>{count}</small>
           </button>
@@ -3287,7 +3200,7 @@ function BookmarkManagerTree({ bookmarks, expanded, folder, folders, onDragEnd, 
         onDrop={(event) => { event.preventDefault(); event.stopPropagation(); onDrop(""); }}
       >
         <span className="bookmark-organizer-caret is-empty" />
-        {folder === "" ? <FolderOpen size={17} weight="fill" /> : <FolderSimple size={17} />}
+        {folder === "" ? <FolderOpen size={17} weight="fill" /> : <BookmarkFolderIcon size={17} aria-hidden="true" />}
         <span>书签栏</span>
         <small>{rootCount}</small>
       </button>
@@ -3410,271 +3323,6 @@ function buildBookmarkTree(bookmarks) {
   return root;
 }
 
-function BookmarkTree({
-  canExpandFolders = true,
-  depth = 0,
-  dragItem,
-  dropTarget,
-  expandedFolders,
-  folderOrders,
-  node,
-  onDragEnd,
-  onDragOverTarget,
-  onDragStart,
-  onDropTarget,
-  onEdit,
-  onOpen,
-  onToggle,
-  onCascadePointerEnter,
-  onCascadePointerLeave,
-  path = "",
-  folderIconIds = {},
-  readOnly = false,
-}) {
-  const [flyoutPositions, setFlyoutPositions] = useState({});
-  const folderHoverTimer = useRef(0);
-  const pendingFolderPath = useRef("");
-
-  useEffect(() => () => window.clearTimeout(folderHoverTimer.current), []);
-  const manualFolderOrder = folderOrders[path] || [];
-  const manualFolderRanks = new Map(
-    manualFolderOrder.map((folderName, index) => [folderName, index]),
-  );
-  const folders = Object.entries(node.folders).sort(
-    ([leftName, leftNode], [rightName, rightNode]) => {
-      const leftRank = manualFolderRanks.get(leftName);
-      const rightRank = manualFolderRanks.get(rightName);
-      if (leftRank !== undefined || rightRank !== undefined) {
-        if (leftRank === undefined) return 1;
-        if (rightRank === undefined) return -1;
-        return leftRank - rightRank;
-      }
-      return leftNode.sourceOrder - rightNode.sourceOrder;
-    },
-  );
-  const bookmarks = [...node.bookmarks].sort(compareBookmarks);
-
-  const getDropClass = (targetKey) => {
-    if (dropTarget?.key !== targetKey) return "";
-    return `is-drop-${dropTarget.position}`;
-  };
-
-  const openFolderFlyout = (target, folderPath, folderNode, delay = 0) => {
-    window.clearTimeout(folderHoverTimer.current);
-    pendingFolderPath.current = folderPath;
-    folderHoverTimer.current = window.setTimeout(() => {
-      if (
-        pendingFolderPath.current !== folderPath
-        || !target?.isConnected
-        || (delay > 0 && !target.matches(":hover"))
-      ) return;
-      // Measure only when the menu is about to open. The bookmark rail may still
-      // be animating when pointerenter fires, and measuring that stale width is
-      // what previously sent a first nested flyout below its parent.
-      const rect = target.getBoundingClientRect();
-      const maxHeight = Math.max(160, Math.floor(window.innerHeight / 2));
-      const itemCount = folderNode.bookmarks.length + Object.keys(folderNode.folders).length;
-      const naturalHeight = itemCount * BOOKMARK_FLYOUT_ROW_HEIGHT + 6;
-      const menuHeight = Math.min(naturalHeight, maxHeight);
-      const top = Math.round(Math.max(
-        BOOKMARK_FLYOUT_VIEWPORT_INSET,
-        Math.min(
-          rect.top - 2,
-          window.innerHeight - menuHeight - BOOKMARK_FLYOUT_VIEWPORT_INSET,
-        ),
-      ));
-      const preferredLeft = Math.round(rect.right - 2);
-      const opensRight = preferredLeft + BOOKMARK_FLYOUT_WIDTH + BOOKMARK_FLYOUT_VIEWPORT_INSET
-        <= window.innerWidth;
-      const left = opensRight
-        ? preferredLeft
-        : Math.max(
-          BOOKMARK_FLYOUT_VIEWPORT_INSET,
-          Math.round(rect.left - BOOKMARK_FLYOUT_WIDTH + 2),
-        );
-      setFlyoutPositions((current) => ({
-        ...current,
-        [folderPath]: {
-          "--bookmark-flyout-origin": opensRight ? "left top" : "right top",
-          bottom: "auto",
-          left,
-          maxHeight,
-          top,
-        },
-      }));
-      onToggle(folderPath, true);
-    }, delay);
-  };
-
-  const renderBookmarks = () => bookmarks.map((bookmark) => (
-    <button
-      className={`bookmark-link-row ${getDropClass(`bookmark:${bookmark.url}`)} ${
-        dragItem?.type === "bookmark" && dragItem.url === bookmark.url ? "is-dragging" : ""
-      }`}
-      style={{ "--bookmark-depth": depth }}
-      type="button"
-      key={bookmark.url}
-      title={bookmark.title}
-      draggable={!readOnly}
-      onDragEnd={readOnly ? undefined : onDragEnd}
-      onDragOver={readOnly ? undefined : (event) => onDragOverTarget(event, {
-        folder: bookmark.folder,
-        key: `bookmark:${bookmark.url}`,
-        type: "bookmark",
-        url: bookmark.url,
-      })}
-      onDragStart={readOnly ? undefined : (event) => onDragStart(event, {
-        folder: bookmark.folder,
-        title: bookmark.title,
-        type: "bookmark",
-        url: bookmark.url,
-      })}
-      onDrop={readOnly ? undefined : (event) => onDropTarget(event, {
-        folder: bookmark.folder,
-        key: `bookmark:${bookmark.url}`,
-        type: "bookmark",
-        url: bookmark.url,
-      })}
-      onContextMenu={readOnly ? undefined : (event) => onEdit(event, {
-        bookmark,
-        type: "bookmark",
-      })}
-      onPointerEnter={() => onToggle(bookmark.folder || "", true)}
-      onClick={() => onOpen(bookmark)}
-    >
-      <BookmarkFavicon bookmark={bookmark} />
-      <span className="bookmark-tree-copy">{bookmark.title}</span>
-    </button>
-  ));
-
-  return (
-    <>
-      {depth === 0 && renderBookmarks()}
-      {folders.map(([folderName, folderNode]) => {
-        const folderPath = path ? `${path} / ${folderName}` : folderName;
-        const isExpanded = canExpandFolders && expandedFolders.has(folderPath);
-        return (
-          <div className="bookmark-tree-node" key={folderPath}>
-            <button
-              className={`bookmark-folder-row ${getDropClass(`folder:${folderPath}`)} ${
-                dragItem?.type === "folder" && dragItem.path === folderPath ? "is-dragging" : ""
-              }`}
-              style={{ "--bookmark-depth": depth }}
-              type="button"
-              aria-expanded={isExpanded}
-              draggable={!readOnly}
-              onDragEnd={readOnly ? undefined : onDragEnd}
-              onDragOver={readOnly ? undefined : (event) => onDragOverTarget(event, {
-                key: `folder:${folderPath}`,
-                path: folderPath,
-                type: "folder",
-              })}
-              onDragStart={readOnly ? undefined : (event) => onDragStart(event, {
-                path: folderPath,
-                type: "folder",
-              })}
-              onDrop={readOnly ? undefined : (event) => onDropTarget(event, {
-                key: `folder:${folderPath}`,
-                path: folderPath,
-                type: "folder",
-              })}
-              onContextMenu={readOnly ? undefined : (event) => {
-                window.clearTimeout(folderHoverTimer.current);
-                onEdit(event, {
-                  path: folderPath,
-                  type: "folder",
-                });
-              }}
-              onPointerEnter={(event) => {
-                if (!canExpandFolders) return;
-                openFolderFlyout(
-                  event.currentTarget,
-                  folderPath,
-                  folderNode,
-                  BOOKMARK_FOLDER_HOVER_DELAY_MS,
-                );
-              }}
-              onPointerMove={(event) => {
-                if (
-                  !canExpandFolders
-                  || isExpanded
-                  || pendingFolderPath.current === folderPath
-                ) return;
-                openFolderFlyout(
-                  event.currentTarget,
-                  folderPath,
-                  folderNode,
-                  BOOKMARK_FOLDER_HOVER_DELAY_MS,
-                );
-              }}
-              onPointerLeave={() => {
-                pendingFolderPath.current = "";
-                window.clearTimeout(folderHoverTimer.current);
-              }}
-              onClick={(event) => {
-                if (canExpandFolders) {
-                  openFolderFlyout(event.currentTarget, folderPath, folderNode, 0);
-                }
-              }}
-            >
-              {folderIconIds[folderPath]
-                ? <BookmarkSemanticIcon active={isExpanded} id={folderIconIds[folderPath]} size={18} />
-                : isExpanded
-                  ? <FolderOpen size={17} weight="fill" />
-                  : <FolderSimple size={17} weight="fill" />}
-              <span className="bookmark-tree-copy">{folderName}</span>
-            </button>
-            {isExpanded && (() => {
-              const flyout = (
-                <div
-                  className="bookmark-folder-flyout"
-                  role="menu"
-                  style={{
-                    ...flyoutPositions[folderPath],
-                    zIndex: 90 + depth,
-                  }}
-                  onPointerEnter={depth > 0 ? onCascadePointerEnter : undefined}
-                  onPointerLeave={depth > 0 ? onCascadePointerLeave : undefined}
-                >
-                  <BookmarkTree
-                    canExpandFolders={canExpandFolders}
-                    depth={depth + 1}
-                    dragItem={dragItem}
-                    dropTarget={dropTarget}
-                    expandedFolders={expandedFolders}
-                    folderOrders={folderOrders}
-                    node={folderNode}
-                    onDragEnd={onDragEnd}
-                    onDragOverTarget={onDragOverTarget}
-                    onDragStart={onDragStart}
-                    onDropTarget={onDropTarget}
-                    onEdit={onEdit}
-                    onOpen={onOpen}
-                    onToggle={onToggle}
-                    onCascadePointerEnter={onCascadePointerEnter}
-                    onCascadePointerLeave={onCascadePointerLeave}
-                    path={folderPath}
-                    folderIconIds={folderIconIds}
-                    readOnly={readOnly}
-                  />
-                </div>
-              );
-              // A nested flyout cannot stay inside an overflowing parent menu:
-              // browsers clip it before the pointer can reach the next level.
-              // Portal it to the app root while retaining the same React cascade.
-              const portalRoot = typeof document === "undefined"
-                ? null
-                : document.getElementById("root");
-              return depth > 0 && portalRoot ? createPortal(flyout, portalRoot) : flyout;
-            })()}
-          </div>
-        );
-      })}
-      {depth > 0 && renderBookmarks()}
-    </>
-  );
-}
-
 export function App() {
   const browserApi = window.beanBrowser;
   const desktopMode = Boolean(browserApi);
@@ -3704,6 +3352,7 @@ export function App() {
     }
   });
   const [activeTab, setActiveTab] = useState(() => {
+    if (IDLE_BENCHMARK_MODE) return "pinned-brizo";
     try {
       const saved = JSON.parse(localStorage.getItem("bean:open-tabs") || "null");
       return saved?.find((t) => !t.isPinned)?.id || saved?.[0]?.id || "tab-maps";
@@ -3780,7 +3429,6 @@ export function App() {
     }
     setTabContextMenu(null);
   };
-  const [query, setQuery] = useState("");
   const [addressText, setAddressText] = useState(() => formatAddressForDisplay(initialAddress));
   const [searchHistory, setSearchHistory] = useState(() => {
     try {
@@ -3802,14 +3450,14 @@ export function App() {
   const [appPreferences, setAppPreferences] = useState(() => {
     try {
       return {
-        autoUpdate: true,
         autoFitZoom: false,
         downloadLocation: "",
         language: "zh-CN",
+        pilotAssist: true,
         ...JSON.parse(localStorage.getItem("bean:app-preferences") || "{}"),
       };
     } catch {
-      return { autoUpdate: true, autoFitZoom: false, downloadLocation: "", language: "zh-CN" };
+      return { autoFitZoom: false, downloadLocation: "", language: "zh-CN", pilotAssist: true };
     }
   });
   const [siteHygienePreferences, setSiteHygienePreferences] = useState({
@@ -3821,8 +3469,6 @@ export function App() {
   });
   const [addressFocused, setAddressFocused] = useState(false);
   const [addressInputDirty, setAddressInputDirty] = useState(false);
-  const [addressOnlineSuggestions, setAddressOnlineSuggestions] = useState([]);
-  const [aiOpen, setAiOpen] = useState(false);
   const [downloads, setDownloads] = useState([]);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [downloadIconActivityKey, setDownloadIconActivityKey] = useState(0);
@@ -3868,17 +3514,6 @@ export function App() {
   const [systemUsesDarkAppearance, setSystemUsesDarkAppearance] = useState(() => (
     window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false
   ));
-  const [bookmarkView, setBookmarkView] = useState(() => {
-    return window.localStorage.getItem("bean:bookmark-view") === "smart" ? "smart" : "traditional";
-  });
-  const [smartBookmarkConsent, setSmartBookmarkConsent] = useState(() => (
-    window.localStorage.getItem("bean:smart-bookmark-consent") === "accepted"
-  ));
-  const [smartBookmarkSnapshot, setSmartBookmarkSnapshot] = useState(null);
-  const [smartBookmarkProgress, setSmartBookmarkProgress] = useState(null);
-  const [smartBookmarkStatus, setSmartBookmarkStatus] = useState("idle");
-  const [smartBookmarkMessage, setSmartBookmarkMessage] = useState("");
-  const [smartBookmarkLookup, setSmartBookmarkLookup] = useState({});
   const [browserPreview, setBrowserPreview] = useState("");
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [settingsMenuLevel, setSettingsMenuLevel] = useState("root");
@@ -4018,7 +3653,6 @@ export function App() {
   const topTabsBarRef = useRef(null);
   const tabHistoryRef = useRef(null);
   const modelGuardDockRef = useRef(null);
-  const smartBookmarkSyncInFlight = useRef(false);
   const sidebarActivationTimer = useRef(0);
   const sidebarCollapseTimer = useRef(0);
   const webContentHost = useRef(null);
@@ -4331,39 +3965,6 @@ export function App() {
     return () => appearanceQuery.removeEventListener("change", syncAppearance);
   }, []);
 
-  const selectBookmarkView = (view) => {
-    setBookmarkView(view);
-    window.localStorage.setItem("bean:bookmark-view", view);
-    setExpandedFolders(new Set());
-    if (view === "smart" && smartBookmarkConsent && !smartBookmarkSnapshot) {
-      window.setTimeout(() => syncSmartBookmarks(false), 0);
-    }
-  };
-
-  async function syncSmartBookmarks(forceFull = false) {
-    if (!browserApi?.syncSmartBookmarks) {
-      setSmartBookmarkStatus("desktop-only");
-      setSmartBookmarkMessage("智能整理仅在 Brizo 桌面版中可用。");
-      return;
-    }
-    if (smartBookmarkSyncInFlight.current) return;
-    smartBookmarkSyncInFlight.current = true;
-    setSmartBookmarkStatus("loading");
-    setSmartBookmarkMessage("");
-    try {
-      const result = await browserApi.syncSmartBookmarks({
-        bookmarks: bookmarkLibrary,
-        forceFull,
-        history: browserHistory,
-      }).catch(() => ({ status: "error", message: "智能整理暂时不可用。" }));
-      if (result?.snapshot) setSmartBookmarkSnapshot(result.snapshot);
-      setSmartBookmarkStatus(result?.status || "error");
-      setSmartBookmarkMessage(result?.message || "");
-    } finally {
-      smartBookmarkSyncInFlight.current = false;
-    }
-  }
-
   const addressSuggestions = useMemo(() => {
     if (!addressFocused || !addressInputDirty) return [];
     if (looksLikeWebsiteInput(addressText)) {
@@ -4376,9 +3977,8 @@ export function App() {
       bookmarkLibrary,
       tabs,
       searchHistory,
-      addressOnlineSuggestions,
     );
-  }, [addressFocused, addressInputDirty, addressOnlineSuggestions, addressText, bookmarkLibrary, searchHistory, tabs]);
+  }, [addressFocused, addressInputDirty, addressText, bookmarkLibrary, searchHistory, tabs]);
 
   useEffect(() => {
     window.cancelAnimationFrame(addressLoadAnimation.current);
@@ -4442,22 +4042,6 @@ export function App() {
   }, [navigationState.isLoading]);
 
   useEffect(() => {
-    const query = addressText.trim();
-    setAddressOnlineSuggestions([]);
-    if (!addressFocused || !addressInputDirty || looksLikeWebsiteInput(query) || query.length < 2) return undefined;
-    let cancelled = false;
-    const timer = window.setTimeout(async () => {
-      const suggestions = window.beanBrowser?.suggestQueries
-        ? await window.beanBrowser.suggestQueries(query)
-        : await requestBrowserSuggestions(query);
-      if (!cancelled && Array.isArray(suggestions)) setAddressOnlineSuggestions(suggestions);
-    }, 450);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [addressFocused, addressInputDirty, addressText]);
-  useEffect(() => {
     if (!addressFocused || !addressInputDirty || !looksLikeWebsiteInput(addressText)) return undefined;
     const timer = window.setTimeout(() => browserApi?.preconnect?.(addressText), 120);
     return () => window.clearTimeout(timer);
@@ -4466,32 +4050,11 @@ export function App() {
     () => buildBookmarkTree(filteredBookmarkLibrary),
     [filteredBookmarkLibrary],
   );
-  const smartBookmarkView = useMemo(() => {
-    if (!smartBookmarkSnapshot?.folders?.length) return null;
-    const library = [];
-    const folderOrders = { "": smartBookmarkSnapshot.folders.map((folder) => folder.label) };
-    const folderIconIds = {};
-    for (const industry of smartBookmarkSnapshot.folders) {
-      folderIconIds[industry.label] = industry.iconId;
-      folderOrders[industry.label] = industry.children.map((folder) => folder.label);
-      for (const functionality of industry.children) {
-        const folderPath = `${industry.label} / ${functionality.label}`;
-        folderIconIds[folderPath] = functionality.iconId;
-        functionality.bookmarkKeys.forEach((key, index) => {
-          const bookmark = smartBookmarkLookup[key];
-          if (!bookmark) return;
-          library.push({ ...bookmark, folder: folderPath, manualOrder: index });
-        });
-      }
-    }
-    return { folderIconIds, folderOrders, tree: buildBookmarkTree(library) };
-  }, [smartBookmarkLookup, smartBookmarkSnapshot]);
   const visibleExpandedFolders = expandedFolders;
   const bookmarkCascadeOpen = expandedFolders.size > 0;
   const browserShellOverlayOpen = bookmarkCascadeOpen
     || bookmarkEditorOpen
     || Boolean(bookmarkContextEditor)
-    || aiOpen
     || downloadsOpen
     || sidebarHistoryOpen
     || Boolean(tabContextMenu)
@@ -4504,64 +4067,6 @@ export function App() {
     window.clearTimeout(sidebarActivationTimer.current);
     window.clearTimeout(sidebarCollapseTimer.current);
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all(bookmarkLibrary.map(async (bookmark) => {
-      try {
-        const url = new URL(bookmark.url);
-        url.hash = "";
-        for (const key of [...url.searchParams.keys()]) {
-          if (/^(utm_|fbclid$|gclid$|mc_cid$|mc_eid$|ref$|source$)/i.test(key)) url.searchParams.delete(key);
-        }
-        if (url.pathname !== "/") url.pathname = url.pathname.replace(/\/+$/, "");
-        url.hostname = url.hostname.toLowerCase().replace(/^www\./, "");
-        const bytes = new TextEncoder().encode(url.href);
-        const digest = await window.crypto.subtle.digest("SHA-256", bytes);
-        const key = [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
-        return [key, bookmark];
-      } catch {
-        return null;
-      }
-    })).then((entries) => {
-      if (!cancelled) setSmartBookmarkLookup(Object.fromEntries(entries.filter(Boolean)));
-    });
-    return () => { cancelled = true; };
-  }, [bookmarkLibrary]);
-
-  useEffect(() => {
-    if (!browserApi?.getSmartBookmarkSnapshot) return undefined;
-    let cancelled = false;
-    browserApi.getSmartBookmarkSnapshot().then((snapshot) => {
-      if (!cancelled && snapshot) setSmartBookmarkSnapshot(snapshot);
-    });
-    return () => { cancelled = true; };
-  }, [browserApi]);
-
-  useEffect(() => {
-    if (!browserApi?.onSmartBookmarkProgress) return undefined;
-    return browserApi.onSmartBookmarkProgress((progress) => {
-      setSmartBookmarkProgress(progress);
-      if (progress?.snapshot) setSmartBookmarkSnapshot(progress.snapshot);
-    });
-  }, [browserApi]);
-
-  useEffect(() => {
-    if (
-      bookmarkView === "smart"
-      && smartBookmarkConsent
-      && !smartBookmarkSnapshot
-      && smartBookmarkStatus === "idle"
-    ) {
-      void syncSmartBookmarks(false);
-    }
-  }, [bookmarkView, smartBookmarkConsent, smartBookmarkSnapshot, smartBookmarkStatus]);
-
-  useEffect(() => {
-    if (!smartBookmarkConsent || !smartBookmarkSnapshot || !browserApi?.syncSmartBookmarks) return undefined;
-    const timer = window.setTimeout(() => syncSmartBookmarks(false), 1_500);
-    return () => window.clearTimeout(timer);
-  }, [bookmarkLibrary, browserHistory]);
 
   useEffect(() => {
     if (!modelGuardMenuOpen) return undefined;
@@ -5733,7 +5238,6 @@ export function App() {
       shortTitle: searchTitle,
       title: searchTitle,
     } : tab));
-    setQuery(value);
     const contextCount = attachments.length + (contextTab ? 1 : 0);
     if (contextCount) {
       showToast(`${model} · 已加入 ${contextCount} 项上下文`);
@@ -5743,13 +5247,14 @@ export function App() {
     if (browserApi?.startSearch) {
       result = await browserApi.startSearch({
         context: {
-          attachmentNames: attachments.map((file) => file.name).slice(0, 8),
+          attachmentTokens: attachments.map((file) => file.token).filter(Boolean).slice(0, 8),
           tab: contextTab ? { id: contextTab.id, title: contextTab.title, url: contextTab.url } : null,
         },
         depth,
         model,
         query: value,
         searchId,
+        tabId,
         thread,
       });
     } else {
@@ -5819,7 +5324,6 @@ export function App() {
       shortTitle: searchTitle,
       title: searchTitle,
     } : tab));
-    setQuery(restoredQuery);
   };
 
   const openNewTabSource = (url) => {
@@ -5878,11 +5382,6 @@ export function App() {
     if (restoreNewTabSession()) return;
     if (desktopMode) browserApi.back();
     else showToast("Back");
-  };
-
-  const submitSearch = (event) => {
-    event.preventDefault();
-    setAiOpen(true);
   };
 
   const exportArticlePdf = async () => {
@@ -6644,6 +6143,35 @@ export function App() {
     selectArticle(nextTab);
   };
 
+  const openPilotForCurrentPage = () => {
+    if (!currentArticle || !/^https?:\/\//i.test(currentPageUrl)) {
+      showToast("Pilot 需要一个已打开的网页");
+      return;
+    }
+    const sourceTab = {
+      id: currentArticle.id,
+      title: navigationState.title || currentArticle.title || currentPageUrl,
+      url: currentPageUrl,
+    };
+    const nextTab = {
+      domain: "brizo",
+      id: `pilot-tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      initialContextTab: sourceTab,
+      initialPrompt: "请阅读并核验我插入的当前网页：先用五句话以内给出核心结论，再列出关键事实与数字、证据不足或可能误导之处，最后给出三个可执行的下一步。明确区分网页原文、外部核验与推断。",
+      isNewTab: true,
+      shortTitle: "Pilot: 阅读当前页",
+      title: "Pilot: 阅读当前页",
+      url: "",
+      useTodayGreeting: false,
+    };
+    setTabs((currentTabs) => [nextTab, ...currentTabs]);
+    setActiveSurface("tab");
+    setActiveTab(nextTab.id);
+    addressEditing.current = false;
+    addressValue.current = "";
+    setAddressText("");
+  };
+
   const openBrief = () => {
     const existing = tabs.find((tab) => tab.id === "pinned-brief" || tab.isBrief || tab.url === "brizo://brief");
     const tabId = existing?.id || "pinned-brief";
@@ -7256,7 +6784,7 @@ export function App() {
                           >
                             {selected
                               ? <FolderOpen size={15} weight="fill" aria-hidden="true" />
-                              : <FolderSimple size={15} weight="fill" aria-hidden="true" />}
+                              : <BookmarkFolderIcon size={15} aria-hidden="true" />}
                             <span>{folder.name}</span>
                             {selected ? <Check size={12} weight="bold" aria-hidden="true" /> : null}
                           </button>
@@ -7404,6 +6932,16 @@ export function App() {
             </form>
 
             <div className="browser-actions">
+              {appPreferences.pilotAssist !== false && !briefOpen && !newTabOpen && !bookmarksPageOpen && !navigationState.isPdf && (
+                <IconButton
+                  label="用 Brizo Pilot 阅读当前页"
+                  className="pilot-action-button"
+                  disabled={navigationState.isLoading || Boolean(navigationState.error) || !/^https?:\/\//i.test(currentPageUrl)}
+                  onClick={openPilotForCurrentPage}
+                >
+                  <SparklesIcon className="remocn-toolbar-icon" size={19} strokeWidth={1.8} />
+                </IconButton>
+              )}
               <div className={`bookmark-control${bookmarkEditorOpen ? " is-open" : ""}`}>
                 <IconButton
                   label={currentBookmark ? "编辑书签" : "添加书签"}
@@ -7491,7 +7029,7 @@ export function App() {
                                     >
                                       {selected
                                         ? <FolderOpen size={15} weight="fill" aria-hidden="true" />
-                                        : <FolderSimple size={15} weight="fill" aria-hidden="true" />}
+                                        : <BookmarkFolderIcon size={15} aria-hidden="true" />}
                                       <span>{folder.name}</span>
                                       {selected ? <Check size={12} weight="bold" aria-hidden="true" /> : null}
                                     </button>
@@ -7898,24 +7436,19 @@ export function App() {
                           />
                         </div>
                         <label className="preference-row">
-                          <span><strong>智能收藏夹</strong></span>
-                          <input
-                            type="checkbox"
-                            checked={smartBookmarkConsent}
-                            onChange={(event) => {
-                              const enabled = event.target.checked;
-                              setSmartBookmarkConsent(enabled);
-                              window.localStorage.setItem("bean:smart-bookmark-consent", enabled ? "accepted" : "declined");
-                              if (enabled) void syncSmartBookmarks(false);
-                            }}
-                          />
-                        </label>
-                        <label className="preference-row">
                           <span><strong>登录信息智能填充</strong></span>
                           <input
                             type="checkbox"
                             checked={siteHygienePreferences.credentialAutofill !== false}
                             onChange={(event) => void updateSiteHygiene({ credentialAutofill: event.target.checked })}
+                          />
+                        </label>
+                        <label className="preference-row">
+                          <span><strong>Pilot 阅读入口</strong></span>
+                          <input
+                            type="checkbox"
+                            checked={appPreferences.pilotAssist !== false}
+                            onChange={(event) => setAppPreferences((current) => ({ ...current, pilotAssist: event.target.checked }))}
                           />
                         </label>
                         {currentSiteOrigin && (
@@ -7976,12 +7509,8 @@ export function App() {
 
                       <section className="preference-section">
                         <h3><Compass size={14} />关于</h3>
-                        <label className="preference-row">
-                          <span><strong>自动更新</strong></span>
-                          <input type="checkbox" checked={appPreferences.autoUpdate} onChange={(event) => setAppPreferences((current) => ({ ...current, autoUpdate: event.target.checked }))} />
-                        </label>
                         <button type="button" className="preference-destination" onClick={() => openSettingsPanel("about")}>
-                          <span>{appInfo?.version || "Brizo 0.0.0"}</span><CaretRight size={14} />
+                          <span>Brizo {appInfo?.version || "0.0.0"}</span><CaretRight size={14} />
                         </button>
                       </section>
                     </div>
@@ -8050,6 +7579,7 @@ export function App() {
                 bookmarks={bookmarkLibrary}
                 history={searchHistory}
                 initialMode={tab.initialMode || "ask"}
+                initialContextTab={tab.initialContextTab || null}
                 initialPrompt={tab.initialPrompt || ""}
                 initialUseCommand={tab.initialUseCommand || ""}
                 onNotify={showToast}
@@ -8087,6 +7617,19 @@ export function App() {
                 aria-hidden="true"
               />
             )}
+            {navigationState.isLoading
+              && !navigationState.isContentReady
+              && !navigationState.navigationPreview
+              && !navigationState.error && (
+                <div
+                  className="browser-navigation-loading"
+                  aria-label="网页加载中"
+                  aria-live="polite"
+                  role="status"
+                >
+                  <i aria-hidden="true" />
+                </div>
+              )}
             {navigationState.error && (
               <div className="browser-error-page" aria-label="网页读取失败" aria-live="polite" role="status">
                 <div className="browser-error-content">
@@ -8108,45 +7651,6 @@ export function App() {
         ) : null)}
         </div>
 
-        {aiOpen && (
-          <div className="ai-layer" role="dialog" aria-modal="true" aria-label="Brizo AI search">
-            <button className="ai-backdrop" type="button" aria-label="Close AI search" onClick={() => setAiOpen(false)} />
-            <div className="ai-panel">
-              <header>
-                <div className="ai-title"><Sparkle size={19} weight="fill" /> Ask Brizo</div>
-                <IconButton label="Close AI search" onClick={() => setAiOpen(false)}>
-                  <X size={18} />
-                </IconButton>
-              </header>
-              <div className="ai-query">
-                <MagnifyingGlass size={20} />
-                <input
-                  autoFocus
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Ask across the web and your saved sources"
-                />
-              </div>
-              <div className="ai-answer">
-                <span className="answer-label"><Sparkle size={15} /> Suggested answer</span>
-                <p>
-                  StructureNet improves protein prediction by preserving fine-grained geometric relationships,
-                  particularly around flexible loops and ligand-binding sites.
-                </p>
-                <div className="source-row">
-                  <SiteIcon id={1} />
-                  <div><strong>Current Nature article</strong><small>Open tab · cited twice</small></div>
-                  <CaretRight size={17} />
-                </div>
-                <div className="source-row">
-                  <BookmarkSimple size={20} />
-                  <div><strong>5 related saved sources</strong><small>Research space</small></div>
-                  <CaretRight size={17} />
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
       </section>
 
       {settingsPanel === "history" && (
@@ -8283,11 +7787,11 @@ export function App() {
               <button type="button" onClick={chooseDownloadLocation}>选择…</button>
             </div>
             <label className="preference-row">
-              <span><strong>自动更新</strong></span>
+              <span><strong>Pilot 阅读入口</strong><small>仅在点击后读取当前页</small></span>
               <input
                 type="checkbox"
-                checked={appPreferences.autoUpdate}
-                onChange={(event) => setAppPreferences((current) => ({ ...current, autoUpdate: event.target.checked }))}
+                checked={appPreferences.pilotAssist !== false}
+                onChange={(event) => setAppPreferences((current) => ({ ...current, pilotAssist: event.target.checked }))}
               />
             </label>
             <label className="preference-row">
@@ -8447,7 +7951,7 @@ export function App() {
                   {bookmarkManageChildFolders.map((path) => (
                     <div className="bookmark-manage-row is-folder" key={path} draggable onDragStart={(event) => { setBookmarkManageDragItem({ type: "folder", path }); event.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => setBookmarkManageDragItem(null)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDrop={(event) => { event.preventDefault(); event.stopPropagation(); dropManagedItem({ type: "folder", path, position: "before" }); }}>
                       <span className="bookmark-organizer-folder-spacer" />
-                      <button className="bookmark-manage-main" type="button" onDoubleClick={() => setBookmarkManageFolder(path)}><FolderSimple size={18} /><span><strong>{folderNameFromPath(path)}</strong><small>文件夹</small></span></button>
+                      <button className="bookmark-manage-main" type="button" onDoubleClick={() => setBookmarkManageFolder(path)}><BookmarkFolderIcon size={18} aria-hidden="true" /><span><strong>{folderNameFromPath(path)}</strong><small>文件夹</small></span></button>
                       <span />
                       <button type="button" aria-label={`打开 ${folderNameFromPath(path)}`} onClick={() => setBookmarkManageFolder(path)}><CaretRight size={15} /></button>
                     </div>
@@ -8636,10 +8140,12 @@ export function App() {
               <div><dt>Electron</dt><dd>{appInfo?.electron || "—"}</dd></div>
               <div><dt>Chromium</dt><dd>{appInfo?.chrome || "—"}</dd></div>
               <div><dt>Privacy</dt><dd>Remote permissions denied by default</dd></div>
+              <div><dt>Updates</dt><dd>Manual signed release</dd></div>
             </dl>
             <p>
               Private windows use an isolated in-memory browser session. Bookmark imports and
-              screenshots stay on this Mac unless you choose to move them.
+              screenshots stay on this Mac unless you choose to move them. Automatic updates are
+              not advertised until a signed release feed is configured.
             </p>
           </div>
         </SettingsDialog>

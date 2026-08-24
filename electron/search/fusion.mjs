@@ -118,6 +118,13 @@ export function sourceAuthorityTier(result, query = "") {
   return 2;
 }
 
+/** Authority is a relevance feature, not a hard partition. */
+export function authorityTierFactor(tier) {
+  if (tier === 0) return 1.28;
+  if (tier === 1) return 1.1;
+  return 1;
+}
+
 /**
  * Okapi BM25 over a single result's searchable text, scaled into a bounded
  * multiplier. `b = 0.75` is the length-normalization term that keeps a long summary
@@ -252,25 +259,26 @@ export function fuseResults(results, {
   });
   const averageLength = lengths.reduce((sum, value) => sum + value, 0) / (lengths.length || 1);
 
-  const scored = deduped.map((result) => ({
-    ...result,
-    authorityTier: sourceAuthorityTier(result, query),
-    score: baseRrfScore(result)
-      * bm25Factor(queryTokens, result, averageLength)
-      * recencyFactor(result, freshness, now)
-      * authorityFactor(result.domain)
-      * agreementFactor(result)
-      * blockFactor(result, blocks)
-      * groundingFactor(result),
-  }));
+  const scored = deduped.map((result) => {
+    const authorityTier = sourceAuthorityTier(result, query);
+    return {
+      ...result,
+      authorityTier,
+      score: baseRrfScore(result)
+        * bm25Factor(queryTokens, result, averageLength)
+        * recencyFactor(result, freshness, now)
+        * authorityFactor(result.domain)
+        * authorityTierFactor(authorityTier)
+        * agreementFactor(result)
+        * blockFactor(result, blocks)
+        * groundingFactor(result),
+    };
+  });
 
   scored.sort((left, right) => right.score - left.score);
 
   // An external reranker may reorder, but must never add or drop results.
   const ordered = applyRerankOrder(scored, rerankOrder);
-  // Array#sort is stable in supported Chromium/Node runtimes, so this strict tier
-  // partition preserves relevance or reranker order within each authority class.
-  ordered.sort((left, right) => left.authorityTier - right.authorityTier);
   const clustered = clusterByTitle(ordered);
 
   const domainCounts = new Map();

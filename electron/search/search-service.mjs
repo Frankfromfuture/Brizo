@@ -9,6 +9,9 @@ import {
 import { FRESHNESS_TO_BOCHA } from "./bocha-client.mjs";
 import { fuseResults, isEntityOfficialSource, sourceAuthorityTier } from "./fusion.mjs";
 import { FRESHNESS_TO_TBS } from "./serper-client.mjs";
+import { isPrimarySourceQueryCandidate } from "./answer-engine.mjs";
+import { auditAnswerCitations, selectRelevantPassages } from "./evidence.mjs";
+import { makeResult } from "./normalize.mjs";
 
 const DEPTH_SCRAPE_COUNT = { fast: 0, balanced: 3, deep: 7 };
 const TRUSTED_ENTITY_IMAGE_DOMAINS = new Set([
@@ -125,7 +128,7 @@ export function selectEntityImages(items, { entity, query, ranked = [] } = {}) {
         && !(Number(item?.height) > 0 && Number(item?.height) < 140)
         && (!(Number(item?.width) > 0 && Number(item?.height) > 0)
           || (Number(item.width) / Number(item.height) <= 4 && Number(item.width) / Number(item.height) >= 0.25));
-      if (!/^https?:\/\//i.test(imageUrl) || !/^https?:\/\//i.test(url) || !usableSize) return null;
+      if (!/^https:\/\//i.test(imageUrl) || !/^https?:\/\//i.test(url) || !usableSize) return null;
       if (INVALID_ENTITY_IMAGE_HINTS.test(imageHint) || /\.(?:svg|ico)(?:[?#]|$)/iu.test(imageUrl)) return null;
       if ([...COMMUNITY_ENTITY_IMAGE_DOMAINS].some((candidate) => domainMatches(domain, candidate))) return null;
       if (!official && !(namesEntity && (institutional || trustedReference || authoritativeMedia || corroboratedDomain))) return null;
@@ -153,43 +156,6 @@ export function selectEntityImages(items, { entity, query, ranked = [] } = {}) {
     .map(({ score: _score, ...item }) => item);
 }
 
-async function imageUrlIsReadable(url, signal) {
-  if (!/^https?:\/\//i.test(url)) return false;
-  const controller = new AbortController();
-  const abort = () => controller.abort(signal?.reason);
-  signal?.addEventListener("abort", abort, { once: true });
-  const timer = setTimeout(() => controller.abort(), 4_000);
-  try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "image/*", Range: "bytes=0-4095" },
-      redirect: "follow",
-      signal: controller.signal,
-    });
-    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
-    if (!response.ok || !contentType.startsWith("image/")) return false;
-    const bytes = await response.arrayBuffer();
-    if (bytes.byteLength < 256) return false;
-    const prefix = new TextDecoder().decode(bytes.slice(0, 64)).trim().toLowerCase();
-    return !prefix.startsWith("<html") && !prefix.startsWith("<!doctype");
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", abort);
-  }
-}
-
-export async function validateEntityImages(items, { signal } = {}) {
-  const output = [];
-  for (const item of Array.isArray(items) ? items : []) {
-    const imageUrl = item?.imageUrl || item?.thumbnailUrl;
-    if (await imageUrlIsReadable(imageUrl, signal)) output.push(item);
-    if (output.length >= 3) break;
-  }
-  return output;
-}
-
 function entityImageQuery(entity, language) {
   if (!isEntityVisualEligible(entity)) return "";
   if (entity.kind === "person") {
@@ -214,21 +180,6 @@ function publicSource(result) {
     imageUrl: result.faviconUrl || result.imageUrl || "",
     rank: Number.isInteger(result.displayRank) ? result.displayRank : null,
     evidence: result.bodySource,
-  };
-}
-
-function validateCitations(answer, sources) {
-  let grounded = false;
-  const cleaned = answer.replace(/\[(\d+)\]/g, (match, raw) => {
-    const index = Number(raw) - 1;
-    if (!Number.isInteger(index) || index < 0 || index >= sources.length) return "";
-    grounded = true;
-    return match;
-  });
-  return {
-    answer: cleaned,
-    sources,
-    grounded,
   };
 }
 
@@ -264,8 +215,15 @@ function languageTextFor(item) {
 
 function keepRequestedLanguage(items, language, query = "") {
   return (Array.isArray(items) ? items : [])
-    .filter((item) => matchesRequestedLanguage(languageTextFor(item), language)
-      || isEntityOfficialSource(item, query));
+    .filter((item) => {
+      const text = languageTextFor(item);
+      if (matchesRequestedLanguage(text, language) || isEntityOfficialSource(item, query)) return true;
+      if (sourceAuthorityTier(item, query) !== 0) return false;
+      const explicitlyPlannedPrimarySource = (Array.isArray(item?.hits) ? item.hits : [])
+        .some((hit) => !matchesRequestedLanguage(hit?.query, language)
+          && isPrimarySourceQueryCandidate(hit?.query, language));
+      return explicitlyPlannedPrimarySource || tokenSimilarity(text, query) >= 0.12;
+    });
 }
 
 export function officialIntentQuery(query) {
@@ -284,6 +242,9 @@ export function createSearchService({
   scrapeCache,
   hasServiceKey,
   getLocalResults = async () => [],
+  localizeSearchCards = async (cards) => cards,
+  localizeSearchImages = async (images) => images,
+  localizeSearchSources = async (sources) => sources,
   logger = console,
   retrievalTimeoutMs = 20_000,
 }) {
@@ -299,11 +260,12 @@ export function createSearchService({
       const contextLabel = payload?.context?.tab?.url
         ? `${safeText(payload.context.tab.title || payload.context.tab.url, 300)} (${safeText(payload.context.tab.url, 2_000)})`
         : "";
+      const attachmentContext = safeText(payload?.context?.attachmentText, 100_000);
       const threadContext = (Array.isArray(payload?.thread) ? payload.thread : []).slice(-3).map((turn) => [
         `Earlier question: ${safeText(turn?.query, 800)}`,
         `Earlier answer: ${safeText(turn?.answer, 3_000)}`,
       ].join("\n")).join("\n\n");
-      const researchContext = [contextLabel, threadContext].filter(Boolean).join("\n\n");
+      const researchContext = [contextLabel, attachmentContext, threadContext].filter(Boolean).join("\n\n");
 
       emit({ type: "stage", stage: "planning", detail: "正在理解问题并规划检索" });
       const planningStartedAt = Date.now();
@@ -316,7 +278,7 @@ export function createSearchService({
       const requestedLanguage = languageForInput(query);
       const plannedQueries = (Array.isArray(planned?.queries) ? planned.queries : [])
         .map((item) => safeText(item, 180))
-        .filter((item) => item && matchesRequestedLanguage(item, requestedLanguage));
+        .filter((item) => item && isPrimarySourceQueryCandidate(item, requestedLanguage));
       const officialQuery = officialIntentQuery(query);
       const plan = {
         ...planned,
@@ -343,10 +305,7 @@ export function createSearchService({
       const effectiveRetrievalTimeoutMs = plan.depth === "fast"
         ? Math.min(retrievalTimeoutMs, 8_000)
         : retrievalTimeoutMs;
-      const retrievalTimeout = setTimeout(
-        () => retrievalController.abort(new Error("retrieval_stage_timeout")),
-        effectiveRetrievalTimeoutMs,
-      );
+      let retrievalTimeout;
       const retrievalSignal = retrievalController.signal;
       const tasks = [];
       const taskProviders = [];
@@ -395,9 +354,24 @@ export function createSearchService({
         })
         : Promise.resolve([]);
       const localPromise = getLocalResults(payload, plan, retrievalSignal).catch(() => []);
-      const settled = await Promise.allSettled(tasks);
-      clearTimeout(retrievalTimeout);
-      signal?.removeEventListener("abort", abortRetrieval);
+      let settled;
+      let resolvedLocalResults;
+      try {
+        [settled, resolvedLocalResults] = await Promise.race([
+          Promise.all([Promise.allSettled(tasks), localPromise]),
+          new Promise((_, reject) => {
+            retrievalTimeout = setTimeout(() => {
+              const error = new Error("检索阶段超时（timed out），已停止仍未响应的数据源。");
+              error.code = "retrieval_stage_timeout";
+              retrievalController.abort(error);
+              reject(error);
+            }, effectiveRetrievalTimeoutMs);
+          }),
+        ]);
+      } finally {
+        clearTimeout(retrievalTimeout);
+        signal?.removeEventListener("abort", abortRetrieval);
+      }
       const fulfilled = settled.filter((item) => item.status === "fulfilled").map((item) => item.value);
       const retrievalProviders = settled.map((item, index) => ({
         provider: taskProviders[index],
@@ -411,7 +385,7 @@ export function createSearchService({
         ({ value }) => value.results || value.groups?.flat() || [],
       );
       const retrievalResults = keepRequestedLanguage(unfilteredRetrievalResults, requestedLanguage, query);
-      const localResults = keepRequestedLanguage(await localPromise, requestedLanguage, query);
+      const localResults = keepRequestedLanguage(resolvedLocalResults, requestedLanguage, query);
       const serperResult = fulfilled.find((item) => item.provider === "serper")?.value;
       const bochaResult = fulfilled.find((item) => item.provider === "bocha")?.value;
 
@@ -434,27 +408,51 @@ export function createSearchService({
 
       const resolvedVisualEntity = resolveEntityKind(visualEntity, query, ranked);
 
-      const rawEntityImages = [
-        ...await entityImagesPromise,
-        ...(bochaResult?.images || []),
-      ];
-      const selectedEntityImages = selectEntityImages(rawEntityImages, { entity: resolvedVisualEntity, query, ranked });
-      const entityImages = await validateEntityImages(selectedEntityImages, { signal });
-      logger.info?.("[search-entity-images]", {
-        entityKind: resolvedVisualEntity?.kind || "none",
-        eligible: Boolean(resolvedVisualEntity),
-        candidates: rawEntityImages.length,
-        selected: selectedEntityImages.length,
-        readable: entityImages.length,
-      });
-      if (entityImages.length) emit({ type: "entity-images", entity: resolvedVisualEntity, images: entityImages });
+      const entityImagesTask = (async () => {
+        const rawEntityImages = [
+          ...await entityImagesPromise,
+          ...(bochaResult?.images || []),
+        ];
+        const selectedEntityImages = selectEntityImages(rawEntityImages, { entity: resolvedVisualEntity, query, ranked });
+        // The main-process localizer performs HTTPS-only DNS pinning, response
+        // validation, size limits, and caching. Do not preflight these
+        // provider-owned URLs with an unrestricted fetch.
+        const rendererImages = await localizeSearchImages(selectedEntityImages);
+        logger.info?.("[search-entity-images]", {
+          entityKind: resolvedVisualEntity?.kind || "none",
+          eligible: Boolean(resolvedVisualEntity),
+          candidates: rawEntityImages.length,
+          selected: selectedEntityImages.length,
+          readable: rendererImages.length,
+        });
+        if (rendererImages.length) emit({ type: "entity-images", entity: resolvedVisualEntity, images: rendererImages });
+        return rendererImages;
+      })();
 
       const cards = [];
+      const verticalEvidence = [];
       if (serperConfigured && plan.vertical !== "web") {
         try {
           const vertical = await serper.vertical(plan.vertical, plan.queries[0], { ...locale, signal });
           const items = keepRequestedLanguage(vertical.items, requestedLanguage, query);
-          if (items.length) cards.push({ kind: vertical.kind, items });
+          if (items.length) {
+            cards.push({ kind: vertical.kind, items });
+            items.forEach((item, index) => {
+              const url = safeText(item?.url || item?.link, 4_000);
+              if (!/^https?:\/\//iu.test(url)) return;
+              verticalEvidence.push(makeResult({
+                url,
+                title: item?.title || item?.name,
+                snippet: item?.snippet || item?.description || item?.publicationInfo,
+                summary: item?.summary,
+                publishedAt: item?.publishedAt || item?.date,
+                publishedConfidence: item?.publishedAt || item?.date ? 0.85 : 0,
+                imageUrl: item?.imageUrl || item?.thumbnailUrl,
+                siteName: item?.source || item?.siteName,
+                hits: [{ provider: `serper-${vertical.kind}`, rank: index, query: plan.queries[0] }],
+              }));
+            });
+          }
         } catch (error) {
           logger.warn?.("[search-vertical]", error?.message || error);
         }
@@ -462,8 +460,21 @@ export function createSearchService({
         const items = keepRequestedLanguage(bochaResult.images, requestedLanguage);
         if (items.length) cards.push({ kind: "images", items });
       }
-      if (cards.length) emit({ type: "cards", cards });
-      emit({ type: "sources", sources: ranked.map(publicSource), count: ranked.length });
+      const rendererCards = cards.length ? await localizeSearchCards(cards) : [];
+      if (rendererCards.length) emit({ type: "cards", cards: rendererCards });
+      if (verticalEvidence.length) {
+        ranked = fuseResults([...ranked, ...verticalEvidence], {
+          query,
+          freshness: plan.freshness,
+          blocks: serperResult?.blocks,
+          limit: plan.depth === "deep" ? 12 : 10,
+        }).map((result, index) => ({ ...result, displayRank: index }));
+      }
+      emit({
+        type: "sources",
+        sources: await localizeSearchSources(ranked.map(publicSource)),
+        count: ranked.length,
+      });
       retrievalDurationMs = Date.now() - retrievalStartedAt;
 
       const scrapeCount = serperConfigured ? DEPTH_SCRAPE_COUNT[plan.depth] || 0 : 0;
@@ -473,13 +484,27 @@ export function createSearchService({
         const enriched = await mapWithConcurrency(ranked.slice(0, scrapeCount), 3, async (result) => {
           const cached = await scrapeCache.get(result.url);
           if (cached?.markdown || cached?.text) {
-            return { ...result, body: (cached.markdown || cached.text).slice(0, 24_000), bodySource: "scrape" };
+            return {
+              ...result,
+              body: selectRelevantPassages(cached.markdown || cached.text, query, {
+                maxPassages: plan.depth === "deep" ? 8 : 5,
+                maxChars: plan.depth === "deep" ? 12_000 : 8_000,
+              }),
+              bodySource: "scrape",
+            };
           }
           try {
             const scraped = await serper.scrape(result.url, { signal });
             if (scraped.markdown || scraped.text) {
               await scrapeCache.set(result.url, scraped);
-              return { ...result, body: (scraped.markdown || scraped.text).slice(0, 24_000), bodySource: "scrape" };
+              return {
+                ...result,
+                body: selectRelevantPassages(scraped.markdown || scraped.text, query, {
+                  maxPassages: plan.depth === "deep" ? 8 : 5,
+                  maxChars: plan.depth === "deep" ? 12_000 : 8_000,
+                }),
+                bodySource: "scrape",
+              };
             }
           } catch (error) {
             logger.warn?.("[search-scrape]", result.domain, error?.message || error);
@@ -493,7 +518,11 @@ export function createSearchService({
           blocks: serperResult?.blocks,
           limit: plan.depth === "deep" ? 12 : 10,
         }).map((result, index) => ({ ...result, displayRank: index }));
-        emit({ type: "sources", sources: ranked.map(publicSource), count: ranked.length });
+        emit({
+          type: "sources",
+          sources: await localizeSearchSources(ranked.map(publicSource)),
+          count: ranked.length,
+        });
         readingDurationMs = Date.now() - readingStartedAt;
       }
 
@@ -537,14 +566,16 @@ export function createSearchService({
         },
         onRetry: () => emit({ type: "stage", stage: "writing", detail: "模型思考模式未关闭，正在切换兼容方式重试" }),
       });
-      const checked = validateCitations(streamed.content || streamedAnswer, ranked);
-      const cleanedAnswer = removeTopLevelMarkdownHeadings(checked.answer);
+      const answerWithoutTopHeading = removeTopLevelMarkdownHeadings(streamed.content || streamedAnswer);
+      const checked = auditAnswerCitations(answerWithoutTopHeading, ranked);
+      const cleanedAnswer = checked.answer.trim();
       if (!matchesRequestedLanguage(cleanedAnswer, requestedLanguage)) {
         throw new Error("生成答案与问题语言不一致，已拦截该答案，请重试。");
       }
-      const sources = checked.sources.map(publicSource);
+      const sources = await localizeSearchSources(ranked.map(publicSource));
       if (!checked.grounded) {
-        emit({ type: "notice", level: "warning", message: "答案已生成，但模型没有给出有效编号引用，请谨慎核对下方来源。" });
+        const coverage = Math.round(checked.coverage * 100);
+        emit({ type: "notice", level: "warning", message: `答案的结构化引用覆盖率为 ${coverage}%，或存在来源未支持的数字；请谨慎核对。` });
       }
       const relatedQuestions = (await (followupsPromise || answerEngine.followups({
         query,
@@ -554,9 +585,10 @@ export function createSearchService({
         signal,
       }))).filter((item) => matchesRequestedLanguage(item, requestedLanguage)).slice(0, 5);
       synthesisDurationMs = Date.now() - synthesisStartedAt;
+      const entityImages = await entityImagesTask;
       const totalDurationMs = Date.now() - searchStartedAt;
 
-      const timingSummary = `[search-timing] 查询: "${query}" | 总耗时: ${totalDurationMs}ms (规划: ${planningDurationMs}ms | 检索: ${retrievalDurationMs}ms${readingDurationMs ? ` | 阅读: ${readingDurationMs}ms` : ""} | 生成: ${synthesisDurationMs}ms)`;
+      const timingSummary = `[search-timing] 字符数: ${query.length} | 总耗时: ${totalDurationMs}ms (规划: ${planningDurationMs}ms | 检索: ${retrievalDurationMs}ms${readingDurationMs ? ` | 阅读: ${readingDurationMs}ms` : ""} | 生成: ${synthesisDurationMs}ms)`;
       logger.info?.(timingSummary);
 
       const result = {
@@ -567,11 +599,20 @@ export function createSearchService({
         relatedQuestions,
         visualEntity: resolvedVisualEntity,
         entityImages,
-        cards,
+        cards: rendererCards,
         depth: plan.depth,
         plan,
         retrievalProviders,
         grounded: checked.grounded,
+        citationAudit: {
+          verificationLevel: checked.verificationLevel,
+          coverage: checked.coverage,
+          precision: checked.precision,
+          claimCount: checked.claimCount,
+          citedClaimCount: checked.citedClaimCount,
+          invalidCitationCount: checked.invalidCitationCount,
+          unsupportedNumericClaimCount: checked.unsupportedNumericClaimCount,
+        },
         degraded: !professionalConfigured,
         timing: {
           totalMs: totalDurationMs,

@@ -7,7 +7,6 @@ import {
   isEntityVisualEligible,
   officialIntentQuery,
   selectEntityImages,
-  validateEntityImages,
 } from "../electron/search/search-service.mjs";
 
 const result = (provider, rank, url, title) => makeResult({
@@ -197,23 +196,6 @@ test("person image matching accepts a one-character search correction from an au
   });
   assert.equal(images.length, 1);
   assert.equal(images[0].authority, "media");
-});
-
-test("entity image URL validation rejects HTML error pages and non-image responses", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => new Response(
-    String(url).includes("bad") ? "<html>404</html>" : new Uint8Array(512),
-    { headers: { "content-type": String(url).includes("bad") ? "text/html" : "image/jpeg" } },
-  );
-  try {
-    const valid = await validateEntityImages([
-      { imageUrl: "https://images.example/bad", url: "https://example.com/bad" },
-      { imageUrl: "https://images.example/good", url: "https://example.com/good" },
-    ]);
-    assert.deepEqual(valid.map((item) => item.imageUrl), ["https://images.example/good"]);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
 });
 
 test("manual depth overrides the planner and controls scraping", async () => {

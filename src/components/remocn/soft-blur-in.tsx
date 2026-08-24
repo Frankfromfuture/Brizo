@@ -98,12 +98,61 @@ export function SoftBlurIn({
       matches.forEach(reveal);
     };
 
-    revealWithin(document.body);
-    const observer = new MutationObserver((mutations) => {
+    const revealMutations = (mutations: MutationRecord[]) => {
       mutations.forEach((mutation) => mutation.addedNodes.forEach(revealWithin));
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    };
+
+    // A one-off selector (the per-new-tab footer, for example) owns only its
+    // component subtree. The default application animator observes #root so it
+    // still covers normal React surfaces without every SoftBlurIn instance
+    // watching the complete document body.
+    const observesApplicationUi = selector === DEFAULT_UI_SELECTOR;
+    const scope = observesApplicationUi ? root.closest("#root") || root : root;
+    revealWithin(scope);
+    const scopeObserver = new MutationObserver(revealMutations);
+    scopeObserver.observe(scope, { childList: true, subtree: true });
+
+    // A few floating menus are intentionally portalled directly under body.
+    // Observe only each live portal root, and detach its observer as soon as the
+    // portal is removed, rather than subscribing to document.body's full tree.
+    const portalObservers = new Map<Element, MutationObserver>();
+    let bodyObserver: MutationObserver | null = null;
+    const stopObservingPortal = (candidate: Node) => {
+      if (!(candidate instanceof Element)) return;
+      portalObservers.get(candidate)?.disconnect();
+      portalObservers.delete(candidate);
+    };
+    const observePortal = (candidate: Node) => {
+      if (
+        !(candidate instanceof Element)
+        || candidate === scope
+        || candidate.contains(scope)
+        || scope.contains(candidate)
+        || portalObservers.has(candidate)
+      ) return;
+      revealWithin(candidate);
+      const portalObserver = new MutationObserver(revealMutations);
+      portalObserver.observe(candidate, { childList: true, subtree: true });
+      portalObservers.set(candidate, portalObserver);
+    };
+
+    if (observesApplicationUi && document.body && scope !== document.body) {
+      bodyObserver = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+          mutation.removedNodes.forEach(stopObservingPortal);
+          mutation.addedNodes.forEach(observePortal);
+        });
+      });
+      bodyObserver.observe(document.body, { childList: true });
+      Array.from(document.body.children).forEach(observePortal);
+    }
+
+    return () => {
+      scopeObserver.disconnect();
+      bodyObserver?.disconnect();
+      portalObservers.forEach((portalObserver) => portalObserver.disconnect());
+      portalObservers.clear();
+    };
   }, [blur, distance, duration, selector, speed, stagger]);
 
   return (

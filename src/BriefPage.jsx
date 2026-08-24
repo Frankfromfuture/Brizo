@@ -9,7 +9,6 @@ import {
   Sparkle,
   X,
 } from "@phosphor-icons/react";
-import { getDefaultBookmarkFaviconUrl } from "../shared/bookmark-folders.mjs";
 
 const GOOGLE_NEWS_PREVIEW_STORIES = [
   {
@@ -122,13 +121,14 @@ export const BIG5_PREVIEW_STORIES = GOOGLE_NEWS_PREVIEW_STORIES;
 export function createBriefPreviewEdition() {
   const stories = GOOGLE_NEWS_PREVIEW_STORIES.map((story, idx) => ({
     ...story,
+    imageUrl: "",
     importance: 0.95 - idx * 0.02,
     score: 1 - idx * 0.03,
     sources: [
       {
         authorityLabel: "权威新闻来源",
         domain: story.domain || "news.google.com",
-        faviconUrl: getDefaultBookmarkFaviconUrl(`https://${story.domain || "news.google.com"}`),
+        faviconUrl: "",
         title: story.sourceName || story.section,
         url: story.url,
       },
@@ -225,9 +225,9 @@ function getSourcePresentation(story, source) {
   const resolvedSource = source || story?.sources?.[0] || {};
   const name = resolvedSource.title || story?.sourceName || resolvedSource.domain || story?.domain || "新闻来源";
   const domain = resolvedSource.domain || story?.domain || "";
-  const origin = /^https?:\/\//i.test(domain) ? domain : domain ? `https://${domain}` : "";
+  const faviconUrl = resolvedSource.faviconUrl || story?.faviconUrl || "";
   return {
-    faviconUrl: resolvedSource.faviconUrl || story?.faviconUrl || getDefaultBookmarkFaviconUrl(origin),
+    faviconUrl: /^(?:data:image\/|blob:)/iu.test(faviconUrl) ? faviconUrl : "",
     name,
   };
 }

@@ -35,7 +35,6 @@ import {
   FileText,
   FirstAid,
   Flask,
-  FolderSimple,
   ForkKnife,
   GameController,
   Gear,
@@ -83,6 +82,7 @@ import {
   Video,
   Wrench,
 } from "@phosphor-icons/react";
+import { BookmarkFolderIcon } from "./components/BookmarkFolderIcon.jsx";
 
 const icon = (id, label, labelZh, category, Icon, keywords = [], legacy = false) => ({
   category,
@@ -111,7 +111,7 @@ export const BOOKMARK_ICON_LIBRARY = [
   icon("document", "Documents", "文档", "knowledge", FileText, ["file", "text"]),
   icon("presentation", "Presentations", "演示", "knowledge", PresentationChart, ["slides", "deck"]),
   icon("bookmark", "Bookmarks", "收藏", "knowledge", BookmarkSimple, ["saved", "favorite"]),
-  icon("folder", "Folder", "文件夹", "knowledge", FolderSimple, ["directory", "collection"]),
+  icon("folder", "Folder", "文件夹", "knowledge", BookmarkFolderIcon, ["directory", "collection"]),
   icon("archive", "Archive", "归档", "knowledge", Archive, ["storage", "history"]),
   icon("link", "Links", "链接", "knowledge", LinkSimple, ["url", "web"]),
   icon("search", "Search", "搜索", "knowledge", MagnifyingGlass, ["find", "query"]),

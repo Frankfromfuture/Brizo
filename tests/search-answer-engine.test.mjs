@@ -150,3 +150,49 @@ test("an explicit abstract-topic plan stays text-only even when the query is sho
   const plan = await engine.plan("人工智能");
   assert.deepEqual(plan.visualEntity, { name: "", kind: "none", confidence: 0 });
 });
+
+test("planning may retain one qualified cross-language primary-source query", async () => {
+  const engine = createAnswerEngine({
+    llm: {
+      async callChat() {
+        return {
+          content: JSON.stringify({
+            language: "zh",
+            intent: "comparison",
+            vertical: "web",
+            freshness: "year",
+            depth: "balanced",
+            queries: [
+              "Electron 43 official release notes",
+              "best browser benchmark opinion",
+            ],
+            visualEntity: { name: "", kind: "none", confidence: 0 },
+          }),
+        };
+      },
+    },
+  });
+  const plan = await engine.plan("Electron 43 有哪些内存改进？");
+  assert.ok(plan.queries.includes("Electron 43 official release notes"));
+  assert.equal(plan.queries.includes("best browser benchmark opinion"), false);
+  assert.equal(plan.language, "zh");
+});
+
+test("a truncated model stream is never accepted as a successful answer", async () => {
+  const engine = createAnswerEngine({
+    llm: {
+      async *streamChat() {
+        yield { type: "content", text: "未完成的答案[1]" };
+        yield { type: "truncated" };
+      },
+    },
+  });
+  await assert.rejects(
+    engine.streamAnswer({
+      query: "问题",
+      plan: { depth: "balanced", language: "zh" },
+      sources: [{ title: "来源", url: "https://example.com", snippet: "证据" }],
+    }),
+    /被截断/,
+  );
+});

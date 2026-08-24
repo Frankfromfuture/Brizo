@@ -228,10 +228,6 @@ async function findProfileBookmarkFiles(basePath) {
   return files;
 }
 
-function siblingHistoryFiles(bookmarkFiles) {
-  return bookmarkFiles.map((filePath) => path.join(path.dirname(filePath), "History"));
-}
-
 async function findAtlasBookmarkFiles() {
   const atlasHost = path.join(
     os.homedir(),
@@ -264,42 +260,36 @@ async function discoverBookmarkSourceFiles() {
       id: "chrome",
       name: "Google Chrome",
       files: chromeFiles,
-      historyFiles: siblingHistoryFiles(chromeFiles),
       parser: parseChromiumBookmarks,
     },
     {
       id: "atlas",
       name: "ChatGPT Atlas",
       files: atlasFiles,
-      historyFiles: siblingHistoryFiles(atlasFiles),
       parser: parseChromiumBookmarks,
     },
     {
       id: "safari",
       name: "Safari",
       files: [path.join(os.homedir(), "Library", "Safari", "Bookmarks.plist")],
-      historyFiles: [path.join(os.homedir(), "Library", "Safari", "History.db")],
       parser: parseSafariBookmarks,
     },
     {
       id: "edge",
       name: "Microsoft Edge",
       files: edgeFiles,
-      historyFiles: siblingHistoryFiles(edgeFiles),
       parser: parseChromiumBookmarks,
     },
     {
       id: "brave",
       name: "Brave",
       files: braveFiles,
-      historyFiles: siblingHistoryFiles(braveFiles),
       parser: parseChromiumBookmarks,
     },
     {
       id: "arc",
       name: "Arc",
       files: arcFiles,
-      historyFiles: siblingHistoryFiles(arcFiles),
       parser: parseChromiumBookmarks,
     },
   ];
@@ -308,13 +298,6 @@ async function discoverBookmarkSourceFiles() {
     definition.files = (
       await Promise.all(
         definition.files.map(async (filePath) => (
-          await exists(filePath) ? filePath : ""
-        )),
-      )
-    ).filter(Boolean);
-    definition.historyFiles = (
-      await Promise.all(
-        (definition.historyFiles || []).map(async (filePath) => (
           await exists(filePath) ? filePath : ""
         )),
       )
@@ -382,25 +365,6 @@ export async function importDetectedBookmarks(sourceIds = []) {
     bookmarks: dedupeBookmarks(imported).slice(0, 5_000),
     errors: [...new Set(errors)],
   };
-}
-
-export async function resolveBookmarkVisitWeights(bookmarks = []) {
-  const definitions = await discoverBookmarkSourceFiles();
-  const urlsBySource = new Map();
-  for (const bookmark of Array.isArray(bookmarks) ? bookmarks.slice(0, 5_000) : []) {
-    if (!bookmark?.source || !bookmark?.url) continue;
-    if (!urlsBySource.has(bookmark.source)) urlsBySource.set(bookmark.source, []);
-    urlsBySource.get(bookmark.source).push(bookmark.url);
-  }
-  const { mergeSourceVisitWeights, readChromiumVisitWeights, readSafariVisitWeights } = await import("./bookmark-history.mjs");
-  const groups = await Promise.all(definitions.map(async (definition) => {
-    const urls = urlsBySource.get(definition.id) || [];
-    if (!urls.length || !definition.historyFiles.length) return [];
-    return definition.id === "safari"
-      ? readSafariVisitWeights(definition.historyFiles, urls)
-      : readChromiumVisitWeights(definition.historyFiles, urls);
-  }));
-  return mergeSourceVisitWeights(groups);
 }
 
 export async function importBookmarksFromHtml(window) {

@@ -119,32 +119,22 @@ try {
   }
 } catch {}
 
+const TOP_EDGE_TRAILING_DELAY_MS = 350;
+const TOP_EDGE_MAX_INTERVAL_MS = 500;
+
 let lastInteractionAt = 0;
 
-function reportPageInteraction(event) {
+function reportPageInteraction(event, interactionType = event.type) {
   if (!event.isTrusted) return;
 
   const now = Date.now();
   if (now - lastInteractionAt < 120) return;
   lastInteractionAt = now;
-  ipcRenderer.send("bean-browser:page-interaction", event.type);
+  ipcRenderer.send("bean-browser:page-interaction", interactionType);
 }
 
 window.addEventListener("pointerdown", reportPageInteraction, true);
 window.addEventListener("mousedown", reportPageInteraction, true);
-window.addEventListener("wheel", reportPageInteraction, {
-  capture: true,
-  passive: true,
-});
-window.addEventListener("touchstart", reportPageInteraction, {
-  capture: true,
-  passive: true,
-});
-window.addEventListener("scroll", reportPageInteraction, {
-  capture: true,
-  passive: true,
-});
-
 let lastSelectionMenuSignature = "";
 function reportCompletedSelection(event) {
   if (event && !event.isTrusted) return;
@@ -175,22 +165,99 @@ window.addEventListener("keyup", (event) => {
 }, true);
 
 let topEdgeChangeTimer = 0;
-function reportTopEdgeChange() {
-  window.clearTimeout(topEdgeChangeTimer);
-  topEdgeChangeTimer = window.setTimeout(() => {
-    ipcRenderer.send("bean-browser:page-interaction", "top-edge-change");
-  }, 180);
+let topEdgeMaxTimer = 0;
+let topEdgeChangePending = false;
+let lastTopEdgeChangeAt = 0;
+let topEdgeStructureObserver = null;
+let topEdgeRootAttributeObserver = null;
+
+function emitTopEdgeChange() {
+  if (!topEdgeChangePending) return;
+  topEdgeChangePending = false;
+  lastTopEdgeChangeAt = Date.now();
+  ipcRenderer.send("bean-browser:page-interaction", "top-edge-change");
 }
 
+function reportTopEdgeChange() {
+  topEdgeChangePending = true;
+  window.clearTimeout(topEdgeChangeTimer);
+  topEdgeChangeTimer = window.setTimeout(() => {
+    topEdgeChangeTimer = 0;
+    if (topEdgeMaxTimer) {
+      window.clearTimeout(topEdgeMaxTimer);
+      topEdgeMaxTimer = 0;
+    }
+    emitTopEdgeChange();
+  }, TOP_EDGE_TRAILING_DELAY_MS);
+
+  if (!topEdgeMaxTimer) {
+    const elapsed = lastTopEdgeChangeAt ? Date.now() - lastTopEdgeChangeAt : 0;
+    const delay = lastTopEdgeChangeAt
+      ? Math.max(0, TOP_EDGE_MAX_INTERVAL_MS - elapsed)
+      : TOP_EDGE_MAX_INTERVAL_MS;
+    topEdgeMaxTimer = window.setTimeout(() => {
+      topEdgeMaxTimer = 0;
+      emitTopEdgeChange();
+    }, delay);
+  }
+}
+
+function reportViewportInteraction(event) {
+  if (!event.isTrusted) return;
+  // Keep trusted-input handling responsive without asking the main process to
+  // sample rendered pixels for every wheel/scroll event.
+  reportPageInteraction(event, "viewport-activity");
+  reportTopEdgeChange();
+}
+
+window.addEventListener("wheel", reportViewportInteraction, {
+  capture: true,
+  passive: true,
+});
+window.addEventListener("touchstart", reportViewportInteraction, {
+  capture: true,
+  passive: true,
+});
+window.addEventListener("scroll", reportViewportInteraction, {
+  capture: true,
+  passive: true,
+});
+window.addEventListener("resize", reportTopEdgeChange, { passive: true });
+
 window.addEventListener("DOMContentLoaded", () => {
-  const observer = new MutationObserver(reportTopEdgeChange);
-  observer.observe(document.documentElement, {
-    attributes: true,
+  // Structure changes can move a surface onto the sampled edge. Attribute
+  // observation is intentionally limited to html/body so animation frameworks
+  // mutating descendant styles every frame cannot wake the sampler continuously.
+  topEdgeStructureObserver = new MutationObserver(reportTopEdgeChange);
+  topEdgeStructureObserver.observe(document.documentElement, {
     childList: true,
     subtree: true,
   });
+  topEdgeRootAttributeObserver = new MutationObserver(reportTopEdgeChange);
+  topEdgeRootAttributeObserver.observe(document.documentElement, {
+    attributeFilter: ["class", "style", "hidden"],
+    attributes: true,
+  });
+  if (document.body) {
+    topEdgeRootAttributeObserver.observe(document.body, {
+      attributeFilter: ["class", "style", "hidden"],
+      attributes: true,
+    });
+  }
   window.addEventListener("load", reportTopEdgeChange, { once: true });
   window.addEventListener("transitionend", reportTopEdgeChange, true);
+}, { once: true });
+
+window.addEventListener("pagehide", () => {
+  topEdgeStructureObserver?.disconnect();
+  topEdgeRootAttributeObserver?.disconnect();
+  topEdgeStructureObserver = null;
+  topEdgeRootAttributeObserver = null;
+  window.clearTimeout(topEdgeChangeTimer);
+  window.clearTimeout(topEdgeMaxTimer);
+  topEdgeChangeTimer = 0;
+  topEdgeMaxTimer = 0;
+  topEdgeChangePending = false;
 }, { once: true });
 
 // Intercept window.close() called by pages to notify browser shell
@@ -492,6 +559,11 @@ let siteHygieneCookieAction = "";
 let lastSiteHygieneReport = "";
 let credentialFormSignature = "";
 let credentialSuggestionHost = null;
+let credentialOptionAuthorization = null;
+let credentialFillAuthorization = null;
+let credentialInteractionGateInstalled = false;
+
+const CREDENTIAL_AUTHORIZATION_WINDOW_MS = 15_000;
 
 function currentSiteHygiene() {
   let origin = "";
@@ -511,8 +583,9 @@ function currentSiteHygiene() {
 }
 
 function visibleHygieneElement(element) {
-  if (!(element instanceof HTMLElement) || !element.isConnected) return false;
-  const style = getComputedStyle(element);
+  if (!element || element.nodeType !== 1 || !element.isConnected) return false;
+  const ownerWindow = element.ownerDocument?.defaultView || window;
+  const style = ownerWindow.getComputedStyle(element);
   if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
   const rect = element.getBoundingClientRect();
   return rect.width >= 16 && rect.height >= 12 && rect.bottom > 0 && rect.right > 0;
@@ -520,6 +593,44 @@ function visibleHygieneElement(element) {
 
 function hygieneText(element, max = 1800) {
   return String(element?.innerText || element?.textContent || "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function hygieneRoots() {
+  const roots = [document];
+  const visited = new Set(roots);
+  for (let rootIndex = 0; rootIndex < roots.length && roots.length < 40; rootIndex += 1) {
+    const root = roots[rootIndex];
+    let scanned = 0;
+    for (const element of root.querySelectorAll?.("*") || []) {
+      scanned += 1;
+      if (scanned > 1_200) break;
+      if (element.shadowRoot && !visited.has(element.shadowRoot)) {
+        visited.add(element.shadowRoot);
+        roots.push(element.shadowRoot);
+      }
+      if (element.tagName !== "IFRAME") continue;
+      try {
+        const frameDocument = element.contentDocument;
+        if (frameDocument && !visited.has(frameDocument)) {
+          visited.add(frameDocument);
+          roots.push(frameDocument);
+        }
+      } catch {}
+      if (roots.length >= 40) break;
+    }
+  }
+  return roots;
+}
+
+function queryHygieneRoots(roots, selector, limit = 80) {
+  const matches = [];
+  for (const root of roots) {
+    for (const element of root.querySelectorAll?.(selector) || []) {
+      matches.push(element);
+      if (matches.length >= limit) return matches;
+    }
+  }
+  return matches;
 }
 
 function restoreHygieneElements() {
@@ -533,7 +644,7 @@ function restoreHygieneElements() {
 }
 
 function hideHygieneElement(element) {
-  if (!(element instanceof HTMLElement) || element.hasAttribute(HYGIENE_HIDDEN_ATTR)) return false;
+  if (!element || element.nodeType !== 1 || element.hasAttribute(HYGIENE_HIDDEN_ATTR)) return false;
   element.setAttribute(HYGIENE_STYLE_ATTR, element.getAttribute("style") || "");
   element.setAttribute(HYGIENE_HIDDEN_ATTR, "");
   element.style.setProperty("display", "none", "important");
@@ -542,11 +653,37 @@ function hideHygieneElement(element) {
 
 function clickCookieChoice(choice) {
   if (choice === "ask" || siteHygieneCookieAction) return false;
+  const roots = hygieneRoots();
+  const knownSelectors = choice === "allow-all" ? [
+    "#onetrust-accept-btn-handler",
+    "#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll",
+    "#didomi-notice-agree-button",
+    "[data-testid='uc-accept-all-button']",
+    "#uc-btn-accept-banner",
+  ] : [
+    "#onetrust-reject-all-handler",
+    "#CybotCookiebotDialogBodyButtonDecline",
+    "#didomi-notice-disagree-button",
+    ".didomi-continue-without-agreeing",
+    "[data-testid='uc-deny-all-button']",
+    "#uc-btn-deny-banner",
+    "[data-consent-action='reject-all']",
+    "[data-gdpr-action='reject-all']",
+  ];
+  for (const selector of knownSelectors) {
+    const target = queryHygieneRoots(roots, selector, 8).find(visibleHygieneElement);
+    if (!target) continue;
+    const contextText = hygieneText(target.closest?.("[role='dialog'], [aria-modal='true'], [id*='cookie' i], [class*='cookie' i], [id*='consent' i], [class*='consent' i]") || target.parentElement, 2_000);
+    if (HYGIENE_PROTECTED_PATTERN.test(contextText)) continue;
+    target.click();
+    siteHygieneCookieAction = choice;
+    return true;
+  }
   const bannerSelectors = [
     "[role='dialog']", "[aria-modal='true']", "[id*='cookie' i]", "[class*='cookie' i]",
     "[id*='consent' i]", "[class*='consent' i]", "[id*='gdpr' i]", "[class*='gdpr' i]",
   ];
-  const banners = [...document.querySelectorAll(bannerSelectors.join(","))].filter((element) => {
+  const banners = queryHygieneRoots(roots, bannerSelectors.join(","), 120).filter((element) => {
     if (!visibleHygieneElement(element)) return false;
     const text = hygieneText(element);
     return HYGIENE_COOKIE_PATTERN.test(text) && !HYGIENE_PROTECTED_PATTERN.test(text);
@@ -628,15 +765,101 @@ function findCredentialFields() {
   return username ? { password, username } : null;
 }
 
-function requestCredentialOptions() {
+function credentialSignature(fields) {
+  const current = currentSiteHygiene();
+  return `${current.origin}\u0000${location.pathname}\u0000${fields.username.name || fields.username.id}\u0000${fields.password.name || fields.password.id}`;
+}
+
+async function credentialFormFingerprint(fields) {
+  if (!fields?.username || !fields?.password) return "";
+  const describeField = (field) => [
+    field.tagName,
+    field.type,
+    field.name,
+    field.id,
+    field.autocomplete,
+    field.formAction,
+    field.formMethod,
+    field.required ? "required" : "optional",
+  ].map((value) => String(value || "")).join("\u0000");
+  const form = fields.password.form || fields.username.form;
+  const source = [
+    credentialSignature(fields),
+    form?.getAttribute("action") || "",
+    form?.getAttribute("method") || "",
+    describeField(fields.username),
+    describeField(fields.password),
+  ].join("\u0001");
+  try {
+    const digest = await globalThis.crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(source),
+    );
+    const hex = [...new Uint8Array(digest)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    return `sha256:${hex}`;
+  } catch {
+    return "";
+  }
+}
+
+function sameCredentialFields(left, right) {
+  return Boolean(left
+    && right
+    && left.username === right.username
+    && left.password === right.password);
+}
+
+function credentialAuthorizationIsValid(authorization, fields) {
+  const current = currentSiteHygiene();
+  return Boolean(authorization
+    && authorization.expiresAt >= Date.now()
+    && authorization.origin === current.origin
+    && authorization.signature === credentialSignature(fields));
+}
+
+async function requestCredentialOptions() {
   const current = currentSiteHygiene();
   if (!current.enabled || !current.credentialAutofill) return;
   const fields = findCredentialFields();
   if (!fields) return;
-  const signature = `${current.origin}\u0000${location.pathname}\u0000${fields.username.name || fields.username.id}\u0000${fields.password.name || fields.password.id}`;
-  if (signature === credentialFormSignature) return;
+  if (!credentialAuthorizationIsValid(credentialOptionAuthorization, fields)) return;
+  const signature = credentialSignature(fields);
+  if (signature === credentialFormSignature && credentialSuggestionHost?.isConnected) return;
+  const formFingerprint = await credentialFormFingerprint(fields);
+  const currentFields = findCredentialFields();
+  if (!formFingerprint
+    || !sameCredentialFields(fields, currentFields)
+    || !credentialAuthorizationIsValid(credentialOptionAuthorization, currentFields)) return;
   credentialFormSignature = signature;
-  ipcRenderer.send("bean-browser:credential-form-detected");
+  ipcRenderer.send("bean-browser:credential-form-detected", {
+    formFingerprint,
+  });
+}
+
+function authorizeCredentialOptions(event) {
+  if (!event?.isTrusted) return;
+  const target = event.composedPath?.()[0] || event.target;
+  if (!(target instanceof HTMLInputElement)) return;
+  const fields = findCredentialFields();
+  if (!fields || (target !== fields.username && target !== fields.password)) return;
+  credentialOptionAuthorization = {
+    expiresAt: Date.now() + CREDENTIAL_AUTHORIZATION_WINDOW_MS,
+    origin: currentSiteHygiene().origin,
+    signature: credentialSignature(fields),
+  };
+  void requestCredentialOptions();
+}
+
+function installCredentialInteractionGate() {
+  if (credentialInteractionGateInstalled) return;
+  credentialInteractionGateInstalled = true;
+  // A page-load scan may identify a login form, but it never requests or fills
+  // a credential. Only a real pointer/keyboard action on that form opens the
+  // isolated preload-owned account chooser.
+  document.addEventListener("pointerdown", authorizeCredentialOptions, true);
+  document.addEventListener("keydown", authorizeCredentialOptions, true);
 }
 
 function setCredentialFieldValue(input, value) {
@@ -647,9 +870,20 @@ function setCredentialFieldValue(input, value) {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-function fillCredentialFields(credential) {
-  const fields = findCredentialFields();
-  if (!fields) return;
+async function fillCredentialFields(credential) {
+  let fields = findCredentialFields();
+  if (
+    !fields
+    || !credentialAuthorizationIsValid(credentialFillAuthorization, fields)
+  ) return;
+  const formFingerprint = await credentialFormFingerprint(fields);
+  const currentFields = findCredentialFields();
+  if (!formFingerprint
+    || credential?.formFingerprint !== formFingerprint
+    || !sameCredentialFields(fields, currentFields)
+    || !credentialAuthorizationIsValid(credentialFillAuthorization, currentFields)) return;
+  fields = currentFields;
+  credentialFillAuthorization = null;
   setCredentialFieldValue(fields.username, String(credential?.username || ""));
   setCredentialFieldValue(fields.password, String(credential?.password || ""));
   fields.username.dataset.brizoAutofilled = "true";
@@ -659,13 +893,20 @@ function fillCredentialFields(credential) {
   credentialSuggestionHost = null;
 }
 
-function showCredentialSuggestions(entries) {
-  const fields = findCredentialFields();
-  if (!fields || !Array.isArray(entries) || !entries.length) return;
-  if (entries.length === 1 && !fields.username.value && !fields.password.value) {
-    ipcRenderer.send("bean-browser:fill-credential", entries[0].id);
-    return;
-  }
+async function showCredentialSuggestions(entries, expectedFingerprint) {
+  let fields = findCredentialFields();
+  if (!fields
+    || !credentialAuthorizationIsValid(credentialOptionAuthorization, fields)
+    || !Array.isArray(entries)
+    || !entries.length) return;
+  const formFingerprint = await credentialFormFingerprint(fields);
+  const currentFields = findCredentialFields();
+  if (!formFingerprint
+    || formFingerprint !== expectedFingerprint
+    || !sameCredentialFields(fields, currentFields)
+    || !credentialAuthorizationIsValid(credentialOptionAuthorization, currentFields)) return;
+  fields = currentFields;
+  credentialOptionAuthorization = null;
   credentialSuggestionHost?.remove();
   const host = document.createElement("div");
   host.style.position = "fixed";
@@ -685,7 +926,30 @@ function showCredentialSuggestions(entries) {
     button.type = "button";
     button.innerHTML = "<span>使用此账号</span><small></small>";
     button.querySelector("small").textContent = String(entry.username || "");
-    button.addEventListener("click", () => ipcRenderer.send("bean-browser:fill-credential", String(entry.id || "")));
+    button.addEventListener("click", (event) => {
+      if (!event.isTrusted || !host.isConnected) return;
+      void (async () => {
+        const selectedFields = findCredentialFields();
+        if (!selectedFields) return;
+        const selectedFingerprint = await credentialFormFingerprint(selectedFields);
+        const currentFields = findCredentialFields();
+        if (!selectedFingerprint
+          || selectedFingerprint !== expectedFingerprint
+          || !host.isConnected
+          || !sameCredentialFields(selectedFields, currentFields)) return;
+        credentialFillAuthorization = {
+          expiresAt: Date.now() + CREDENTIAL_AUTHORIZATION_WINDOW_MS,
+          formFingerprint: selectedFingerprint,
+          origin: currentSiteHygiene().origin,
+          signature: credentialSignature(currentFields),
+        };
+        ipcRenderer.send("bean-browser:fill-credential", {
+          formFingerprint: selectedFingerprint,
+          id: String(entry.id || ""),
+          nonce: String(entry.nonce || ""),
+        });
+      })();
+    });
     list.appendChild(button);
   });
   shadow.appendChild(panel);
@@ -695,6 +959,9 @@ function showCredentialSuggestions(entries) {
     if (event.composedPath().includes(host) || event.target === fields.username || event.target === fields.password) return;
     host.remove();
     credentialSuggestionHost = null;
+    credentialFormSignature = "";
+    credentialOptionAuthorization = null;
+    credentialFillAuthorization = null;
     document.removeEventListener("pointerdown", dismiss, true);
   };
   document.addEventListener("pointerdown", dismiss, true);
@@ -709,7 +976,6 @@ function runSiteHygieneScan() {
   }
   clickCookieChoice(current.cookieConsent);
   const hiddenCount = cleanPageNuisances(current.cleanupLevel);
-  requestCredentialOptions();
   siteHygieneScans += 1;
   const reportSignature = `${siteHygieneCookieAction}\u0000${hiddenCount}`;
   if ((hiddenCount || siteHygieneCookieAction) && reportSignature !== lastSiteHygieneReport) {
@@ -740,6 +1006,9 @@ function installSiteHygiene() {
   credentialFormSignature = "";
   credentialSuggestionHost?.remove();
   credentialSuggestionHost = null;
+  credentialOptionAuthorization = null;
+  credentialFillAuthorization = null;
+  installCredentialInteractionGate();
   const current = currentSiteHygiene();
   if (!current.enabled) {
     restoreHygieneElements();
@@ -762,10 +1031,10 @@ try {
   });
   ipcRenderer.on("brizo:credential-options", (_event, payload) => {
     if (payload?.origin !== currentSiteHygiene().origin) return;
-    showCredentialSuggestions(payload.entries);
+    void showCredentialSuggestions(payload.entries, payload.formFingerprint);
   });
   ipcRenderer.on("brizo:fill-credential", (_event, credential) => {
-    fillCredentialFields(credential);
+    void fillCredentialFields(credential);
   });
   if (document.readyState === "loading") {
     window.addEventListener("DOMContentLoaded", installSiteHygiene, { once: true });

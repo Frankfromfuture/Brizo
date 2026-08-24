@@ -30,8 +30,15 @@ function mockWebContents(snapshot = { elements: [], pageText: "", title: "Test",
     executeJavaScript: async (script = "") => {
       if (script.includes("const loginPattern")) return null;
       if (script.includes("const snapshotId")) return snapshot;
-      if (script.includes("return { filled: true, isSearch: false")) {
-        return { filled: true, isSearch: false, submit: null };
+      if (script.includes("matched: Boolean(element.isConnected && currentValue()")) {
+        const literal = script.match(/currentValue\(\) === ("(?:\\\\.|[^"\\\\])*")/)?.[1];
+        const value = literal ? JSON.parse(literal) : "";
+        if (snapshot.elements?.[0]) {
+          snapshot.elements[0].value = value;
+          snapshot.elements[0].valueLength = value.length;
+          snapshot.elements[0].hasValue = value.length > 0;
+        }
+        return { filled: true, matched: true };
       }
       if (script.includes("getBoundingClientRect") && script.includes("data-brizo-agent-ref")) {
         return { x: 20, y: 20 };
@@ -45,16 +52,18 @@ function mockWebContents(snapshot = { elements: [], pageText: "", title: "Test",
   };
 }
 
-test("stops immediately when the planner reports the bounded goal complete", async () => {
+test("refuses a planner completion claim without a matching executed action", async () => {
   const webContents = mockWebContents();
   const result = await runBrowserCommandAgent({
     command: "读取当前标题",
     planNextAction: async () => ({ action: "done", message: "已读取。" }),
     webContents,
   });
-  assert.equal(result.status, "success");
+  assert.equal(result.status, "error");
   assert.equal(result.steps, 0);
-  assert.equal(result.message, "已读取。");
+  assert.equal(result.verification.ok, false);
+  assert.equal(result.verification.checks.actionMatched, false);
+  assert.match(result.message, /执行证据不足/);
 });
 
 test("blocks an external-impact click unless the command explicitly requests it", async () => {
@@ -220,12 +229,12 @@ test("parses next Wednesday, route markers after a time range, and an afternoon 
 
 test("filters Ctrip cards to the requested departure window", () => {
   const flights = selectCtripFlights([
-    { flightNumber: "A", price: 500, times: ["13:55", "15:20"] },
-    { flightNumber: "B", price: 600, times: ["14:00", "15:30"] },
-    { flightNumber: "C", price: 700, times: ["20:00", "21:30"] },
-    { flightNumber: "D", price: 800, times: ["20:05", "21:35"] },
+    { flightNumber: "CA1001", index: 0, price: 500, times: ["13:55", "15:20"] },
+    { flightNumber: "CA1002", index: 1, price: 600, times: ["14:00", "15:30"] },
+    { flightNumber: "CA1003", index: 2, price: 700, times: ["20:00", "21:30"] },
+    { flightNumber: "CA1004", index: 3, price: 800, times: ["20:05", "21:35"] },
   ], { departureWindow: { start: 840, end: 1200 } });
-  assert.deepEqual(flights.map((flight) => flight.flightNumber), ["B", "C"]);
+  assert.deepEqual(flights.map((flight) => flight.flightNumber), ["CA1002", "CA1003"]);
 });
 
 test("Ctrip observation cannot hang when the page never answers", async () => {
@@ -297,10 +306,10 @@ test("parses a Taobao distinct-price request from the current search", () => {
 
 test("selects unique Taobao prices without sorting away page order", () => {
   const selected = selectDistinctPriceItems([
-    { price: 89, title: "A" },
-    { price: 89, title: "B" },
-    { price: 129.9, title: "C" },
-    { price: 59, title: "D" },
+    { index: 0, price: 89, title: "A" },
+    { index: 1, price: 89, title: "B" },
+    { index: 2, price: 129.9, title: "C" },
+    { index: 3, price: 59, title: "D" },
   ], 3);
   assert.deepEqual(selected.map((item) => item.price), [89, 129.9, 59]);
 });

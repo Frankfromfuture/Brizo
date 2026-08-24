@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 
 const GRID_SIZE = 192;
 const TARGET_FRAME_INTERVAL = 1000 / 24;
+const FULL_RATE_DURATION = 2_400;
 const MAX_PIXEL_RATIO = 1.25;
 
 const VERTEX_SHADER = `#version 300 es
@@ -107,8 +108,9 @@ export function NewTabParticleBackground({ active }) {
     const pixelRatioLocation = gl.getUniformLocation(program, "uPixelRatio");
     const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
     let frameRequest = 0;
-    let lastFrameAt = 0;
+    let frameTimer = 0;
     let startedAt = performance.now();
+    let fullRateUntil = startedAt + FULL_RATE_DURATION;
     let windowFocused = document.hasFocus();
 
     gl.useProgram(program);
@@ -133,42 +135,51 @@ export function NewTabParticleBackground({ active }) {
     const draw = (now) => {
       frameRequest = 0;
       if (document.hidden || !windowFocused) return;
-      if (now - lastFrameAt < TARGET_FRAME_INTERVAL) {
-        frameRequest = window.requestAnimationFrame(draw);
-        return;
-      }
-      lastFrameAt = now;
       gl.clearColor(0.0, 0.0, 0.0, 0.0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.uniform1f(timeLocation, (now - startedAt) / 1000);
       gl.drawArrays(gl.POINTS, 0, GRID_SIZE * GRID_SIZE);
-      if (!reducedMotion) frameRequest = window.requestAnimationFrame(draw);
+      if (!reducedMotion && now < fullRateUntil) {
+        frameTimer = window.setTimeout(() => {
+          frameTimer = 0;
+          if (!document.hidden && windowFocused) {
+            frameRequest = window.requestAnimationFrame(draw);
+          }
+        }, TARGET_FRAME_INTERVAL);
+      }
     };
 
-    const resume = () => {
-      if (frameRequest || document.hidden || !windowFocused) return;
-      startedAt += performance.now() - Math.max(lastFrameAt, startedAt);
+    const stop = () => {
+      if (frameTimer) window.clearTimeout(frameTimer);
+      if (frameRequest) window.cancelAnimationFrame(frameRequest);
+      frameTimer = 0;
+      frameRequest = 0;
+    };
+    const resume = ({ burst = false } = {}) => {
+      if (frameRequest || frameTimer || document.hidden || !windowFocused) return;
+      if (burst) fullRateUntil = performance.now() + FULL_RATE_DURATION;
       frameRequest = window.requestAnimationFrame(draw);
     };
     const handleVisibility = () => {
       if (document.hidden) {
-        if (frameRequest) window.cancelAnimationFrame(frameRequest);
-        frameRequest = 0;
+        stop();
       } else {
-        resume();
+        resume({ burst: true });
       }
     };
     const handleFocus = () => {
       windowFocused = true;
-      resume();
+      resume({ burst: true });
     };
     const handleBlur = () => {
       windowFocused = false;
-      if (frameRequest) window.cancelAnimationFrame(frameRequest);
-      frameRequest = 0;
+      stop();
     };
 
-    const resizeObserver = new ResizeObserver(resize);
+    const resizeObserver = new ResizeObserver(() => {
+      resize();
+      resume();
+    });
     resizeObserver.observe(canvas);
     resize();
     draw(performance.now());
@@ -181,7 +192,7 @@ export function NewTabParticleBackground({ active }) {
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("blur", handleBlur);
-      if (frameRequest) window.cancelAnimationFrame(frameRequest);
+      stop();
       gl.bindVertexArray(null);
       gl.deleteVertexArray(vertexArray);
       gl.deleteProgram(program);

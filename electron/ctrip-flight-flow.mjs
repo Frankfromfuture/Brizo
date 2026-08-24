@@ -120,6 +120,93 @@ export function buildCtripFlightUrl(intent) {
   return `https://flights.ctrip.com/online/list/oneway-${origin}-${destination}?depdate=${encodeURIComponent(date)}`;
 }
 
+function validClock(value) {
+  const match = String(value || "").match(/^([01]\d|2[0-3]):[0-5]\d$/);
+  return Boolean(match);
+}
+
+function validObservedFlight(card) {
+  if (!card || !Number.isInteger(card.index) || card.index < 0) return false;
+  if (!Number.isFinite(Number(card.price)) || Number(card.price) <= 0) return false;
+  const times = Array.isArray(card.times) ? card.times.filter(validClock) : [];
+  const flightNumber = String(card.flightNumber || "").replace(/\s+/g, "");
+  return times.length >= 2 || /^[A-Z0-9]{2}\d{3,4}$/i.test(flightNumber);
+}
+
+function trustedCtripResultUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "https:"
+      && url.hostname.toLocaleLowerCase() === "flights.ctrip.com"
+      && !url.username
+      && !url.password
+      && (!url.port || url.port === "443")
+      && /^\/online\/list\/oneway-[a-z]{3}-[a-z]{3}$/i.test(url.pathname.replace(/\/+$/, ""))
+      && /^20\d{2}-\d{2}-\d{2}$/.test(url.searchParams.get("depdate") || "");
+  } catch {
+    return false;
+  }
+}
+
+function routeAndDateMatch(value, intent) {
+  if (!trustedCtripResultUrl(value)) return false;
+  if (!intent) return true;
+  const url = new URL(String(value));
+  const origin = String(intent?.origin?.code || "").toLocaleLowerCase();
+  const destination = String(intent?.destination?.code || "").toLocaleLowerCase();
+  const expectedPath = `/online/list/oneway-${origin}-${destination}`;
+  return url.pathname.replace(/\/+$/, "").toLocaleLowerCase() === expectedPath
+    && url.searchParams.get("depdate") === String(intent?.date || "");
+}
+
+function compactVerification(checks) {
+  const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return Object.freeze({
+    ok: failures.length === 0,
+    checks: Object.freeze({ ...checks }),
+    failures: Object.freeze(failures),
+  });
+}
+
+export function verifyCtripFlightObservation(result, intent) {
+  const cards = Array.isArray(result?.cards) ? result.cards : [];
+  return compactVerification({
+    routeAndDate: routeAndDateMatch(result?.url, intent),
+    observedFlights: cards.length > 0 && cards.every(validObservedFlight),
+  });
+}
+
+export function verifyCtripFlightSelection(result, intent, selectedFlights) {
+  const observation = verifyCtripFlightObservation(result, intent);
+  const cards = Array.isArray(result?.cards) ? result.cards.filter(validObservedFlight) : [];
+  const selected = Array.isArray(selectedFlights) ? selectedFlights : [];
+  const eligible = intent?.departureWindow
+    ? cards.filter((card) => {
+      const departure = minutesForTime(card?.times?.[0]);
+      return departure !== null
+        && departure >= intent.departureWindow.start
+        && departure <= intent.departureWindow.end;
+    })
+    : cards;
+  const lowestEligiblePrice = eligible.length
+    ? Math.min(...eligible.map((card) => Number(card.price)))
+    : null;
+  const fromObservation = selected.length > 0 && selected.every((flight) =>
+    eligible.some((card) => card.index === flight.index
+      && Number(card.price) === Number(flight.price)
+      && String(card.flightNumber || "") === String(flight.flightNumber || "")
+      && String(card.times?.[0] || "") === String(flight.times?.[0] || ""))
+  );
+  const matchesIntent = fromObservation && (!intent?.wantsCheapest
+    || selected.every((flight) => Number(flight.price) === lowestEligiblePrice));
+  return compactVerification({
+    ...observation.checks,
+    selectedFlights: selected.length > 0,
+    selectionFromObservation: fromObservation,
+    selectionMatchesIntent: matchesIntent,
+  });
+}
+
 const READ_CTRIP_RESULTS_SCRIPT = `
   (() => {
     const visible = (element) => {
@@ -189,6 +276,7 @@ export async function readCtripFlightResults(webContents) {
 }
 
 export async function waitForCtripFlightResults(webContents, {
+  expectedIntent = null,
   observationTimeout = 2_500,
   pollInterval = 450,
   timeout = 30_000,
@@ -203,12 +291,15 @@ export async function waitForCtripFlightResults(webContents, {
         readCtripFlightResults(webContents),
         Math.max(10, Math.min(observationTimeout, deadline - Date.now())),
       );
-      if (latest?.cards?.length) {
+      const observationVerified = verifyCtripFlightObservation(latest, expectedIntent).ok;
+      if (latest?.cards?.length && observationVerified) {
         const signature = latest.cards
           .map((card) => `${card.flightNumber || "flight"}:${card.price}`)
           .join("|");
         if (signature === lastSignature) return latest;
         lastSignature = signature;
+      } else {
+        lastSignature = "";
       }
     } catch (error) {
       lastError = error;
@@ -222,6 +313,7 @@ export async function waitForCtripFlightResults(webContents, {
 }
 
 export async function collectCtripFlightResults(webContents, {
+  expectedIntent = null,
   pollInterval = 300,
   timeout = 6_000,
 } = {}) {
@@ -230,6 +322,7 @@ export async function collectCtripFlightResults(webContents, {
     readCtripFlightResults(webContents),
     Math.max(10, Math.min(1_500, timeout)),
   );
+  if (!verifyCtripFlightObservation(latest, expectedIntent).ok) latest = null;
   let stableAtBottom = 0;
   let previousSignature = "";
   while (!webContents.isDestroyed() && Date.now() < deadline) {
@@ -244,7 +337,8 @@ export async function collectCtripFlightResults(webContents, {
       readCtripFlightResults(webContents),
       Math.max(10, Math.min(1_500, deadline - Date.now())),
     );
-    if (current?.cards?.length) latest = current;
+    if (current?.cards?.length
+      && verifyCtripFlightObservation(current, expectedIntent).ok) latest = current;
     const signature = latest?.cards
       ?.map((card) => `${card.flightNumber || "flight"}:${card.times?.[0] || ""}:${card.price}`)
       .join("|") || "";
@@ -271,7 +365,7 @@ function minutesForTime(value) {
 }
 
 export function selectCtripFlights(cards, intent, limit = 8) {
-  let flights = (Array.isArray(cards) ? cards : []).filter((card) => Number.isFinite(card?.price));
+  let flights = (Array.isArray(cards) ? cards : []).filter(validObservedFlight);
   if (intent?.departureWindow) {
     flights = flights.filter((flight) => {
       const departure = minutesForTime(flight?.times?.[0]);

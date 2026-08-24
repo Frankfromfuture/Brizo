@@ -16,12 +16,12 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   copyText: (text) => ipcRenderer.invoke("bean-browser:copy-text", text),
   closeTabView: (tabId) => ipcRenderer.invoke("bean-browser:close-tab-view", tabId),
   chooseDownloadDirectory: () => ipcRenderer.invoke("bean-browser:choose-download-directory"),
+  chooseSearchAttachments: () => ipcRenderer.invoke("bean-browser:choose-search-attachments"),
   forward: () => ipcRenderer.invoke("bean-browser:forward"),
   getAppInfo: () => ipcRenderer.invoke("bean-browser:get-app-info"),
   getPageZoom: () => ipcRenderer.invoke("bean-browser:get-page-zoom"),
   getSiteHygiene: () => ipcRenderer.invoke("bean-browser:get-site-hygiene"),
   getState: () => ipcRenderer.invoke("bean-browser:get-state"),
-  getSmartBookmarkSnapshot: () => ipcRenderer.invoke("bean-browser:smart-bookmarks-get"),
   importBookmarks: (sourceIds) =>
     ipcRenderer.invoke("bean-browser:import-bookmarks", sourceIds),
   importBookmarksFromHtml: () =>
@@ -99,11 +99,6 @@ contextBridge.exposeInMainWorld("beanBrowser", {
     ipcRenderer.on("bean-browser:brizo-use-progress", listener);
     return () => ipcRenderer.removeListener("bean-browser:brizo-use-progress", listener);
   },
-  onSmartBookmarkProgress: (callback) => {
-    const listener = (_event, progress) => callback(progress);
-    ipcRenderer.on("bean-browser:smart-bookmarks-progress", listener);
-    return () => ipcRenderer.removeListener("bean-browser:smart-bookmarks-progress", listener);
-  },
   exportArticlePdf: () => ipcRenderer.invoke("bean-browser:export-article-pdf"),
   exportSearchPdf: (payload) => ipcRenderer.invoke("bean-browser:export-search-pdf", payload),
   downloadCurrentPdf: () => ipcRenderer.invoke("bean-browser:download-current-pdf"),
@@ -118,8 +113,6 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   startSearch: (payload) => ipcRenderer.invoke("bean-browser:start-search", payload),
   cancelSearch: (searchId) => ipcRenderer.invoke("bean-browser:cancel-search", searchId),
   searchVane: (payload) => ipcRenderer.invoke("bean-browser:search-vane", payload),
-  suggestQueries: (input) => ipcRenderer.invoke("bean-browser:suggest-queries", input),
-  syncSmartBookmarks: (payload) => ipcRenderer.invoke("bean-browser:smart-bookmarks-sync", payload),
   setDefaultModelProvider: (id) => ipcRenderer.invoke("bean-browser:set-default-model-provider", id),
   setDownloadDirectory: (directory) => ipcRenderer.invoke("bean-browser:set-download-directory", directory),
   setPageZoom: (factor) => ipcRenderer.invoke("bean-browser:set-page-zoom", factor),

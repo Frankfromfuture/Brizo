@@ -6,7 +6,12 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const electronBinary = require("electron");
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const devUrl = process.env.BRIZO_DEV_SERVER_URL?.trim() || "http://127.0.0.1:5173/";
+const requestedDevUrl = process.env.BRIZO_DEV_SERVER_URL?.trim() || "http://127.0.0.1:5173/";
+const parsedDevUrl = new URL(requestedDevUrl);
+if (parsedDevUrl.origin !== "http://127.0.0.1:5173" || parsedDevUrl.pathname !== "/") {
+  throw new Error("BRIZO_DEV_SERVER_URL must be exactly http://127.0.0.1:5173/");
+}
+const devUrl = parsedDevUrl.href;
 const viteBinary = path.join(projectRoot, "node_modules", "vite", "bin", "vite.js");
 
 let viteProcess = null;

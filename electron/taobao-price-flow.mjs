@@ -24,7 +24,12 @@ function decodeRepeated(value) {
 export function taobaoQueryFromUrl(value) {
   try {
     const url = new URL(String(value || ""));
-    if (!(url.hostname === "taobao.com" || url.hostname.endsWith(".taobao.com"))) return "";
+    if (url.protocol !== "https:"
+      || url.hostname.toLocaleLowerCase() !== "s.taobao.com"
+      || url.pathname.replace(/\/+$/, "") !== "/search"
+      || url.username
+      || url.password
+      || (url.port && url.port !== "443")) return "";
     return decodeRepeated(url.searchParams.get("q") || "").replace(/[，。；、]+$/u, "").trim();
   } catch {
     return "";
@@ -50,6 +55,87 @@ export function buildTaobaoSearchUrl(query) {
   const clean = String(query || "").replace(/\s+/g, " ").trim().slice(0, 120);
   if (!clean) throw new Error("淘宝搜索词为空。");
   return `https://s.taobao.com/search?q=${encodeURIComponent(clean)}`;
+}
+
+function queryMatchesResult(value, intent) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "https:"
+      && url.hostname.toLocaleLowerCase() === "s.taobao.com"
+      && !url.username
+      && !url.password
+      && (!url.port || url.port === "443")
+      && url.pathname.replace(/\/+$/, "") === "/search"
+      && taobaoQueryFromUrl(url.href).toLocaleLowerCase()
+        === String(intent?.query || "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+function safeMarketplaceItemUrl(value) {
+  if (!value) return true;
+  try {
+    const url = new URL(String(value));
+    const hostname = url.hostname.toLocaleLowerCase();
+    return url.protocol === "https:"
+      && !url.username
+      && !url.password
+      && (!url.port || url.port === "443")
+      && (hostname === "taobao.com" || hostname.endsWith(".taobao.com")
+        || hostname === "tmall.com" || hostname.endsWith(".tmall.com")
+        || hostname === "tb.cn" || hostname.endsWith(".tb.cn"));
+  } catch {
+    return false;
+  }
+}
+
+function validObservedItem(item) {
+  return Boolean(item)
+    && Number.isInteger(item.index)
+    && item.index >= 0
+    && Number.isFinite(Number(item.price))
+    && Number(item.price) > 0
+    && Boolean(String(item.title || "").trim())
+    && safeMarketplaceItemUrl(item.url);
+}
+
+function compactVerification(checks) {
+  const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
+  return Object.freeze({
+    ok: failures.length === 0,
+    checks: Object.freeze({ ...checks }),
+    failures: Object.freeze(failures),
+  });
+}
+
+export function verifyTaobaoPriceObservation(result, intent) {
+  const items = Array.isArray(result?.items) ? result.items : [];
+  return compactVerification({
+    queryUrl: queryMatchesResult(result?.url, intent),
+    observedItems: items.length >= 2 && items.every(validObservedItem),
+    loginClear: result?.loginRequired !== true,
+  });
+}
+
+export function verifyTaobaoPriceSelection(result, intent, selectedItems, minimumItems = 2) {
+  const observation = verifyTaobaoPriceObservation(result, intent);
+  const observed = Array.isArray(result?.items) ? result.items.filter(validObservedItem) : [];
+  const selected = Array.isArray(selectedItems) ? selectedItems : [];
+  const requiredCount = Math.max(2, Math.min(10, Number(minimumItems) || 2));
+  const fromObservation = selected.length >= requiredCount && selected.every((item) =>
+    observed.some((candidate) => candidate.index === item.index
+      && Number(candidate.price) === Number(item.price)
+      && String(candidate.title || "") === String(item.title || "")
+      && String(candidate.url || "") === String(item.url || ""))
+  );
+  const prices = selected.map((item) => Number(item.price).toFixed(2));
+  return compactVerification({
+    ...observation.checks,
+    selectedItems: selected.length >= requiredCount,
+    selectionFromObservation: fromObservation,
+    distinctPrices: fromObservation && new Set(prices).size === prices.length,
+  });
 }
 
 const READ_TAOBAO_RESULTS_SCRIPT = `
@@ -132,6 +218,7 @@ export async function readTaobaoPriceResults(webContents) {
 }
 
 export async function waitForTaobaoPriceResults(webContents, {
+  expectedIntent = null,
   observationTimeout = 2_500,
   pollInterval = 500,
   timeout = 25_000,
@@ -145,10 +232,14 @@ export async function waitForTaobaoPriceResults(webContents, {
       Math.max(10, Math.min(observationTimeout, deadline - Date.now())),
     );
     if (latest?.loginRequired) throw new Error("淘宝要求重新登录，请先在当前页面完成登录后再试。");
-    if (latest?.items?.length) {
+    const observationVerified = !expectedIntent
+      || verifyTaobaoPriceObservation(latest, expectedIntent).ok;
+    if (latest?.items?.length && observationVerified) {
       const signature = latest.items.map((item) => `${item.price}:${item.title}`).join("|");
       if (signature === lastSignature) return latest;
       lastSignature = signature;
+    } else {
+      lastSignature = "";
     }
     await sleep(Math.max(10, Math.min(pollInterval, deadline - Date.now())));
   }
@@ -161,6 +252,7 @@ export function selectDistinctPriceItems(items, limit = 5) {
   const selected = [];
   const prices = new Set();
   for (const item of Array.isArray(items) ? items : []) {
+    if (!validObservedItem(item)) continue;
     const key = Number(item?.price).toFixed(2);
     if (!Number.isFinite(Number(item?.price)) || prices.has(key)) continue;
     prices.add(key);
