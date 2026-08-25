@@ -245,7 +245,6 @@ npm run search:configure
 | `npm test` | 运行项目测试集合 |
 | `npm run test:search` | 运行搜索与回答引擎测试 |
 | `npm run test:brief` | 运行 Brief 服务测试 |
-| `npm run test:bookmarks` | 运行收藏夹图标资源测试 |
 | `npm run test:password` | 运行密码箱测试 |
 | `npm run test:hygiene` | 运行广告拦截与 Cookie 净化测试 |
 | `npm run test:browser-agent` | 运行 Use 执行、证据与后置条件测试 |

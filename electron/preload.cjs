@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("beanBrowser", {
+  activateBrizoUseTabView: (tabId) =>
+    ipcRenderer.invoke("bean-browser:activate-brizo-use-tab-view", tabId),
   back: () => ipcRenderer.invoke("bean-browser:back"),
   runBrizoUseCommand: (payload) => ipcRenderer.invoke("bean-browser:run-brizo-use-command", payload),
   pauseBrizoUseCommand: (sessionId) => ipcRenderer.invoke("bean-browser:pause-brizo-use-command", sessionId),
@@ -32,6 +34,7 @@ contextBridge.exposeInMainWorld("beanBrowser", {
     ipcRenderer.invoke("bean-browser:set-download-paused", id, paused),
   cancelDownload: (id) => ipcRenderer.invoke("bean-browser:cancel-download", id),
   openDownloadedFile: (id) => ipcRenderer.invoke("bean-browser:open-downloaded-file", id),
+  revealDownloadedFile: (id) => ipcRenderer.invoke("bean-browser:reveal-downloaded-file", id),
   deleteDownloadedFile: (id) => ipcRenderer.invoke("bean-browser:delete-downloaded-file", id),
   listPasswords: () => ipcRenderer.invoke("bean-browser:list-passwords"),
   listBookmarkSources: () =>
@@ -39,6 +42,7 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   resolveBookmarkFavicons: (bookmarks) =>
     ipcRenderer.invoke("bean-browser:resolve-bookmark-favicons", bookmarks),
   listModelProviders: () => ipcRenderer.invoke("bean-browser:list-model-providers"),
+  listSearchServices: () => ipcRenderer.invoke("bean-browser:list-search-services"),
   navigate: (input, tabId) => ipcRenderer.invoke("bean-browser:navigate", input, tabId),
   navigateImage: (input, tabId) =>
     ipcRenderer.invoke("bean-browser:navigate-image", input, tabId),
@@ -108,6 +112,8 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   reload: () => ipcRenderer.invoke("bean-browser:reload"),
   savePassword: (payload) => ipcRenderer.invoke("bean-browser:save-password", payload),
   saveModelProvider: (payload) => ipcRenderer.invoke("bean-browser:save-model-provider", payload),
+  saveSearchServiceKey: (payload) =>
+    ipcRenderer.invoke("bean-browser:save-search-service-key", payload),
   showRendererContextMenu: (payload) =>
     ipcRenderer.invoke("bean-browser:show-renderer-context-menu", payload),
   startSearch: (payload) => ipcRenderer.invoke("bean-browser:start-search", payload),

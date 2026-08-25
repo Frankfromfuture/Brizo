@@ -8,12 +8,37 @@ import {
   officialIntentQuery,
   selectEntityImages,
 } from "../electron/search/search-service.mjs";
+import { createBochaClient } from "../electron/search/bocha-client.mjs";
 
 const result = (provider, rank, url, title) => makeResult({
   url,
   title,
   snippet: `${title} 的真实摘要`,
   hits: [{ provider, rank, query: "问题" }],
+});
+
+test("Bocha client accepts the current top-level SearchResponse shape", async () => {
+  const client = createBochaClient({
+    getApiKey: async () => "test-key",
+    fetchImpl: async () => ({
+      ok: true,
+      async json() {
+        return {
+          webPages: {
+            value: [{
+              name: "博查结果",
+              url: "https://example.com/bocha",
+              snippet: "来自当前接口结构的真实摘要",
+            }],
+          },
+        };
+      },
+    }),
+  });
+
+  const output = await client.webSearch("问题");
+  assert.equal(output.results.length, 1);
+  assert.equal(output.results[0].title, "博查结果");
 });
 
 function makeHarness({ keys = ["serper", "bocha"], failProfessional = false, hangProfessional = false } = {}) {

@@ -21,6 +21,7 @@ function normalizedQuestion(value) {
 }
 
 const PRIMARY_SOURCE_QUERY_PATTERN = /(?:\bsite:|\bofficial\b|\bdocumentation\b|\bdocs?\b|\brelease\s+notes?\b|\bfilings?\b|\bregulations?\b|\bresearch\s+papers?\b|\bwhite\s*papers?\b|\barxiv\b|\bsec\b|官方网站|官方文档|监管文件|研究论文|发布说明)/iu;
+const ABSTRACT_VISUAL_KEYWORD_PATTERN = /^(?:人工智能|产业结构|市场|经济|政策|法律|法规|制度|管理|投资|社保|流程|方法|原因|关系|区别|进度|进程|供应商|api|analysis|policy|law|process|economy|market|management|method)$/iu;
 
 /**
  * Output language and retrieval language are separate concerns. A single
@@ -71,6 +72,9 @@ function heuristicVisualEntity(query) {
     if (name) return { name, kind: "person", confidence: 0.78 };
   }
   if (isKeywordQuery(text)) {
+    if (ABSTRACT_VISUAL_KEYWORD_PATTERN.test(text.trim())) {
+      return { name: "", kind: "none", confidence: 0 };
+    }
     return { name: text, kind: "concept", confidence: 0.78 };
   }
   const suffixMatch = text.match(/^(.{1,32}?)(?:是什么|是谁|指什么|怎么样|的资料)[？?]?$/u);
@@ -180,7 +184,7 @@ function heuristicPlan(query) {
     freshness: recent ? "week" : "any",
     depth: /深入|系统|全面|deep|comprehensive/i.test(query)
       ? "deep"
-      : isQuickFactQuery(query) ? "fast" : "balanced",
+      : isQuickFactQuery(query) || isKeywordQuery(query) ? "fast" : "balanced",
     queries: [query],
     visualEntity: heuristicVisualEntity(query),
   };
@@ -215,7 +219,7 @@ export function createAnswerEngine({ llm }) {
       // Short existence/yes-no questions do not benefit from spending a model
       // round-trip expanding the query. Keep the user's exact wording and start
       // retrieval immediately; explicit manual depth choices still win below.
-      if ((depth === "auto" || depth === "fast") && isQuickFactQuery(query)) {
+      if ((depth === "auto" || depth === "fast") && (isQuickFactQuery(query) || isKeywordQuery(query))) {
         return normalizePlan(null, query, depth);
       }
       try {
@@ -236,10 +240,11 @@ export function createAnswerEngine({ llm }) {
     },
 
     async streamAnswer({ query, plan, sources, context = "", signal, onToken, onRetry }) {
-      const totalEvidenceBudget = plan.depth === "deep" ? 72_000 : plan.depth === "balanced" ? 42_000 : 18_000;
-      const perSourceBudget = plan.depth === "deep" ? 12_000 : plan.depth === "balanced" ? 8_000 : 2_400;
+      const totalEvidenceBudget = plan.depth === "deep" ? 72_000 : plan.depth === "balanced" ? 42_000 : 14_000;
+      const perSourceBudget = plan.depth === "deep" ? 12_000 : plan.depth === "balanced" ? 8_000 : 2_200;
       let remainingEvidenceBudget = totalEvidenceBudget;
-      const sourceText = sources.map((source, index) => {
+      const answerSources = plan.depth === "fast" ? sources.slice(0, 8) : sources;
+      const sourceText = answerSources.map((source, index) => {
         const rawEvidence = source.body || source.summary || source.snippet;
         const selectedEvidence = source.body
           ? selectRelevantPassages(rawEvidence, query, {
@@ -262,7 +267,7 @@ export function createAnswerEngine({ llm }) {
             { role: "system", content: ANSWER_SYSTEM_PROMPT },
             { role: "user", content: user },
           ],
-          maxTokens: plan.depth === "deep" ? 4_000 : plan.depth === "balanced" ? 3_000 : 2_400,
+          maxTokens: plan.depth === "deep" ? 4_000 : plan.depth === "balanced" ? 3_000 : 900,
           temperature: 0.2,
           signal,
           thinkingVariant,
@@ -306,6 +311,10 @@ export function createAnswerEngine({ llm }) {
       };
       freeSignals.forEach(addCandidate);
       if (unique.length === 5) return unique;
+      if (plan.depth === "fast") {
+        fallbackFollowups(query, plan.language).forEach(addCandidate);
+        return unique.slice(0, 5);
+      }
       try {
         const response = await llm.callChat({
           messages: [

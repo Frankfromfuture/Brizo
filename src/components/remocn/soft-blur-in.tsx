@@ -16,8 +16,8 @@ const DEFAULT_UI_SELECTOR = [
   ".app-shell [role='menu']",
   ".app-shell [role='listbox']",
   ".app-shell [role='dialog']",
+  "[role='tooltip']",
   ".app-shell .address-bar",
-  ".bookmark-folder-flyout",
 ].join(",");
 
 export interface SoftBlurInProps {

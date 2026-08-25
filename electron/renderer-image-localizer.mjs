@@ -4,7 +4,7 @@ function safeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
-export function createRendererImageLocalizer({ proxy, concurrency = 4 } = {}) {
+export function createRendererImageLocalizer({ proxy, concurrency = 4, logger = console } = {}) {
   if (!proxy || typeof proxy.getDataUrl !== "function") {
     throw new TypeError("A main-process remote image proxy is required.");
   }
@@ -24,15 +24,19 @@ export function createRendererImageLocalizer({ proxy, concurrency = 4 } = {}) {
     return output;
   }
 
-  async function localizeUrl(value) {
+  async function localizeUrlDetailed(value, options) {
     const url = String(value || "").trim();
-    if (LOCAL_IMAGE_PATTERN.test(url)) return url;
-    if (!url.startsWith("https://")) return "";
+    if (LOCAL_IMAGE_PATTERN.test(url)) return { dataUrl: url, errorCode: "" };
+    if (!url.startsWith("https://")) return { dataUrl: "", errorCode: "url" };
     try {
-      return (await proxy.getDataUrl(url)).dataUrl || "";
-    } catch {
-      return "";
+      return { dataUrl: (await proxy.getDataUrl(url, options)).dataUrl || "", errorCode: "" };
+    } catch (error) {
+      return { dataUrl: "", errorCode: String(error?.code || "fetch") };
     }
+  }
+
+  async function localizeUrl(value, options) {
+    return (await localizeUrlDetailed(value, options)).dataUrl;
   }
 
   async function localizeItem(item) {
@@ -55,7 +59,40 @@ export function createRendererImageLocalizer({ proxy, concurrency = 4 } = {}) {
   }
 
   async function localizeSearchImages(images) {
-    return (await mapLimited(images, localizeItem)).filter((item) => item?.imageUrl);
+    // First try the small provider thumbnails across the verified reserve. Only
+    // if fewer than three are readable do we start original-image requests.
+    // Both waves are bounded and their transport is cancelled at the deadline.
+    const items = safeArray(images);
+    const thumbnailResults = await Promise.all(items.map((item) => {
+      const thumbnailUrl = String(item?.thumbnailUrl || "").trim();
+      return thumbnailUrl
+        ? localizeUrlDetailed(thumbnailUrl, { timeoutMs: 2_500 })
+        : { dataUrl: "", errorCode: "missing_thumbnail" };
+    }));
+    const localizedByIndex = thumbnailResults.map((item) => item.dataUrl);
+    const errorCodes = thumbnailResults.map((item) => item.errorCode).filter(Boolean);
+    if (localizedByIndex.filter(Boolean).length < 3) {
+      const originals = await Promise.all(items.map((item, index) => {
+        if (localizedByIndex[index]) return { dataUrl: "", errorCode: "" };
+        const originalUrl = String(item?.imageUrl || "").trim();
+        const thumbnailUrl = String(item?.thumbnailUrl || "").trim();
+        return originalUrl && originalUrl !== thumbnailUrl
+          ? localizeUrlDetailed(originalUrl, { timeoutMs: 3_800 })
+          : { dataUrl: "", errorCode: "missing_original" };
+      }));
+      originals.forEach((result, index) => {
+        if (!localizedByIndex[index] && result.dataUrl) localizedByIndex[index] = result.dataUrl;
+        if (result.errorCode) errorCodes.push(result.errorCode);
+      });
+    }
+    logger.info?.("[search-image-localization]", {
+      candidates: items.length,
+      readable: localizedByIndex.filter(Boolean).length,
+      failures: Object.fromEntries([...new Set(errorCodes)].map((code) => [code, errorCodes.filter((item) => item === code).length])),
+    });
+    return items
+      .map((item, index) => ({ ...item, imageUrl: localizedByIndex[index] || "", thumbnailUrl: "" }))
+      .filter((item) => item?.imageUrl);
   }
 
   async function localizeSearchSources(sources) {

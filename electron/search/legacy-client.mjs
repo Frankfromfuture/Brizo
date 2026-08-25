@@ -47,6 +47,7 @@ export function createLegacyClient({
   logger = console,
   duckTimeoutMs = 8_000,
   bingTimeoutMs = 6_000,
+  bingImageTimeoutMs = 4_000,
 } = {}) {
   const searchDuckDuckGo = async (query, { signal, hl = "zh-Hans" } = {}) => {
     const timed = createTimedSignal(signal, duckTimeoutMs);
@@ -129,7 +130,64 @@ export function createLegacyClient({
     }
   };
 
+  const searchBingImages = async (query, { signal, hl = "zh-Hans" } = {}) => {
+    const url = new URL("https://www.bing.com/images/search");
+    url.searchParams.set("q", query);
+    url.searchParams.set("safeSearch", "Strict");
+    url.searchParams.set("setlang", hl);
+    url.searchParams.set("first", "1");
+    url.searchParams.set("count", "30");
+    if (String(hl).toLowerCase().startsWith("zh")) url.searchParams.set("cc", "CN");
+    const timed = createTimedSignal(signal, bingImageTimeoutMs);
+    try {
+      const response = await fetchImpl(url, {
+        headers: {
+          Accept: "text/html,application/xhtml+xml",
+          "Accept-Language": String(hl).toLowerCase().startsWith("zh")
+            ? "zh-CN,zh;q=0.9,en;q=0.6"
+            : `${hl},en;q=0.7`,
+          "User-Agent": BROWSER_UA,
+        },
+        signal: timed.signal,
+      });
+      if (!response.ok) throw new Error(`Bing 图片返回 HTTP ${response.status}`);
+      const $ = load(await response.text());
+      const items = [];
+      $("a.iusc").each((_, element) => {
+        try {
+          const metadata = JSON.parse($(element).attr("m") || "{}");
+          const imageUrl = safeText(metadata.murl, 4_000);
+          const thumbnailUrl = safeText(metadata.turl, 4_000);
+          const sourceUrl = safeText(metadata.purl, 4_000);
+          const title = safeText(metadata.t || $(element).attr("aria-label"), 300);
+          if (!title || !/^https?:\/\//iu.test(sourceUrl)) return;
+          if (!/^https:\/\//iu.test(imageUrl) && !/^https:\/\//iu.test(thumbnailUrl)) return;
+          const domain = domainFor(sourceUrl);
+          items.push({
+            title,
+            url: sourceUrl,
+            imageUrl,
+            thumbnailUrl,
+            domain,
+            source: domain,
+            width: Number(metadata.mw || metadata.w || metadata.ow) || 0,
+            height: Number(metadata.mh || metadata.h || metadata.oh) || 0,
+          });
+        } catch {
+          // Ignore malformed metadata on individual image cards.
+        }
+      });
+      return { items: items.slice(0, 30) };
+    } finally {
+      timed.cleanup();
+    }
+  };
+
   return {
+    async imageSearch(query, { signal, hl = "zh-Hans" } = {}) {
+      return searchBingImages(query, { signal, hl });
+    },
+
     /** @returns {{results: SearchResult[]}} */
     async search(query, { signal, hl = "zh-Hans" } = {}) {
       const settled = await Promise.allSettled([

@@ -84,6 +84,8 @@ function normalizeBookmarkFaviconUrl(value, pageUrl) {
 
 export function normalizeImportedBookmark(bookmark) {
   const createdAt = Number(bookmark?.createdAt);
+  const openCount = Number(bookmark?.openCount);
+  const smartPromotionSeenAt = Number(bookmark?.smartPromotionSeenAt);
   const updatedAt = Number(bookmark?.updatedAt);
   const sourceOrder = Number(bookmark?.sourceOrder);
   const manualOrder = bookmark?.manualOrder == null ? Number.NaN : Number(bookmark.manualOrder);
@@ -93,7 +95,11 @@ export function normalizeImportedBookmark(bookmark) {
     faviconUrl: normalizeBookmarkFaviconUrl(bookmark?.faviconUrl, bookmark?.url),
     folder: normalizeImportedBookmarkFolder(bookmark?.folder),
     manualOrder: Number.isFinite(manualOrder) && manualOrder >= 0 ? manualOrder : null,
+    openCount: Number.isFinite(openCount) && openCount > 0 ? Math.floor(openCount) : 0,
     sourceOrder: Number.isFinite(sourceOrder) && sourceOrder >= 0 ? sourceOrder : 0,
+    smartPromotionSeenAt: Number.isFinite(smartPromotionSeenAt) && smartPromotionSeenAt > 0
+      ? smartPromotionSeenAt
+      : 0,
     updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? updatedAt : 0,
   };
 }

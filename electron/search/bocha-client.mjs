@@ -113,7 +113,13 @@ export function createBochaClient({
       }
 
       const timestamp = now();
-      const values = body?.data?.webPages?.value || [];
+      // Bocha's current Web Search API returns the SearchResponse fields at the
+      // top level, while older responses wrapped them in `data`. Accept both so
+      // a successful response is not mistaken for an empty result set.
+      const searchResponse = body?.data && typeof body.data === "object"
+        ? body.data
+        : body;
+      const values = searchResponse?.webPages?.value || [];
       const results = values.map((item, index) => {
         const { publishedAt, publishedConfidence } = parsePublishedDate(
           item?.datePublished || item?.dateLastCrawled,
@@ -136,7 +142,7 @@ export function createBochaClient({
         });
       });
 
-      const images = (body?.data?.images?.value || []).map((item) => ({
+      const images = (searchResponse?.images?.value || []).map((item) => ({
         title: safeText(item?.name, 200),
         imageUrl: item?.contentUrl || "",
         thumbnailUrl: item?.thumbnailUrl || "",

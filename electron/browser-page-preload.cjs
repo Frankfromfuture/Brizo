@@ -1,128 +1,208 @@
-const { ipcRenderer, webFrame } = require("electron");
-
-// Sanitize client-side hints in main world so strict WAF/anti-bot/OAuth systems (e.g. Google Accounts, Ctrip, Meituan) treat Brizo as standard desktop Chrome.
-// Never touch window.chrome on local files, data URIs, or PDF extension pages.
-try {
-  const isHttpWebPage = window.location && (window.location.protocol === "http:" || window.location.protocol === "https:");
-  const isPdfPage = window.location && (window.location.pathname.toLowerCase().endsWith(".pdf") || window.location.href.includes(".pdf"));
-  if (isHttpWebPage && !isPdfPage) {
-    webFrame.executeJavaScript(`
-      try {
-        const ua = navigator.userAgent || "";
-        const majorMatch = ua.match(/Chrome\\/(\\d+)/i);
-        const majorVersion = majorMatch ? majorMatch[1] : "133";
-        const fullMatch = ua.match(/Chrome\\/([\\d.]+)/i);
-        const fullVersion = fullMatch ? fullMatch[1] : "133.0.0.0";
-
-        const standardBrands = [
-          { brand: "Chromium", version: majorVersion },
-          { brand: "Google Chrome", version: majorVersion },
-          { brand: "Not/A)Brand", version: "99" },
-        ];
-
-        const standardFullBrands = [
-          { brand: "Chromium", version: fullVersion },
-          { brand: "Google Chrome", version: fullVersion },
-          { brand: "Not/A)Brand", version: "99.0.0.0" },
-        ];
-
-        if (navigator.userAgentData) {
-          const sanitizedUserAgentData = {
-            brands: standardBrands,
-            mobile: false,
-            platform: "macOS",
-            getHighEntropyValues: async (hints = []) => ({
-              brands: standardBrands,
-              mobile: false,
-              platform: "macOS",
-              platformVersion: "15.0.0",
-              architecture: "arm",
-              bitness: "64",
-              model: "",
-              fullVersionList: standardFullBrands,
-              uaFullVersion: fullVersion,
-            }),
-            toJSON: () => ({
-              brands: standardBrands,
-              mobile: false,
-              platform: "macOS",
-            }),
-          };
-          Object.defineProperty(navigator, "userAgentData", {
-            get: () => sanitizedUserAgentData,
-            configurable: true,
-            enumerable: true,
-          });
-        }
-
-        try {
-          delete Object.getPrototypeOf(navigator).webdriver;
-        } catch {}
-        try {
-          Object.defineProperty(navigator, "webdriver", {
-            get: () => undefined,
-            configurable: true,
-          });
-        } catch {}
-
-        if (!window.chrome) {
-          window.chrome = {};
-        }
-        if (!window.chrome.app) {
-          window.chrome.app = {
-            isInstalled: false,
-            InstallState: { DISABLED: "disabled", INSTALLED: "installed", NOT_INSTALLED: "not_installed" },
-            RunningState: { CANNOT_RUN: "cannot_run", READY_TO_RUN: "ready_to_run", RUNNING: "running" },
-            getIsInstalled: () => false,
-            getDetails: () => null,
-          };
-        }
-        if (!window.chrome.runtime) {
-          window.chrome.runtime = {
-            OnInstalledReason: { CHROME_UPDATE: "chrome_update", INSTALL: "install", SHARED_MODULE_UPDATE: "shared_module_update", UPDATE: "update" },
-            OnRestartRequiredReason: { APP_UPDATE: "app_update", OS_UPDATE: "os_update", PERIODIC: "periodic" },
-            PlatformArch: { ARM: "arm", ARM64: "arm64", MIPS: "mips", MIPS64: "mips64", X86_32: "x86-32", X86_64: "x86-64" },
-            PlatformNaclArch: { ARM: "arm", MIPS: "mips", MIPS64: "mips64", X86_32: "x86-32", X86_64: "x86-64" },
-            PlatformOs: { ANDROID: "android", CROS: "cros", LINUX: "linux", MAC: "mac", OPENBSD: "openbsd", WIN: "win" },
-            RequestUpdateCheckStatus: { NO_UPDATE: "no_update", THROTTLED: "throttled", UPDATE_AVAILABLE: "update_available" },
-            connect: () => ({ onDisconnect: { addListener: () => {} }, onMessage: { addListener: () => {} }, postMessage: () => {} }),
-            sendMessage: () => {},
-          };
-        }
-        if (!window.chrome.loadTimes) {
-          window.chrome.loadTimes = () => ({
-            commitLoadTime: Date.now() / 1000,
-            connectionInfo: "h2",
-            finishDocumentLoadTime: Date.now() / 1000,
-            finishLoadTime: Date.now() / 1000,
-            firstPaintAfterLoadTime: 0,
-            firstPaintTime: Date.now() / 1000,
-            navigationType: "Other",
-            npnNegotiatedProtocol: "h2",
-            requestTime: Date.now() / 1000,
-            startLoadTime: Date.now() / 1000,
-            wasAlternateProtocolAvailable: false,
-            wasFetchedViaSpdy: true,
-            wasNpnNegotiated: true,
-          });
-        }
-        if (!window.chrome.csi) {
-          window.chrome.csi = () => ({
-            onloadT: Date.now(),
-            pageT: 120,
-            startE: Date.now() - 120,
-            tran: 15,
-          });
-        }
-      } catch {}
-    `);
-  }
-} catch {}
+const { ipcRenderer } = require("electron");
 
 const TOP_EDGE_TRAILING_DELAY_MS = 350;
 const TOP_EDGE_MAX_INTERVAL_MS = 500;
 
 let lastInteractionAt = 0;
+
+function hasRenderablePageStructure() {
+  const body = document.body;
+  if (!body) return false;
+  const rootStyle = getComputedStyle(document.documentElement);
+  const bodyStyle = getComputedStyle(body);
+  if (
+    rootStyle.display === "none"
+    || rootStyle.visibility === "hidden"
+    || Number.parseFloat(rootStyle.opacity || "1") <= 0.02
+    || bodyStyle.display === "none"
+    || bodyStyle.visibility === "hidden"
+    || Number.parseFloat(bodyStyle.opacity || "1") <= 0.02
+  ) return false;
+  const viewportWidth = Math.max(2, document.documentElement.clientWidth || window.innerWidth || 0);
+  const viewportHeight = Math.max(2, document.documentElement.clientHeight || window.innerHeight || 0);
+  let textLength = 0;
+  for (let child = body.firstChild, childCount = 0; child && childCount < 24; child = child.nextSibling) {
+    childCount += 1;
+    if (child.nodeType === Node.TEXT_NODE) textLength += String(child.nodeValue || "").trim().length;
+  }
+  if (textLength >= 8) return true;
+
+  // elementFromPoint reuses the page's current layout and returns only the
+  // small set of elements that actually occupy representative viewport
+  // pixels. This avoids walking a complex loading DOM or repeatedly forcing
+  // style/layout for hundreds of off-screen descendants.
+  const sampledElements = new Set();
+  const sampleFractions = [
+    [0.5, 0.12], [0.2, 0.28], [0.5, 0.28], [0.8, 0.28],
+    [0.2, 0.55], [0.5, 0.55], [0.8, 0.55], [0.5, 0.82],
+  ];
+  for (const [xFraction, yFraction] of sampleFractions) {
+    const element = document.elementFromPoint(
+      Math.min(viewportWidth - 1, Math.max(0, Math.round(viewportWidth * xFraction))),
+      Math.min(viewportHeight - 1, Math.max(0, Math.round(viewportHeight * yFraction))),
+    );
+    if (element) sampledElements.add(element);
+  }
+  const mediaOrControlTags = new Set([
+    "A", "BUTTON", "CANVAS", "IFRAME", "IMG", "INPUT", "SELECT", "SVG", "TEXTAREA", "VIDEO",
+  ]);
+  for (const sampledElement of sampledElements) {
+    let element = sampledElement;
+    for (let depth = 0; element && element !== body && depth < 5; depth += 1) {
+      let directTextLength = 0;
+      for (let child = element.firstChild, childCount = 0; child && childCount < 12; child = child.nextSibling) {
+        childCount += 1;
+        if (child.nodeType === Node.TEXT_NODE) directTextLength += String(child.nodeValue || "").trim().length;
+      }
+      if (directTextLength >= 4 || mediaOrControlTags.has(element.tagName)) {
+        try {
+          if (typeof element.checkVisibility !== "function" || element.checkVisibility({
+            checkOpacity: true,
+            checkVisibilityCSS: true,
+          })) return true;
+        } catch {
+          // elementFromPoint already excludes display:none and visibility:hidden.
+          return true;
+        }
+      }
+      element = element.parentElement;
+    }
+  }
+  return false;
+}
+
+function hasFirstContentfulPaint() {
+  try {
+    return performance.getEntriesByType("paint")
+      .some((entry) => entry.name === "first-contentful-paint");
+  } catch {
+    return false;
+  }
+}
+
+let activeRenderableProbeToken = 0;
+let activeRenderableProbeFrame = 0;
+
+ipcRenderer.on("brizo:probe-renderable-page", (_event, payload) => {
+  const navigationGeneration = Number(payload?.navigationGeneration);
+  const probeId = Number(payload?.probeId);
+  const nonce = typeof payload?.nonce === "string" ? payload.nonce : "";
+  if (!Number.isInteger(navigationGeneration) || !Number.isInteger(probeId) || !nonce) return;
+  activeRenderableProbeToken += 1;
+  const probeToken = activeRenderableProbeToken;
+  if (activeRenderableProbeFrame) window.cancelAnimationFrame(activeRenderableProbeFrame);
+  activeRenderableProbeFrame = 0;
+  const documentRoot = document.documentElement;
+  const href = location.href;
+  const visualPaint = hasFirstContentfulPaint();
+  const renderable = visualPaint || hasRenderablePageStructure();
+  const reply = (framesReady, phase) => {
+    if (
+      activeRenderableProbeToken !== probeToken
+      || document.documentElement !== documentRoot
+      || location.href !== href
+    ) return;
+    activeRenderableProbeFrame = 0;
+    ipcRenderer.send("bean-browser:renderable-page-probe", {
+      documentReady: document.readyState !== "loading",
+      framesReady,
+      href,
+      navigationGeneration,
+      nonce,
+      phase,
+      probeId,
+      renderable,
+      visualPaint,
+    });
+  };
+  // Send DOM evidence immediately. Frame confirmation is a separate phase so
+  // a compositor that suspends rAF cannot also suspend the hard-deadline proof
+  // that the current main document parsed successfully.
+  reply(false, "dom");
+  if (document.hidden || !renderable) return;
+  let remainingFrames = 2;
+  const afterFrame = () => {
+    if (activeRenderableProbeToken !== probeToken) return;
+    remainingFrames -= 1;
+    if (remainingFrames <= 0) reply(true, "frames");
+    else activeRenderableProbeFrame = window.requestAnimationFrame(afterFrame);
+  };
+  activeRenderableProbeFrame = window.requestAnimationFrame(afterFrame);
+});
+
+// Captured from macOS NSCursor.pointingHand at 2x. Keeping the system artwork
+// intact avoids replacing the familiar native hand with a hand-drawn cursor.
+const BRIZO_MACOS_POINTING_HAND_PNG = "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";
+const BRIZO_NEW_TAB_LINK_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(`
+  <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+    <image href="data:image/png;base64,${BRIZO_MACOS_POINTING_HAND_PNG}" width="32" height="32"/>
+    <path d="M17.75 18.5v5M15.25 21h5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+    <path d="M17.75 18.5v5M15.25 21h5" fill="none" stroke="#151515" stroke-width="1.35" stroke-linecap="round"/>
+  </svg>
+`)}") 12 8, pointer`;
+
+let hoveredNewTabLink = null;
+let newTabCursorRestores = [];
+
+function clearNewTabLinkCursor() {
+  for (const { element, value, priority } of newTabCursorRestores) {
+    if (!element?.style) continue;
+    if (value) element.style.setProperty("cursor", value, priority);
+    else element.style.removeProperty("cursor");
+  }
+  newTabCursorRestores = [];
+  hoveredNewTabLink = null;
+}
+
+function linkTargetDefinitelyOpensNewTab(link) {
+  if (!link || link.hasAttribute?.("download")) return false;
+  const ownTarget = String(link.getAttribute?.("target") || "").trim();
+  const baseTarget = ownTarget
+    ? ""
+    : String(document.querySelector("base[target]")?.getAttribute("target") || "").trim();
+  return (ownTarget || baseTarget).toLowerCase() === "_blank";
+}
+
+function findHoveredLink(event) {
+  for (const candidate of event.composedPath?.() || []) {
+    if (!(candidate instanceof Element)) continue;
+    if (candidate.matches?.("a[href], area[href]")) return candidate;
+    const closest = candidate.closest?.("a[href], area[href]");
+    if (closest) return closest;
+  }
+  return null;
+}
+
+function updateNewTabLinkCursor(event) {
+  if (!event.isTrusted) return;
+  const link = findHoveredLink(event);
+  if (!linkTargetDefinitelyOpensNewTab(link)) {
+    clearNewTabLinkCursor();
+    return;
+  }
+
+  const pointerTarget = (event.composedPath?.() || []).find((candidate) => candidate instanceof Element);
+  if (hoveredNewTabLink === link && newTabCursorRestores.some(({ element }) => element === pointerTarget)) return;
+
+  clearNewTabLinkCursor();
+  hoveredNewTabLink = link;
+  for (const element of new Set([link, pointerTarget].filter(Boolean))) {
+    newTabCursorRestores.push({
+      element,
+      value: element.style.getPropertyValue("cursor"),
+      priority: element.style.getPropertyPriority("cursor"),
+    });
+    element.style.setProperty("cursor", BRIZO_NEW_TAB_LINK_CURSOR, "important");
+  }
+}
+
+window.addEventListener("pointerover", updateNewTabLinkCursor, true);
+window.addEventListener("pointermove", updateNewTabLinkCursor, true);
+window.addEventListener("pointerout", (event) => {
+  if (!event.relatedTarget) clearNewTabLinkCursor();
+}, true);
+window.addEventListener("blur", clearNewTabLinkCursor);
+window.addEventListener("pagehide", clearNewTabLinkCursor, { once: true });
 
 function reportPageInteraction(event, interactionType = event.type) {
   if (!event.isTrusted) return;

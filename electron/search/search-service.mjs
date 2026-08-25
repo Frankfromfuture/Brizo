@@ -20,8 +20,16 @@ const TRUSTED_ENTITY_IMAGE_DOMAINS = new Set([
 ]);
 const COMMUNITY_ENTITY_IMAGE_DOMAINS = new Set([
   "zhihu.com", "bilibili.com", "toutiao.com", "xiaohongshu.com", "weibo.com",
+  "pinterest.com", "instagram.com", "facebook.com", "reddit.com", "flickr.com",
+  "douban.com", "tieba.baidu.com", "lofter.com", "duitang.com", "smzdm.com",
+  "jd.com", "1688.com", "taobao.com", "tmall.com", "alibaba.com", "pinduoduo.com",
 ]);
 const INVALID_ENTITY_IMAGE_HINTS = /(?:二维码|qr(?:[-_ ]?code)?|barcode|条码|captcha|验证码|screenshot|截图|placeholder|占位|not[-_ ]?found|404|error|错误|sprite|icon|图标|avatar|头像|logo|标志|banner|横幅|watermark|水印)/iu;
+const CONCRETE_VISUAL_EVIDENCE = /(?:猫|犬|狗|宠物|动物|品种|毛色|被毛|鸟类|鱼类|植物|花卉|车型|汽车|手机|相机|设备|产品|建筑|景区|服装|家具|器物|cat|dog|pet|animal|breed|coat|bird|fish|plant|flower|vehicle|phone|camera|device|product|building|clothing|furniture)/iu;
+const ANIMAL_VISUAL_EVIDENCE = /(?:猫|犬|狗|宠物|动物|品种|毛色|被毛|血统|猫舍|犬舍|cat|dog|pet|animal|breed|coat|kennel|cattery)/iu;
+const CAT_ENTITY_NAME = /(?:猫|渐层|布偶|英短|美短|缅因|暹罗|狸花|橘猫|蓝猫)/iu;
+const DOG_ENTITY_NAME = /(?:犬|狗|柯基|柴犬|哈士奇|萨摩耶|贵宾|金毛|拉布拉多)/iu;
+const ABSTRACT_VISUAL_QUERY = /(?:人工智能|产业结构|投资流程|法律|法规|政策|制度|社保|市场|经济|管理|方法|原因|区别|关系|进度|进程|供应商|api|流程|结构|规则|analysis|policy|law|process|economy|market|management|method|difference|relationship)/iu;
 
 function domainMatches(domain, candidate) {
   const host = String(domain || "").toLowerCase().replace(/^www\./, "");
@@ -77,9 +85,28 @@ function confirmedPersonAliases(entity, ranked) {
 }
 
 function resolveEntityKind(entity, query, ranked) {
-  if (!entity || entity.kind !== "concept") return entity;
+  if (!entity || entity.kind === "none") {
+    const queryText = safeText(query, 100);
+    const queryKey = normalizedEntityText(queryText);
+    if (queryKey.length < 2 || queryKey.length > 32 || ABSTRACT_VISUAL_QUERY.test(queryText)) return entity;
+    const confirmingDomains = new Set();
+    for (const source of Array.isArray(ranked) ? ranked : []) {
+      const evidence = `${source?.title || ""} ${source?.summary || source?.snippet || ""}`;
+      if (CONCRETE_VISUAL_EVIDENCE.test(evidence) && source?.domain) confirmingDomains.add(source.domain);
+    }
+    return confirmingDomains.size >= 2
+      ? { name: queryText, kind: "concept", confidence: 0.78 }
+      : entity;
+  }
+  if (entity.kind !== "concept") return entity;
   const queryKey = normalizedEntityText(query);
   if (!/^[\p{Script=Han}]{2,8}$/u.test(queryKey)) return entity;
+  const animalDomains = new Set();
+  for (const source of Array.isArray(ranked) ? ranked : []) {
+    const evidence = `${source?.title || ""} ${source?.summary || source?.snippet || ""}`;
+    if (ANIMAL_VISUAL_EVIDENCE.test(evidence) && source?.domain) animalDomains.add(source.domain);
+  }
+  if (ANIMAL_VISUAL_EVIDENCE.test(query) || animalDomains.size >= 2) return entity;
   const personSignals = /(?:演员|歌手|艺人|导演|主持人|运动员|作家|画家|科学家|企业家|政治家|出生|生于|履历|生平|主演|出道|事务所|女優|俳優|artist|actor|actress|born|biography)/iu;
   const confirmingDomains = new Set();
   for (const source of Array.isArray(ranked) ? ranked : []) {
@@ -106,54 +133,87 @@ export function selectEntityImages(items, { entity, query, ranked = [] } = {}) {
     .filter((source) => sourceAuthorityTier(source, query || entity.name) === 0)
     .map((source) => source.domain)
     .filter(Boolean);
-  const seen = new Set();
-  const seenPages = new Set();
-  return (Array.isArray(items) ? items : [])
+  const candidates = (Array.isArray(items) ? items : [])
     .map((item, index) => {
-      const imageUrl = safeText(item?.imageUrl || item?.thumbnailUrl, 4_000);
+      const originalImageUrl = safeText(item?.imageUrl, 4_000);
+      const thumbnailUrl = safeText(item?.thumbnailUrl, 4_000);
+      // Search providers sometimes expose an HTTP original alongside an HTTPS
+      // thumbnail. Prefer the full image when it is safe, otherwise retain the
+      // usable HTTPS thumbnail instead of discarding the whole candidate.
+      const imageUrl = [originalImageUrl, thumbnailUrl].find((candidate) => /^https:\/\//i.test(candidate)) || "";
       const url = safeText(item?.url, 4_000);
       const domain = safeText(item?.domain, 240);
-      const pageKey = normalizedEntityText(item?.title || item?.url);
+      let imageDomain = "";
+      try {
+        imageDomain = new URL(imageUrl).hostname;
+      } catch {
+        imageDomain = "";
+      }
+      // Different pages often reuse the same concise title (for example every
+      // result may simply be titled “布偶猫”). Dedupe by source page URL rather
+      // than title so those valid independent image candidates survive.
+      const pageKey = url.replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase();
       const imageHint = `${item?.title || ""} ${item?.source || ""} ${item?.url || ""} ${item?.imageUrl || ""}`;
       const official = officialDomains.some((candidate) => domainMatches(domain, candidate));
       const institutional = sourceAuthorityTier(item, entity.name) === 0;
       const trustedReference = [...TRUSTED_ENTITY_IMAGE_DOMAINS].some((candidate) => domainMatches(domain, candidate));
       const authoritativeMedia = sourceAuthorityTier(item, entity.name) === 1;
-      const candidateText = normalizedEntityText(`${item?.title || ""} ${item?.source || ""}`);
+      const candidateText = normalizedEntityText(item?.title || "");
       const matchedAlias = [...confirmedAliases.keys()].find((alias) => candidateText.includes(alias));
       const namesEntity = entityNameMatches(candidateText, entity) || Boolean(matchedAlias);
       const corroboratedDomain = Boolean(matchedAlias
         && [...confirmedAliases.get(matchedAlias)].some((candidate) => domainMatches(domain, candidate)));
+      const corroboratedEntityPage = item?.corroboratedEntityPage === true;
       const usableSize = !(Number(item?.width) > 0 && Number(item?.width) < 240)
         && !(Number(item?.height) > 0 && Number(item?.height) < 140)
         && (!(Number(item?.width) > 0 && Number(item?.height) > 0)
           || (Number(item.width) / Number(item.height) <= 4 && Number(item.width) / Number(item.height) >= 0.25));
       if (!/^https:\/\//i.test(imageUrl) || !/^https?:\/\//i.test(url) || !usableSize) return null;
       if (INVALID_ENTITY_IMAGE_HINTS.test(imageHint) || /\.(?:svg|ico)(?:[?#]|$)/iu.test(imageUrl)) return null;
-      if ([...COMMUNITY_ENTITY_IMAGE_DOMAINS].some((candidate) => domainMatches(domain, candidate))) return null;
-      if (!official && !(namesEntity && (institutional || trustedReference || authoritativeMedia || corroboratedDomain))) return null;
-      const key = imageUrl.replace(/[?#].*$/, "");
-      if (seen.has(key) || (pageKey && seenPages.has(pageKey))) return null;
-      seen.add(key);
-      if (pageKey) seenPages.add(pageKey);
+      if ([...COMMUNITY_ENTITY_IMAGE_DOMAINS]
+        .some((candidate) => domainMatches(domain, candidate) || domainMatches(imageDomain, candidate))) return null;
+      const strictMatch = official || namesEntity;
+      if (!strictMatch && !corroboratedEntityPage) return null;
       return {
         title: safeText(item?.title || entity.name, 180),
         imageUrl,
-        thumbnailUrl: safeText(item?.thumbnailUrl, 4_000),
+        thumbnailUrl,
         url,
         domain,
         source: safeText(item?.source || domain, 120),
-        authority: official ? "official" : institutional || trustedReference || corroboratedDomain ? "reference" : "media",
-        score: (official ? 100 : institutional ? 82 : trustedReference ? 72 : corroboratedDomain ? 64 : 52)
+        authority: official
+          ? "official"
+          : institutional || trustedReference || corroboratedDomain
+            ? "reference"
+            : authoritativeMedia
+              ? "media"
+              : "related",
+        pageKey,
+        strictMatch,
+        score: (official ? 100 : institutional ? 82 : trustedReference ? 72 : corroboratedDomain ? 64 : authoritativeMedia ? 52 : 42)
           + (namesEntity ? 16 : 0)
           + (Number(item?.width) >= 800 ? 4 : 0)
           - index * 0.01,
       };
     })
     .filter(Boolean)
-    .sort((left, right) => right.score - left.score)
-    .slice(0, 3)
-    .map(({ score: _score, ...item }) => item);
+    .sort((left, right) => Number(right.strictMatch) - Number(left.strictMatch) || right.score - left.score);
+
+  // Keep a verified reserve beyond the three visible slots so unreadable or
+  // hotlink-blocked candidates can be replaced without weakening relevance.
+  const seen = new Set();
+  const seenPages = new Set();
+  const selected = [];
+  for (const candidate of candidates) {
+    const key = candidate.imageUrl.replace(/[?#].*$/, "");
+    if (seen.has(key) || (candidate.pageKey && seenPages.has(candidate.pageKey))) continue;
+    seen.add(key);
+    if (candidate.pageKey) seenPages.add(candidate.pageKey);
+    const { pageKey: _pageKey, score: _score, strictMatch: _strictMatch, ...item } = candidate;
+    selected.push(item);
+    if (selected.length >= 9) break;
+  }
+  return selected;
 }
 
 function entityImageQuery(entity, language) {
@@ -164,6 +224,8 @@ function entityImageQuery(entity, language) {
     if (language === "ko") return `${entity.name} 인물 사진`;
     return `${entity.name} portrait photo`;
   }
+  if (language === "zh" && CAT_ENTITY_NAME.test(entity.name)) return `${entity.name} 猫 品种 图片`;
+  if (language === "zh" && DOG_ENTITY_NAME.test(entity.name)) return `${entity.name} 犬种 图片`;
   if (language === "zh") return `${entity.name} 官方 图片`;
   if (language === "ja") return `${entity.name} 公式 画像`;
   if (language === "ko") return `${entity.name} 공식 이미지`;
@@ -314,7 +376,7 @@ export function createSearchService({
         tasks.push(serper.batchSearch(plan.queries, {
           ...locale,
           tbs: FRESHNESS_TO_TBS[plan.freshness] || "",
-          num: plan.depth === "deep" ? 12 : 10,
+          num: plan.depth === "deep" ? 12 : plan.depth === "fast" ? 8 : 10,
           signal: retrievalSignal,
         }).then((value) => ({ provider: "serper", value })));
       }
@@ -322,7 +384,7 @@ export function createSearchService({
         taskProviders.push("bocha");
         tasks.push(bocha.webSearch(plan.queries[0], {
           freshness: FRESHNESS_TO_BOCHA[plan.freshness] || "noLimit",
-          count: plan.depth === "deep" ? 20 : 15,
+          count: plan.depth === "deep" ? 20 : plan.depth === "fast" ? 10 : 15,
           signal: retrievalSignal,
         }).then((value) => ({ provider: "bocha", value })));
       }
@@ -342,16 +404,82 @@ export function createSearchService({
         }));
         emit({ type: "notice", level: "warning", message: "未配置专业检索服务，正在使用公开网页检索，覆盖与时效性会受限。" });
       }
-      const visualEntity = isEntityVisualEligible(plan.visualEntity) ? plan.visualEntity : null;
-      const entityImagesPromise = visualEntity && serperConfigured
-        ? serper.vertical("images", entityImageQuery(visualEntity, requestedLanguage), {
-          ...locale,
-          num: 12,
-          signal: retrievalSignal,
-        }).then((value) => value?.items || []).catch((error) => {
-          logger.warn?.("[search-entity-images]", error?.message || error);
+      const fetchEntityImages = async (entity) => {
+        if (!entity) return [];
+        const imageController = new AbortController();
+        const abortImages = () => imageController.abort(signal?.reason);
+        signal?.addEventListener("abort", abortImages, { once: true });
+        const timeout = setTimeout(() => imageController.abort(new Error("实体图片检索超时")), 4_500);
+        try {
+          const imageQuery = entityImageQuery(entity, requestedLanguage);
+          const tasks = [];
+          const imageProviders = [];
+          if (serperConfigured) {
+            imageProviders.push("serper");
+            tasks.push(serper.vertical("images", imageQuery, {
+              ...locale,
+              num: 18,
+              signal: imageController.signal,
+            }).then((value) => ({ images: value?.items || [], pages: [], provider: "serper" })));
+          }
+          if (bochaConfigured) {
+            imageProviders.push("bocha");
+            tasks.push(bocha.webSearch(imageQuery, {
+              freshness: "noLimit",
+              count: 12,
+              signal: imageController.signal,
+            }).then((value) => ({
+              images: value?.images || [],
+              pages: value?.results || [],
+              provider: "bocha",
+            })));
+          }
+          imageProviders.push("bing-public");
+          tasks.push(legacy.imageSearch(imageQuery, {
+            hl: locale.hl,
+            signal: imageController.signal,
+          }).then((value) => ({ images: value?.items || [], pages: [], provider: "bing-public" })));
+          const settledImages = await Promise.allSettled(tasks);
+          logger.info?.("[search-entity-image-providers]", settledImages.map((item, index) => ({
+            provider: imageProviders[index],
+            status: item.status,
+            candidateCount: item.status === "fulfilled" ? item.value?.images?.length || 0 : 0,
+            errorCode: item.status === "rejected" ? safeText(item.reason?.code, 80) : "",
+          })));
+          return settledImages
+            .filter((item) => item.status === "fulfilled")
+            .flatMap((item) => {
+              const { images = [], pages = [], provider } = item.value;
+              return images.map((image) => {
+                if (provider !== "bocha") return { ...image, imageProvider: provider };
+                const imagePageUrl = safeText(image?.url, 4_000).replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase();
+                const matchingPage = pages.find((page) => {
+                  const pageUrl = safeText(page?.url, 4_000).replace(/[?#].*$/, "").replace(/\/$/, "").toLowerCase();
+                  if (!imagePageUrl || pageUrl !== imagePageUrl) return false;
+                  return entityNameMatches(`${page?.title || ""} ${page?.summary || page?.snippet || ""}`, entity);
+                });
+                return {
+                  ...image,
+                  imageProvider: provider,
+                  corroboratedEntityPage: Boolean(matchingPage),
+                  source: image?.source || matchingPage?.siteName || matchingPage?.domain || image?.domain,
+                  title: image?.title || matchingPage?.title || "",
+                };
+              });
+            });
+        } catch (error) {
+          if (!imageController.signal.aborted || signal?.aborted) {
+            logger.warn?.("[search-entity-images]", error?.message || error);
+          }
           return [];
-        })
+        } finally {
+          clearTimeout(timeout);
+          signal?.removeEventListener("abort", abortImages);
+        }
+      };
+      const visualEntity = isEntityVisualEligible(plan.visualEntity) ? plan.visualEntity : null;
+      const entityImagesPromise = visualEntity
+        ? fetchEntityImages(visualEntity)
         : Promise.resolve([]);
       const localPromise = getLocalResults(payload, plan, retrievalSignal).catch(() => []);
       let settled;
@@ -407,17 +535,20 @@ export function createSearchService({
       if (!ranked.length) throw new Error("没有找到可用于回答的真实网页结果。");
 
       const resolvedVisualEntity = resolveEntityKind(visualEntity, query, ranked);
+      const resolvedEntityImagesPromise = !visualEntity && isEntityVisualEligible(resolvedVisualEntity)
+        ? fetchEntityImages(resolvedVisualEntity)
+        : entityImagesPromise;
 
       const entityImagesTask = (async () => {
         const rawEntityImages = [
-          ...await entityImagesPromise,
+          ...await resolvedEntityImagesPromise,
           ...(bochaResult?.images || []),
         ];
         const selectedEntityImages = selectEntityImages(rawEntityImages, { entity: resolvedVisualEntity, query, ranked });
         // The main-process localizer performs HTTPS-only DNS pinning, response
         // validation, size limits, and caching. Do not preflight these
         // provider-owned URLs with an unrestricted fetch.
-        const rendererImages = await localizeSearchImages(selectedEntityImages);
+        const rendererImages = (await localizeSearchImages(selectedEntityImages)).slice(0, 3);
         logger.info?.("[search-entity-images]", {
           entityKind: resolvedVisualEntity?.kind || "none",
           eligible: Boolean(resolvedVisualEntity),
@@ -472,7 +603,10 @@ export function createSearchService({
       }
       emit({
         type: "sources",
-        sources: await localizeSearchSources(ranked.map(publicSource)),
+        // Favicons are presentation-only and remote hosts frequently stall or
+        // reject hotlink requests. Never block grounded answer generation on
+        // them; SourceFavicon already renders a deterministic letter fallback.
+        sources: ranked.map(publicSource).map((source) => ({ ...source, imageUrl: "" })),
         count: ranked.length,
       });
       retrievalDurationMs = Date.now() - retrievalStartedAt;
@@ -520,7 +654,7 @@ export function createSearchService({
         }).map((result, index) => ({ ...result, displayRank: index }));
         emit({
           type: "sources",
-          sources: await localizeSearchSources(ranked.map(publicSource)),
+          sources: ranked.map(publicSource).map((source) => ({ ...source, imageUrl: "" })),
           count: ranked.length,
         });
         readingDurationMs = Date.now() - readingStartedAt;
@@ -572,11 +706,7 @@ export function createSearchService({
       if (!matchesRequestedLanguage(cleanedAnswer, requestedLanguage)) {
         throw new Error("生成答案与问题语言不一致，已拦截该答案，请重试。");
       }
-      const sources = await localizeSearchSources(ranked.map(publicSource));
-      if (!checked.grounded) {
-        const coverage = Math.round(checked.coverage * 100);
-        emit({ type: "notice", level: "warning", message: `答案的结构化引用覆盖率为 ${coverage}%，或存在来源未支持的数字；请谨慎核对。` });
-      }
+      const sources = ranked.map(publicSource).map((source) => ({ ...source, imageUrl: "" }));
       const relatedQuestions = (await (followupsPromise || answerEngine.followups({
         query,
         answer: cleanedAnswer,

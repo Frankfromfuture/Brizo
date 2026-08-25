@@ -10,6 +10,28 @@ test("sandboxed browser preload uses Web Crypto and never requires Node crypto",
   assert.match(source, /globalThis\.crypto\.subtle\.digest/u);
 });
 
+test("external pages keep Electron and Chromium's native browser identity", async () => {
+  const main = await readProjectFile("electron/main.mjs");
+  const preload = await readProjectFile("electron/browser-page-preload.cjs");
+
+  assert.doesNotMatch(main, /app\.userAgentFallback|\.setUserAgent\(|onBeforeSendHeaders|sec-ch-ua/iu);
+  assert.doesNotMatch(preload, /userAgentData|navigator\.webdriver|window\.chrome|webFrame\.executeJavaScript/iu);
+});
+
+test("dedicated Use reaches every website through the normal-entry policy", async () => {
+  const main = await readProjectFile("electron/main.mjs");
+  const agent = await readProjectFile("electron/browser-command-agent.mjs");
+
+  assert.match(main, /enforceNormalEntryNavigation:\s*Boolean\(explicitWebContents\)/u);
+  assert.doesNotMatch(main, /explicitCtripUse|navigateDedicatedUseWebContents/u);
+  assert.doesNotMatch(main, /buildCtripFlightUrl|buildTaobaoSearchUrl/u);
+  assert.match(agent, /normalizeUsePlannerNavigation\(action\.url\)/u);
+  assert.match(agent, /已阻止冷启动业务深链/u);
+  assert.match(main, /setWindowOpenHandler\(\(\{ url, referrer, postBody \}\)/u);
+  assert.match(main, /httpReferrer/u);
+  assert.match(main, /postData = postBody\.data/u);
+});
+
 test("credential IPC rechecks the exact frame URL after asynchronous vault access", async () => {
   const source = await readProjectFile("electron/main.mjs");
   assert.ok((source.match(/frame\.url !== pageUrl/gu)?.length || 0) >= 2);
@@ -48,15 +70,31 @@ test("renderer images and page favicons cross the main-process safe image bounda
 
 test("external navigation stays behind the warm shell until compositor-ready frames", async () => {
   const main = await readProjectFile("electron/main.mjs");
+  const browserPreload = await readProjectFile("electron/browser-page-preload.cjs");
   const app = await readProjectFile("src/App.jsx");
   const styles = await readProjectFile("src/styles.css");
 
-  assert.match(main, /view\.__brizoNavigationPending = true;\s+view\.__brizoContentReady = false;/u);
-  assert.match(main, /browserVisible\s+&&\s+\(view\.__brizoContentReady \|\| view\.__brizoErrorPageActive\)/u);
-  assert.match(main, /captureMeaningfulPaint[\s\S]*captureMeaningfulPaint/u);
-  assert.match(app, /className="browser-navigation-loading"/u);
-  assert.match(styles, /\.browser-navigation-loading\s*\{[\s\S]*background:\s*#f1e7e1;/u);
-  assert.match(styles, /prefers-reduced-motion:\s*reduce[\s\S]*\.browser-navigation-loading > i[\s\S]*animation:\s*none/u);
+  assert.match(main, /view\.__brizoNavigationPending = true;/u);
+  assert.match(main, /view\.__brizoContentReady = false;/u);
+  assert.match(main, /const navigationMaskView = new View\(\);/u);
+  assert.match(main, /navigationMaskView\.setBackgroundColor\("#f1e7e1"\)/u);
+  assert.match(main, /view\.setVisible\(isSelected\);[\s\S]*navigationMaskView\?\.setVisible/u);
+  assert.match(main, /isForegroundSelected[\s\S]*!view\.__brizoIsUseSandbox[\s\S]*view\.__brizoNavigationPending/u);
+  assert.match(main, /stable-renderable-dom-two-preload-frames/u);
+  assert.match(main, /const browserNavigationDeadlineMs = 20_000;/u);
+  assert.match(main, /settleExpired: view\.__brizoNavigationDeadlineDeferred/u);
+  assert.match(main, /restoreAbortedBrowserNavigation/u);
+  assert.match(main, /isLoadingMainFrame\(\)/u);
+  assert.doesNotMatch(main, /did-first-visually-non-empty-paint/u);
+  assert.doesNotMatch(main, /function captureMeaningfulPaint/u);
+  assert.match(browserPreload, /brizo:probe-renderable-page/u);
+  assert.match(browserPreload, /first-contentful-paint/u);
+  assert.match(browserPreload, /document\.elementFromPoint/u);
+  assert.doesNotMatch(browserPreload, /createTreeWalker|getBoundingClientRect/u);
+  assert.match(browserPreload, /window\.requestAnimationFrame\(afterFrame\)/u);
+  assert.doesNotMatch(app, /className="browser-navigation-loading"/u);
+  assert.doesNotMatch(styles, /\.browser-navigation-loading\s*\{/u);
+  assert.match(styles, /\.address-bar\.is-site-address:not\(\.address-load-loading\):not\(\.address-load-complete\)::before/u);
 });
 
 test("private-window shell CSP denies unspecified resources", async () => {

@@ -26,7 +26,6 @@ import {
   assertResolvedNavigationAddress,
 } from "./browser-navigation-policy.mjs";
 import {
-  buildCtripFlightUrl,
   clearCtripFlightHighlights,
   collectCtripFlightResults,
   highlightCtripFlights,
@@ -37,7 +36,6 @@ import {
   waitForCtripFlightResults,
 } from "./ctrip-flight-flow.mjs";
 import {
-  buildTaobaoSearchUrl,
   clearTaobaoHighlights,
   highlightTaobaoItems,
   parseTaobaoPriceCommand,
@@ -184,6 +182,8 @@ if (isolatedHeadlessTest) {
 }
 const browserDiagnosticsEnabled = headlessTest
   || (!app.isPackaged && process.env.BRIZO_DEBUG_RENDERER === "1");
+const browserNavigationDeadlineMs = 20_000;
+const browserNavigationResumeSettlementMs = 650;
 
 const hasSingleInstanceLock = headlessTest || idleBenchmark || app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.exit(0);
@@ -263,6 +263,7 @@ let browserDisplayUrl = "";
 let browserOwnerTabId = "";
 let browserNavigationGeneration = 0;
 let defaultPageZoomFactor = 1;
+let defaultDownloadDirectory = "";
 let pageEdgeColorUpdateTimer;
 let exampleLoadingPageUrlPromise;
 let browserErrorPageActive = false;
@@ -295,6 +296,22 @@ const brizoUseControllers = new Map();
 const brizoUseNetworkPolicySessions = new WeakSet();
 const brizoUseResolutionCaches = new WeakMap();
 let appQuitRequested = false;
+
+function abortAllBrizoUseRuns(reason = new DOMException("Use execution stopped", "AbortError")) {
+  for (const control of brizoUseControllers.values()) control.abort(reason);
+  brizoUseControllers.clear();
+}
+
+function isBrizoUseTabLocked(tabId) {
+  if (!tabId) return false;
+  for (const record of brizoUseSandboxes.values()) {
+    if (
+      (record.tabId === tabId || record.originTabId === tabId)
+      && record.view?.__brizoUseRunning
+    ) return true;
+  }
+  return false;
+}
 
 function pruneSearchAttachmentRecords(now = Date.now()) {
   for (const [token, record] of searchAttachmentRecords) {
@@ -383,6 +400,51 @@ async function validateBrizoUseNetworkTarget(rawUrl, targetSession) {
   cache.set(parsed.hostname, { addresses, expiresAt: Date.now() + 5_000 });
   if (cache.size > 256) cache.delete(cache.keys().next().value);
   return url;
+}
+
+const useWindowOpenReferrerPolicies = new Set([
+  "default",
+  "unsafe-url",
+  "no-referrer-when-downgrade",
+  "no-referrer",
+  "origin",
+  "strict-origin-when-cross-origin",
+  "same-origin",
+  "strict-origin",
+]);
+
+function useWindowOpenLoadOptions(referrer, postBody) {
+  const options = {};
+  const referrerUrl = String(referrer?.url || "").trim();
+  const referrerPolicy = String(referrer?.policy || "default");
+  if (referrerUrl && useWindowOpenReferrerPolicies.has(referrerPolicy)) {
+    try {
+      options.httpReferrer = {
+        policy: referrerPolicy,
+        url: assertBrowserNavigationUrl(referrerUrl),
+      };
+    } catch {
+      // A page-provided non-web referrer is omitted rather than forwarded.
+    }
+  }
+  if (!postBody) return options;
+
+  const contentType = String(postBody.contentType || "").trim().toLocaleLowerCase();
+  if (!["application/x-www-form-urlencoded", "multipart/form-data"].includes(contentType)
+    || !Array.isArray(postBody.data)) {
+    throw new Error("网页尝试在新窗口提交无法安全保留的表单，Use 已停止该跳转。");
+  }
+  let contentTypeHeader = contentType;
+  if (contentType === "multipart/form-data") {
+    const boundary = String(postBody.boundary || "").trim();
+    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,200}$/u.test(boundary)) {
+      throw new Error("网页新窗口表单缺少有效边界，Use 已停止该跳转。");
+    }
+    contentTypeHeader += `; boundary=${boundary}`;
+  }
+  options.extraHeaders = `Content-Type: ${contentTypeHeader}`;
+  options.postData = postBody.data;
+  return options;
 }
 
 function installBrizoUseNetworkPolicy(targetSession) {
@@ -634,7 +696,6 @@ const pageFullWidthCss = ``;
 if (!isolatedHeadlessTest) {
   app.setPath("userData", path.join(app.getPath("appData"), "bean"));
 }
-app.userAgentFallback = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36`;
 app.commandLine.appendSwitch("enable-smooth-scrolling");
 app.commandLine.appendSwitch("enable-gpu-rasterization");
 app.commandLine.appendSwitch("enable-zero-copy");
@@ -1225,17 +1286,22 @@ async function getDownloadRecords() {
     .slice()
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
     .map(async (record) => {
+      const state = ["downloading", "paused"].includes(record.state)
+        && !activeDownloads.has(record.id)
+        ? "interrupted"
+        : record.state;
       let isMissing = false;
       let thumbnailDataUrl = "";
-      if (record.state === "completed") {
+      if (state === "completed") {
         try {
-          await stat(record.savePath);
+          const details = await stat(record.savePath);
+          if (!details.isFile()) isMissing = true;
         } catch {
           isMissing = true;
         }
       }
       const isImage = /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i.test(record.filename);
-      if (record.state === "completed" && !isMissing && isImage) {
+      if (state === "completed" && !isMissing && isImage) {
         thumbnailDataUrl = downloadThumbnailCache.get(record.savePath) || "";
         if (thumbnailDataUrl) {
           downloadThumbnailCache.delete(record.savePath);
@@ -1260,7 +1326,7 @@ async function getDownloadRecords() {
         }
       }
       if (isMissing) downloadThumbnailCache.delete(record.savePath);
-      return { ...record, isMissing, thumbnailDataUrl };
+      return { ...record, isMissing, state, thumbnailDataUrl };
     }));
 }
 
@@ -1611,8 +1677,36 @@ async function openDownloadedFile(id) {
   await loadDownloadRecords();
   const record = downloadRecords.find((entry) => entry.id === String(id || ""));
   if (!record || record.state !== "completed") return { status: "unavailable" };
+  try {
+    const details = await stat(record.savePath);
+    if (!details.isFile()) return { status: "unavailable" };
+  } catch {
+    return { status: "unavailable" };
+  }
+  if (record.filename.toLowerCase().endsWith(".pdf")) {
+    requestOpenPdfTab(pathToFileURL(record.savePath).href, { title: record.filename });
+    return { status: "opened" };
+  }
   const error = await shell.openPath(record.savePath);
   return { error, status: error ? "failed" : "opened" };
+}
+
+async function revealDownloadedFile(id) {
+  await loadDownloadRecords();
+  const record = downloadRecords.find((entry) => entry.id === String(id || ""));
+  if (!record) return { status: "unavailable" };
+  try {
+    const details = await stat(record.savePath);
+    if (details.isFile()) {
+      shell.showItemInFolder(record.savePath);
+      return { status: "revealed" };
+    }
+  } catch {
+    // If the file was moved, the last known parent directory may still be useful.
+  }
+  const directory = path.dirname(record.savePath);
+  const error = await shell.openPath(directory);
+  return { error, status: error ? "failed" : "directory-opened" };
 }
 
 async function deleteDownloadedFile(id) {
@@ -1620,14 +1714,23 @@ async function deleteDownloadedFile(id) {
   await loadDownloadRecords();
   const record = downloadRecords.find((entry) => entry.id === downloadId);
   if (!record) return { status: "unavailable" };
-  if (record.state === "completed" && existsSync(record.savePath)) {
-    await shell.trashItem(record.savePath);
+  let trashed = false;
+  if (existsSync(record.savePath)) {
+    try {
+      const details = await stat(record.savePath);
+      if (details.isFile()) {
+        await shell.trashItem(record.savePath);
+        trashed = true;
+      }
+    } catch {
+      return { status: "failed" };
+    }
   }
   downloadThumbnailCache.delete(record.savePath);
   downloadRecords = downloadRecords.filter((entry) => entry.id !== downloadId);
   await saveDownloadRecords();
   publishDownloads();
-  return { status: "deleted" };
+  return { status: "deleted", trashed };
 }
 
 function isExampleLoadingUrl(url) {
@@ -1737,7 +1840,106 @@ function isInternalBrowserErrorUrl(value) {
 
 function clearBrowserNavigationTimeout(view = browserView) {
   if (view?.__brizoNavigationTimeout) clearTimeout(view.__brizoNavigationTimeout);
-  if (view) view.__brizoNavigationTimeout = undefined;
+  if (!view) return;
+  view.__brizoNavigationTimeout = undefined;
+  view.__brizoNavigationDeadlineAt = 0;
+  view.__brizoNavigationDeadlineGeneration = -1;
+  view.__brizoNavigationDeadlineDeferred = false;
+  view.__brizoNavigationDeadlineSettlementAt = 0;
+}
+
+function clearBrowserRenderableProbe(view = browserView) {
+  if (view?.__brizoRenderableProbeTimer) clearTimeout(view.__brizoRenderableProbeTimer);
+  if (!view) return;
+  view.__brizoRenderableProbeTimer = undefined;
+  view.__brizoRenderableProbeGeneration = -1;
+  view.__brizoRenderableProbeStableCount = 0;
+  view.__brizoRenderableProbeResponseCount = 0;
+  view.__brizoRenderableProbeActiveId = -1;
+  view.__brizoRenderableProbeActiveNonce = "";
+  view.__brizoRenderableProbeExpectedUrl = "";
+  view.__brizoRenderableProbeDocumentReady = false;
+  view.__brizoRenderableProbeEvidenceUrl = "";
+}
+
+function pauseBrowserRenderableProbe(view = browserView) {
+  if (view?.__brizoRenderableProbeTimer) clearTimeout(view.__brizoRenderableProbeTimer);
+  if (!view) return;
+  view.__brizoRenderableProbeTimer = undefined;
+  view.__brizoRenderableProbeActiveId = -1;
+  view.__brizoRenderableProbeActiveNonce = "";
+  view.__brizoRenderableProbeExpectedUrl = "";
+}
+
+function clearBrowserErrorState(view = browserView) {
+  if (!view) return;
+  view.__brizoError = "";
+  view.__brizoErrorPageActive = false;
+  if (browserView !== view) return;
+  browserError = "";
+  browserErrorPageActive = false;
+}
+
+function browserNavigationFallbackSnapshot(view) {
+  const webContents = getLiveViewWebContents(view);
+  if (
+    !webContents
+    || !view.__brizoContentReady
+    || view.__brizoErrorPageActive
+  ) return null;
+  const currentUrl = webContents.getURL();
+  if (!/^(?:https?|file):/i.test(currentUrl) || isInternalBrowserErrorUrl(currentUrl)) return null;
+  return {
+    backgroundColor: view.__brizoBackgroundColor || "#ffffff",
+    displayUrl: view.__brizoDisplayUrl || currentUrl,
+    faviconUrl: view.__brizoFaviconUrl || "",
+    isPdf: Boolean(view.__brizoIsPdf),
+    pdfSource: view.__brizoPdfSource || "",
+    requestedUrl: view.__brizoRequestedUrl || currentUrl,
+    url: currentUrl,
+  };
+}
+
+function preserveBrowserNavigationFallback(view) {
+  if (!view || view.__brizoNavigationFallback) return Boolean(view?.__brizoNavigationFallback);
+  view.__brizoNavigationFallback = browserNavigationFallbackSnapshot(view);
+  return Boolean(view.__brizoNavigationFallback);
+}
+
+function restoreAbortedBrowserNavigation(view, abortedGeneration) {
+  const webContents = getLiveViewWebContents(view);
+  const fallback = view?.__brizoNavigationFallback;
+  if (
+    !webContents
+    || !fallback
+    || view.__brizoNavigationGeneration !== abortedGeneration
+    || webContents.getURL() !== fallback.url
+  ) return false;
+  view.__brizoNavigationFallback = null;
+  view.__brizoContentReady = true;
+  view.__brizoNavigationPending = false;
+  view.__brizoNavigationInFlight = false;
+  view.__brizoNavigationStartedFromReady = false;
+  view.__brizoNavigationPreview = "";
+  view.__brizoPaintReadySignal = "aborted-navigation-restored";
+  view.__brizoDisplayUrl = fallback.displayUrl;
+  view.__brizoRequestedUrl = fallback.requestedUrl;
+  view.__brizoBackgroundColor = fallback.backgroundColor;
+  view.__brizoFaviconUrl = fallback.faviconUrl;
+  view.__brizoIsPdf = fallback.isPdf;
+  view.__brizoPdfSource = fallback.pdfSource;
+  clearBrowserErrorState(view);
+  clearBrowserNavigationTimeout(view);
+  clearBrowserRenderableProbe(view);
+  logBrowserNavigation("aborted-restored", view, fallback.url);
+  if (browserView === view) {
+    browserDisplayUrl = fallback.displayUrl;
+    pageBackgroundColor = fallback.backgroundColor;
+    pageFaviconUrl = fallback.faviconUrl;
+    setBrowserViewVisible(browserVisible);
+    publishBrowserState();
+  }
+  return true;
 }
 
 function browserNavigationFailureDetails(error) {
@@ -1762,13 +1964,6 @@ function isAbortedBrowserNavigation(error) {
 
 function navigationLogUrl(value) {
   return summarizeDiagnosticUrl(value);
-}
-
-function standardBrowserUserAgent(browserSession) {
-  const raw = browserSession?.getUserAgent?.() || app.userAgentFallback || "";
-  const chromeMatch = raw.match(/Chrome\/(\d+(\.\d+)*)/i);
-  const chromeVersion = chromeMatch ? chromeMatch[1] : "133.0.0.0";
-  return `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`;
 }
 
 function logBrowserNavigation(eventName, view, url, details = {}) {
@@ -1880,7 +2075,13 @@ async function showBrowserErrorPage(details = {}) {
   browserErrorPageActive = true;
   errorView.__brizoErrorPageActive = true;
   errorView.__brizoNavigationInFlight = false;
+  errorView.__brizoNavigationStartedFromReady = false;
+  errorView.__brizoNavigationPending = false;
+  errorView.__brizoContentReady = false;
+  errorView.__brizoNavigationPreview = "";
+  errorView.__brizoNavigationFallback = null;
   clearBrowserNavigationTimeout(errorView);
+  clearBrowserRenderableProbe(errorView);
   const detailUrl = isInternalBrowserErrorUrl(details.url) ? "" : details.url;
   const originalUrl = detailUrl
     || errorView.__brizoRequestedUrl
@@ -1888,30 +2089,19 @@ async function showBrowserErrorPage(details = {}) {
   const failure = describeBrowserFailure(details);
   browserError = `${failure[0]} · ${failure[1]}`;
   errorView.__brizoError = browserError;
+  errorView.__brizoDisplayUrl = originalUrl;
+  if (originalUrl) errorView.__brizoRequestedUrl = originalUrl;
+  errorView.__brizoBackgroundColor = "#ffffff";
+  errorView.__brizoFaviconUrl = "";
+  browserDisplayUrl = originalUrl;
   pageBackgroundColor = "#ffffff";
   pageFaviconUrl = "";
+  setBrowserViewVisible(browserVisible);
   publishBrowserState();
-  try {
-    const pagePath = await writeBrowserErrorPage(failure);
-    const errorWebContents = getLiveViewWebContents(errorView);
-    if (!errorView.__brizoErrorPageActive || !errorWebContents) return;
-    await errorWebContents.loadFile(pagePath);
-    errorView.__brizoDisplayUrl = originalUrl;
-    errorView.__brizoError = `${failure[0]} · ${failure[1]}`;
-    errorView.__brizoBackgroundColor = "#ffffff";
-    errorView.__brizoFaviconUrl = "";
-    if (browserView !== errorView) return;
-    browserDisplayUrl = originalUrl;
-    browserError = `${failure[0]} · ${failure[1]}`;
-    pageBackgroundColor = "#ffffff";
-    pageFaviconUrl = "";
-    publishBrowserState();
-  } catch (error) {
-    errorView.__brizoErrorPageActive = false;
-    if (browserView === errorView) browserErrorPageActive = false;
-    browserError = error instanceof Error ? error.message : String(error);
-    publishBrowserState();
-  }
+  // The renderer already owns Brizo's error surface. Keeping the failed
+  // document in place preserves the real history index; loading a generated
+  // file here would add a synthetic history entry and trap Back/Forward in an
+  // error-page loop.
 }
 
 async function loadBrowserUrl(webContents, url) {
@@ -2038,7 +2228,9 @@ async function applySiteHygieneBehavior(webContents) {
   if (!webContents || webContents.isDestroyed()) return;
   const view = getBrowserViewForWebContents(webContents);
   if (view?.__brizoIsPdf) return;
-  webContents.send("brizo:apply-site-hygiene", siteHygieneSettings);
+  webContents.send("brizo:apply-site-hygiene", view?.__brizoIsUseSandbox
+    ? { ...siteHygieneSettings, credentialAutofill: false }
+    : siteHygieneSettings);
 }
 
 function publishSiteHygieneSettings() {
@@ -2176,7 +2368,11 @@ async function sampleRenderedLeftEdgeColor(webContents) {
 
 async function updatePageBackgroundColor() {
   const sampledWebContents = getLiveViewWebContents(browserView);
-  if (!sampledWebContents) return;
+  if (
+    !sampledWebContents
+    || !browserView.__brizoContentReady
+    || browserView.__brizoNavigationPending
+  ) return;
 
   const sampledView = browserView;
   const sampledGeneration = browserNavigationGeneration;
@@ -2286,11 +2482,16 @@ function setBrowserViewVisible(visible) {
       }
       continue;
     }
+    // Keep the selected incoming page attached to the compositor behind a
+    // cheap native warm mask. Hiding it here suspends requestAnimationFrame,
+    // visibility-gated hydration, and sometimes the display surface itself.
     const isSelected = view === browserView
       && browserVisible
-      && (view.__brizoContentReady || view.__brizoErrorPageActive);
+      && !view.__brizoErrorPageActive;
     const isForegroundSelected = isSelected && canRunForegroundPage;
     const frameView = view.__brizoFrameView;
+    const navigationMaskView = view.__brizoNavigationMaskView;
+    const inputShieldView = view.__brizoInputShieldView;
     const layoutBounds = browserBounds;
     const frameTopOverlap = Math.min(browserContentBorderRadius, layoutBounds.y);
     const frameBounds = {
@@ -2314,227 +2515,287 @@ function setBrowserViewVisible(visible) {
     // is actually foregrounded. Keeping a visible-but-blurred/minimized page
     // unthrottled is indistinguishable from a background tab to the user and
     // needlessly burns CPU and battery.
-    webContents.setBackgroundThrottling(!isForegroundSelected);
+    webContents.setBackgroundThrottling(view.__brizoUseRunning ? false : !isForegroundSelected);
     frameView?.setBounds(frameBounds);
     view.setBounds(contentBounds);
+    navigationMaskView?.setBounds(contentBounds);
+    inputShieldView?.setBounds(contentBounds);
 
     view.setVisible(isSelected);
     frameView?.setVisible(isSelected);
-  }
-}
-
-function freezeBrowserNavigationViewport(view) {
-  if (!view?.__brizoNavigationViewport) {
-    view.__brizoNavigationViewport = { ...browserBounds };
-  }
-}
-
-function releaseBrowserNavigationViewportAfterPaint(view, navigationGeneration) {
-  void (async () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      try {
-        await mainWindow.webContents.executeJavaScript(`
-          new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
-        `);
-      } catch {
-        // The shell may be closing while the final incoming frame settles.
-      }
-    }
-    const webContents = getLiveViewWebContents(view);
+    navigationMaskView?.setVisible(Boolean(isSelected && !view.__brizoContentReady));
+    inputShieldView?.setVisible(Boolean(isSelected && view.__brizoUseRunning));
     if (
-      !webContents
-      || view.__brizoNavigationGeneration !== navigationGeneration
-      || view.__brizoNavigationPending
-    ) return;
-    view.__brizoNavigationViewport = null;
-    if (browserView === view) setBrowserViewVisible(browserVisible);
-  })();
-}
-
-function hasMeaningfulPaint(image) {
-  if (!image || image.isEmpty()) return false;
-  try {
-    const bitmap = image.resize({ width: 64, height: 64, quality: "good" }).toBitmap();
-    let paintedSamples = 0;
-    for (let offset = 0; offset + 3 < bitmap.length; offset += 4) {
-      const blue = bitmap[offset];
-      const green = bitmap[offset + 1];
-      const red = bitmap[offset + 2];
-      const alpha = bitmap[offset + 3];
-      if (alpha > 20 && (red < 245 || green < 245 || blue < 245)) paintedSamples += 1;
-      if (paintedSamples >= 2) return true;
+      isForegroundSelected
+      && !view.__brizoIsUseSandbox
+      && view.__brizoNavigationPending
+      && !view.__brizoNavigationTimeout
+    ) {
+      armBrowserNavigationDeadline(view, {
+        generation: view.__brizoNavigationGeneration,
+        restart: false,
+        settleExpired: view.__brizoNavigationDeadlineDeferred,
+      });
     }
-  } catch {
-    return false;
-  }
-  return false;
-}
-
-async function captureMeaningfulPaint(webContents, trustVisualPaint = false) {
-  if (!webContents || webContents.isDestroyed()) return false;
-  try {
-    const image = await webContents.capturePage();
-    if (hasMeaningfulPaint(image)) return true;
-    // Chromium's visual-paint event is a stronger signal than Brizo's generic
-    // near-white bitmap heuristic for sparse pages such as Bing results.
-    return Boolean(trustVisualPaint && !image.isEmpty());
-  } catch {
-    return false;
-  }
-}
-
-async function hasRenderablePageStructure(webContents) {
-  if (!webContents || webContents.isDestroyed()) return false;
-  try {
-    return Boolean(await webContents.executeJavaScript(`
-      (() => {
-        const body = document.body;
-        if (!body || document.readyState === "loading") return false;
-        const rect = body.getBoundingClientRect();
-        if (rect.width < 2 || rect.height < 2) return false;
-        const text = (body.innerText || "").trim();
-        const visibleContent = [...body.querySelectorAll(
-          "main, form, input, button, a[href], h1, h2, p, img, svg, canvas, video, iframe"
-        )].some((element) => {
-          const elementRect = element.getBoundingClientRect();
-          if (elementRect.width < 2 || elementRect.height < 2) return false;
-          const style = getComputedStyle(element);
-          return style.display !== "none"
-            && style.visibility !== "hidden"
-            && Number.parseFloat(style.opacity || "1") > 0.02;
-        });
-        return visibleContent && (
-          text.length >= 8
-          || Boolean(body.querySelector("img, svg, canvas, video, iframe"))
-        );
-      })()
-    `));
-  } catch {
-    return false;
+    if (
+      isForegroundSelected
+      && !view.__brizoIsUseSandbox
+      && !view.__brizoContentReady
+      && !view.__brizoErrorPageActive
+      && (
+        view.__brizoVisualPaintGeneration === view.__brizoNavigationGeneration
+        || view.__brizoDomReadyGeneration === view.__brizoNavigationGeneration
+        || view.__brizoFinishedGeneration === view.__brizoNavigationGeneration
+        || view.__brizoCommittedGeneration === view.__brizoNavigationGeneration
+      )
+    ) {
+      scheduleBrowserRenderableProbe(view, view.__brizoNavigationGeneration, 0);
+    } else if (!isForegroundSelected && view.__brizoRenderableProbeTimer) {
+      pauseBrowserRenderableProbe(view);
+    }
+    if (
+      isForegroundSelected
+      && view.__brizoUseRunning
+      && inputShieldView
+      && !inputShieldView.webContents.isDestroyed()
+    ) inputShieldView.webContents.focus();
   }
 }
 
-async function waitForPageAnimationFrames(webContents, frameCount = 2) {
-  if (!webContents || webContents.isDestroyed()) return false;
-  try {
-    return Boolean(await webContents.executeJavaScript(`
-      new Promise((resolve) => {
-        let remaining = ${Math.max(1, Number(frameCount) || 1)};
-        const timeout = setTimeout(() => resolve(false), 750);
-        const next = () => {
-          remaining -= 1;
-          if (remaining <= 0) {
-            clearTimeout(timeout);
-            resolve(true);
-          }
-          else requestAnimationFrame(next);
-        };
-        requestAnimationFrame(next);
-      })
-    `));
-  } catch {
-    return false;
+function scheduleBrowserRenderableProbe(view, navigationGeneration, delayMs = 0) {
+  const webContents = getLiveViewWebContents(view);
+  if (
+    !webContents
+    || view.__brizoIsUseSandbox
+    || view !== browserView
+    || !browserVisible
+    || !windowCanRunForegroundView(mainWindow)
+    || view.__brizoNavigationGeneration !== navigationGeneration
+    || view.__brizoContentReady
+    || view.__brizoErrorPageActive
+  ) return false;
+  if (view.__brizoRenderableProbeTimer) clearTimeout(view.__brizoRenderableProbeTimer);
+  const probeId = (view.__brizoRenderableProbeSequence || 0) + 1;
+  const probeNonce = randomUUID();
+  const expectedUrl = webContents.getURL();
+  view.__brizoRenderableProbeSequence = probeId;
+  view.__brizoRenderableProbeActiveId = probeId;
+  view.__brizoRenderableProbeActiveNonce = probeNonce;
+  view.__brizoRenderableProbeExpectedUrl = expectedUrl;
+  view.__brizoRenderableProbeGeneration = navigationGeneration;
+  view.__brizoRenderableProbeTimer = setTimeout(() => {
+    view.__brizoRenderableProbeTimer = undefined;
+    const currentWebContents = getLiveViewWebContents(view);
+    if (
+      !currentWebContents
+      || view.__brizoNavigationGeneration !== navigationGeneration
+      || view.__brizoRenderableProbeActiveId !== probeId
+      || view.__brizoRenderableProbeActiveNonce !== probeNonce
+      || currentWebContents.getURL() !== expectedUrl
+      || view.__brizoContentReady
+      || view.__brizoErrorPageActive
+    ) return;
+    try {
+      currentWebContents.send("brizo:probe-renderable-page", {
+        navigationGeneration,
+        nonce: probeNonce,
+        probeId,
+      });
+    } catch {
+      return;
+    }
+    // The page may become hidden between scheduling and delivery. Keep this
+    // retry in the main process so a throttled page timer can never suspend the
+    // readiness state machine.
+    view.__brizoRenderableProbeTimer = setTimeout(() => {
+      if (view.__brizoRenderableProbeActiveId !== probeId) return;
+      scheduleBrowserRenderableProbe(view, navigationGeneration, 0);
+    }, 500);
+  }, Math.max(0, Number(delayMs) || 0));
+  return true;
+}
+
+function armBrowserNavigationDeadline(
+  view,
+  { generation = -1, restart = false, settleExpired = false } = {},
+) {
+  const webContents = getLiveViewWebContents(view);
+  if (!webContents) return false;
+  const now = Date.now();
+  if (
+    !restart
+    && view.__brizoNavigationTimeout
+    && (
+      view.__brizoNavigationDeadlineAt > now
+      || view.__brizoNavigationDeadlineSettlementAt > now
+    )
+  ) {
+    if (generation >= 0) view.__brizoNavigationDeadlineGeneration = generation;
+    return true;
   }
+  if (view.__brizoNavigationTimeout) clearTimeout(view.__brizoNavigationTimeout);
+  view.__brizoNavigationTimeout = undefined;
+  const previousDeadlineAt = Number(view.__brizoNavigationDeadlineAt) || 0;
+  let timeoutDelay;
+  if (restart || previousDeadlineAt <= 0) {
+    view.__brizoNavigationDeadlineAt = now + browserNavigationDeadlineMs;
+    view.__brizoNavigationDeadlineDeferred = false;
+    view.__brizoNavigationDeadlineSettlementAt = 0;
+    timeoutDelay = browserNavigationDeadlineMs;
+  } else if (previousDeadlineAt > now) {
+    timeoutDelay = previousDeadlineAt - now;
+  } else if (settleExpired && view.__brizoNavigationDeadlineDeferred) {
+    view.__brizoNavigationDeadlineSettlementAt = now + browserNavigationResumeSettlementMs;
+    timeoutDelay = browserNavigationResumeSettlementMs;
+  } else {
+    timeoutDelay = 0;
+  }
+  const deadlineToken = (view.__brizoNavigationDeadlineToken || 0) + 1;
+  view.__brizoNavigationDeadlineToken = deadlineToken;
+  if (generation >= 0) view.__brizoNavigationDeadlineGeneration = generation;
+  view.__brizoNavigationTimeout = setTimeout(() => {
+    view.__brizoNavigationTimeout = undefined;
+    const currentWebContents = getLiveViewWebContents(view);
+    const currentGeneration = view.__brizoNavigationDeadlineGeneration;
+    if (
+      !currentWebContents
+      || view.__brizoNavigationDeadlineToken !== deadlineToken
+      || view.__brizoErrorPageActive
+      || !view.__brizoNavigationPending
+    ) return;
+    const isForegroundNavigation = view === browserView
+      && browserVisible
+      && windowCanRunForegroundView(mainWindow);
+    if (!isForegroundNavigation) {
+      view.__brizoNavigationDeadlineDeferred = true;
+      logBrowserNavigation("deadline-deferred-background", view, view.__brizoRequestedUrl);
+      return;
+    }
+    view.__brizoNavigationDeadlineDeferred = false;
+    const hasCurrentGeneration = currentGeneration >= 0
+      && view.__brizoNavigationGeneration === currentGeneration;
+    const stableRenderablePage = hasCurrentGeneration
+      && view.__brizoRenderableProbeGeneration === currentGeneration
+      && view.__brizoRenderableProbeStableCount >= 2
+      && view.__brizoRenderableProbeEvidenceUrl === currentWebContents.getURL();
+    const probedMainDocumentReady = hasCurrentGeneration
+      && view.__brizoRenderableProbeGeneration === currentGeneration
+      && view.__brizoRenderableProbeResponseCount > 0
+      && view.__brizoRenderableProbeDocumentReady
+      && view.__brizoRenderableProbeEvidenceUrl === currentWebContents.getURL();
+    const mainDocumentReady = probedMainDocumentReady && (
+      view.__brizoDomReadyGeneration === currentGeneration
+      || view.__brizoFinishedGeneration === currentGeneration
+      || view.__brizoCommittedGeneration === currentGeneration
+    );
+    const mainDocumentCommitted = hasCurrentGeneration
+      && view.__brizoCommittedGeneration === currentGeneration;
+    if (stableRenderablePage || mainDocumentReady) {
+      // A parsed main document is not a network timeout. Reveal it at the hard
+      // boundary and let fonts, media, analytics, and other tail resources keep
+      // loading normally.
+      markBrowserViewContentReady(
+        view,
+        currentGeneration,
+        stableRenderablePage
+          ? "navigation-deadline-renderable-dom"
+          : "navigation-deadline-main-document",
+      );
+      return;
+    }
+    view.__brizoNavigationInFlight = false;
+    view.__brizoNavigationPending = false;
+    clearBrowserRenderableProbe(view);
+    logBrowserNavigation("timeout", view, view.__brizoRequestedUrl, {
+      committed: mainDocumentCommitted,
+      currentUrl: navigationLogUrl(currentWebContents.getURL()),
+      contentReady: Boolean(view.__brizoContentReady),
+    });
+    clearBrowserNavigationTimeout(view);
+    currentWebContents.stop();
+    if (browserView === view) {
+      void showBrowserErrorPage({
+        errorCode: -118,
+        url: view.__brizoRequestedUrl || view.__brizoDisplayUrl,
+      });
+    } else {
+      view.__brizoContentReady = false;
+      view.__brizoErrorPageActive = true;
+      view.__brizoError = "TIMEOUT · 连接超时";
+    }
+  }, timeoutDelay);
+  return true;
+}
+
+function markBrowserViewContentReady(view, navigationGeneration, readySignal) {
+  const webContents = getLiveViewWebContents(view);
+  if (
+    !webContents
+    || view.__brizoNavigationGeneration !== navigationGeneration
+    || view.__brizoErrorPageActive
+    || view.__brizoContentReady
+  ) return false;
+  view.__brizoContentReady = true;
+  view.__brizoNavigationPending = false;
+  view.__brizoNavigationInFlight = false;
+  view.__brizoNavigationStartedFromReady = false;
+  view.__brizoNavigationPreview = "";
+  view.__brizoNavigationFallback = null;
+  view.__brizoPaintReadySignal = readySignal;
+  clearBrowserNavigationTimeout(view);
+  clearBrowserRenderableProbe(view);
+  logBrowserNavigation("paint-ready", view, webContents.getURL(), {
+    signal: readySignal,
+  });
+  if (browserView === view) {
+    setBrowserViewVisible(browserVisible);
+    publishBrowserState();
+  }
+  return true;
 }
 
 function revealBrowserViewAfterFirstFrame(view, navigationGeneration) {
   const webContents = getLiveViewWebContents(view);
   if (!webContents) return;
-  if (view.__brizoRevealGeneration === navigationGeneration) return;
   view.__brizoRevealGeneration = navigationGeneration;
-  const waitForLivePageReady = async () => {
-    const deadline = Date.now() + 20_000;
-    let stableDomFrames = 0;
-    while (!webContents.isDestroyed() && Date.now() < deadline) {
-      const visuallyPainted = view.__brizoVisualPaintGeneration === navigationGeneration;
-      const domLifecycleReady = view.__brizoDomReadyGeneration === navigationGeneration
-        || view.__brizoFinishedGeneration === navigationGeneration;
-      const renderableDom = domLifecycleReady && await hasRenderablePageStructure(webContents);
-      if (renderableDom) stableDomFrames += 1;
-      else stableDomFrames = 0;
-      if (visuallyPainted || renderableDom) {
-        await waitForPageAnimationFrames(webContents, 2);
-        const firstPaintReady = await captureMeaningfulPaint(webContents, visuallyPainted);
-        if (!firstPaintReady) {
-          // Some animation-heavy pages have a fully laid-out, visible DOM while
-          // an overlapping native loading surface prevents capturePage() from
-          // returning the live compositor bitmap. Two consecutive observations
-          // plus two page animation frames are sufficient to reveal that page;
-          // blank or hidden documents never satisfy hasRenderablePageStructure.
-          if (
-            stableDomFrames >= 2
-            && view.__brizoNavigationGeneration === navigationGeneration
-            && await hasRenderablePageStructure(webContents)
-          ) return "stable-renderable-dom-two-frames";
-          await new Promise((resolve) => setTimeout(resolve, 80));
-          continue;
-        }
-        // A completed DOM is not the same thing as a compositor-ready page.
-        // Require a second real bitmap after another pair of page frames so a
-        // redirecting/search page cannot expose its blank or pre-layout frame.
-        await waitForPageAnimationFrames(webContents, 2);
-        const settledPaintReady = await captureMeaningfulPaint(webContents, visuallyPainted);
-        if (
-          settledPaintReady
-          && !webContents.isDestroyed()
-          && view.__brizoNavigationGeneration === navigationGeneration
-          && (visuallyPainted || await hasRenderablePageStructure(webContents))
-        ) {
-          return visuallyPainted
-            ? "chromium-visual-paint-live-view"
-            : "finished-renderable-dom-two-painted-frames";
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 80));
-    }
-    return "";
-  };
-  // The incoming WebContents is never captured while it is navigating. Chromium
-  // navigation/DOM/paint signals decide readiness; the snapshot is only an
-  // optional frozen image of the outgoing document.
-  waitForLivePageReady().then(async (readySignal) => {
-    if (!readySignal) return;
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      try {
-        await mainWindow.webContents.executeJavaScript(`
-          new Promise((resolve) => requestAnimationFrame(resolve))
-        `);
-      } catch {
-        // The shell may be closing while a navigation settles.
-      }
-    }
-    if (
-      webContents.isDestroyed()
-      || view.__brizoNavigationGeneration !== navigationGeneration
-    ) return;
-    view.__brizoContentReady = true;
-    view.__brizoNavigationPending = false;
-    view.__brizoNavigationPreview = "";
-    clearBrowserNavigationTimeout(view);
-    logBrowserNavigation("paint-ready", view, webContents.getURL(), {
-      signal: readySignal,
-    });
+  // The isolated preload measures current-generation DOM and two page frames
+  // without using executeJavaScript or capturePage on the loading destination.
+  scheduleBrowserRenderableProbe(view, navigationGeneration, 0);
+}
+
+function completeBrowserSameDocumentNavigation(view, url) {
+  const webContents = getLiveViewWebContents(view);
+  if (!webContents) return false;
+  clearBrowserErrorState(view);
+  if (typeof url === "string" && !isInternalBrowserErrorUrl(url)) {
+    view.__brizoDisplayUrl = url;
+    view.__brizoRequestedUrl = url;
+  }
+  const canComplete = view.__brizoContentReady || view.__brizoNavigationStartedFromReady;
+  if (!canComplete) {
+    clearBrowserRenderableProbe(view);
+    scheduleBrowserRenderableProbe(view, view.__brizoNavigationGeneration, 0);
     if (browserView === view) {
-      setBrowserViewVisible(browserVisible);
+      browserDisplayUrl = view.__brizoDisplayUrl || url || webContents.getURL();
       publishBrowserState();
     }
-    releaseBrowserNavigationViewportAfterPaint(view, navigationGeneration);
-  }).finally(() => {
-    if (
-      webContents.isDestroyed()
-      || view.__brizoNavigationGeneration !== navigationGeneration
-      || view.__brizoContentReady
-      || view.__brizoErrorPageActive
-    ) return;
-    if (browserView === view) {
-      void showBrowserErrorPage({
-        errorCode: -118,
-        url: view.__brizoRequestedUrl || view.__brizoDisplayUrl || webContents.getURL(),
-      });
-    } else {
-      view.__brizoError = "TIMEOUT · 页面长时间没有产生有效画面";
-    }
-  });
+    return false;
+  }
+  view.__brizoContentReady = true;
+  view.__brizoNavigationPending = false;
+  view.__brizoNavigationInFlight = false;
+  view.__brizoNavigationStartedFromReady = false;
+  view.__brizoNavigationPreview = "";
+  view.__brizoPaintReadySignal = "same-document-navigation";
+  view.__brizoNavigationFallback = null;
+  clearBrowserNavigationTimeout(view);
+  clearBrowserRenderableProbe(view);
+  if (browserView === view) {
+    browserDisplayUrl = view.__brizoDisplayUrl || url || webContents.getURL();
+    setBrowserViewVisible(browserVisible);
+    publishBrowserState();
+  }
+  return true;
 }
 
 function beginBrowserNavigation(view, action) {
@@ -2542,10 +2803,15 @@ function beginBrowserNavigation(view, action) {
   if (!webContents) return false;
   const requestGeneration = (view.__brizoNavigationRequestGeneration || 0) + 1;
   view.__brizoNavigationRequestGeneration = requestGeneration;
-  freezeBrowserNavigationViewport(view);
+  preserveBrowserNavigationFallback(view);
+  view.__brizoNavigationStartedFromReady = Boolean(view.__brizoContentReady);
+  clearBrowserErrorState(view);
   view.__brizoNavigationPending = true;
+  view.__brizoNavigationInFlight = true;
   view.__brizoContentReady = false;
   view.__brizoNavigationPreview = "";
+  clearBrowserRenderableProbe(view);
+  armBrowserNavigationDeadline(view, { generation: -1, restart: true });
   if (browserView === view) {
     setBrowserViewVisible(browserVisible);
     publishBrowserState();
@@ -2570,7 +2836,7 @@ function activateBrowserView(view, ownerTabId) {
   browserErrorPageActive = Boolean(view.__brizoErrorPageActive);
   setBrowserViewVisible(browserVisible);
   for (const [tabId, backgroundView] of browserViews) {
-    if (backgroundView === view || backgroundView.__brizoSleepTimer) continue;
+    if (backgroundView === view || backgroundView.__brizoSleepTimer || backgroundView.__brizoRetainForUse) continue;
     backgroundView.__brizoSleepTimer = setTimeout(() => {
       const backgroundWebContents = getLiveViewWebContents(backgroundView);
       if (browserView === backgroundView || !backgroundWebContents) return;
@@ -2626,6 +2892,7 @@ function navigateBrowserPdf(input, ownerTabId) {
 
 function navigateBrowserUrl(url, ownerTabId, { pdfSource = "" } = {}) {
   if (!url || !mainWindow) return false;
+  if (isBrizoUseTabLocked(ownerTabId)) return false;
   if (typeof ownerTabId === "string" && ownerTabId) {
     abortSearchesForOwner(
       { sessionId: ownerTabId, tabId: ownerTabId },
@@ -2633,6 +2900,7 @@ function navigateBrowserUrl(url, ownerTabId, { pdfSource = "" } = {}) {
     );
   }
   const targetView = ensureBrowserView(ownerTabId);
+  const previousPageFallback = browserNavigationFallbackSnapshot(targetView);
   targetView.__brizoIsPdf = Boolean(pdfSource);
   targetView.__brizoPdfSource = pdfSource;
   applyBrowserPageZoomPolicy(targetView);
@@ -2667,39 +2935,31 @@ function navigateBrowserUrl(url, ownerTabId, { pdfSource = "" } = {}) {
   targetView.__brizoRequestedUrl = url;
   targetView.__brizoError = "";
   targetView.__brizoErrorPageActive = false;
+  if (previousPageFallback) {
+    targetView.__brizoNavigationFallback = previousPageFallback;
+  }
   logBrowserNavigation("requested", targetView, url);
   return beginBrowserNavigation(targetView, (requestGeneration) => {
     const targetWebContents = getLiveViewWebContents(targetView);
     if (!targetWebContents) return;
-    targetView.__brizoNavigationInFlight = true;
-    targetView.__brizoNavigationTimeout = setTimeout(() => {
-      if (
-        targetWebContents.isDestroyed()
-        || targetView.__brizoErrorPageActive
-        || targetView.__brizoNavigationRequestGeneration !== requestGeneration
-      ) return;
-      targetView.__brizoNavigationInFlight = false;
-      logBrowserNavigation("timeout", targetView, url, {
-        currentUrl: navigationLogUrl(targetWebContents.getURL()),
-        contentReady: Boolean(targetView.__brizoContentReady),
-      });
-      targetWebContents.stop();
-      if (browserView === targetView) void showBrowserErrorPage({ errorCode: -118, url });
-      else targetView.__brizoError = "TIMEOUT · 连接超时";
-    }, 20_000);
     loadBrowserUrl(targetWebContents, url).catch((error) => {
       if (
         targetView.__brizoNavigationRequestGeneration !== requestGeneration
         || isAbortedBrowserNavigation(error)
       ) return;
       targetView.__brizoNavigationInFlight = false;
+      targetView.__brizoNavigationPending = false;
+      targetView.__brizoNavigationFallback = null;
       clearBrowserNavigationTimeout(targetView);
+      clearBrowserRenderableProbe(targetView);
       const failure = browserNavigationFailureDetails(error);
       logBrowserNavigation("load-rejected", targetView, url, failure);
       if (browserView === targetView && !targetView.__brizoErrorPageActive) {
         void showBrowserErrorPage({ ...failure, url });
       } else if (!targetView.__brizoErrorPageActive) {
         const described = describeBrowserFailure(failure);
+        targetView.__brizoContentReady = false;
+        targetView.__brizoErrorPageActive = true;
         targetView.__brizoError = `${described[0]} · ${described[1]}`;
       }
     });
@@ -2756,8 +3016,6 @@ function createBrowserLinkWindow(input) {
   }
   syncViewActivity();
   applyBrowserPageZoomPolicy(view);
-  const compatibleUserAgent = standardBrowserUserAgent(view.webContents.session);
-  if (compatibleUserAgent) view.webContents.setUserAgent(compatibleUserAgent);
 
   const updateBounds = () => {
     if (window.isDestroyed()) return;
@@ -2905,8 +3163,6 @@ function createIncognitoWindow(input, { show = !headlessTest } = {}) {
   }
   syncViewActivity();
   applyBrowserPageZoomPolicy(view, { allowZoom: false });
-  const compatibleUserAgent = standardBrowserUserAgent(view.webContents.session);
-  if (compatibleUserAgent) view.webContents.setUserAgent(compatibleUserAgent);
 
   const updateBounds = () => {
     if (window.isDestroyed()) return;
@@ -2997,6 +3253,7 @@ function createIncognitoWindow(input, { show = !headlessTest } = {}) {
 
 function createBrowserView(window, ownerTabId = "__default__") {
   const frameView = new View();
+  const navigationMaskView = new View();
   const view = new WebContentsView({
     webPreferences: {
       contextIsolation: true,
@@ -3021,27 +3278,44 @@ function createBrowserView(window, ownerTabId = "__default__") {
   view.__brizoPdfSource = "";
   view.__brizoContentReady = false;
   view.__brizoNavigationGeneration = 0;
+  view.__brizoCommittedGeneration = -1;
   view.__brizoNavigationPending = false;
-  view.__brizoNavigationViewport = null;
+  view.__brizoNavigationFallback = null;
   view.__brizoNavigationPreview = "";
   view.__brizoNavigationRequestGeneration = 0;
   view.__brizoNavigationInFlight = false;
+  view.__brizoNavigationStartedFromReady = false;
+  view.__brizoNavigationDeadlineAt = 0;
+  view.__brizoNavigationDeadlineGeneration = -1;
+  view.__brizoNavigationDeadlineToken = 0;
+  view.__brizoNavigationDeadlineDeferred = false;
+  view.__brizoNavigationDeadlineSettlementAt = 0;
   view.__brizoRevealGeneration = -1;
   view.__brizoVisualPaintGeneration = -1;
   view.__brizoDomReadyGeneration = -1;
   view.__brizoFinishedGeneration = -1;
   view.__brizoPaintReadySignal = "";
+  view.__brizoRenderableProbeSequence = 0;
+  view.__brizoRenderableProbeActiveId = -1;
+  view.__brizoRenderableProbeActiveNonce = "";
+  view.__brizoRenderableProbeExpectedUrl = "";
+  view.__brizoRenderableProbeGeneration = -1;
+  view.__brizoRenderableProbeStableCount = 0;
+  view.__brizoRenderableProbeResponseCount = 0;
+  view.__brizoRenderableProbeDocumentReady = false;
+  view.__brizoRenderableProbeEvidenceUrl = "";
   view.__brizoOwnerTabId = ownerTabId;
   view.__brizoSleepTimer = undefined;
   view.__brizoFrameView = frameView;
+  view.__brizoNavigationMaskView = navigationMaskView;
   applyBrowserPageZoomPolicy(view);
   const createdWebContents = view.webContents;
-  const compatibleUserAgent = standardBrowserUserAgent(createdWebContents.session);
-  if (compatibleUserAgent) createdWebContents.setUserAgent(compatibleUserAgent);
   const viewWebContentsId = createdWebContents.id;
   // External pages routinely log form values, request details, and advertising
   // identifiers. Do not mirror that untrusted output into Brizo's process logs.
   createdWebContents.once("destroyed", () => {
+    clearBrowserNavigationTimeout(view);
+    clearBrowserRenderableProbe(view);
     credentialFillBroker.revokeWebContents(viewWebContentsId);
     scrollbarCssKeys.delete(viewWebContentsId);
     for (const [tabId, candidate] of browserViews) {
@@ -3063,19 +3337,16 @@ function createBrowserView(window, ownerTabId = "__default__") {
   // which leaves rectangular corner pixels even though the parent is rounded.
   view.setBorderRadius(browserContentBorderRadius);
   frameView.addChildView(view);
+  navigationMaskView.setBackgroundColor("#f1e7e1");
+  navigationMaskView.setBorderRadius(browserContentBorderRadius);
+  frameView.addChildView(navigationMaskView);
   view.setBackgroundColor("#ffffff");
   setBrowserViewVisible(browserVisible);
 
   const browserSession = view.webContents.session;
-  if (compatibleUserAgent) {
-    browserSession.setUserAgent(compatibleUserAgent);
-  }
   if (!browserSessionHandlersInstalled) {
     browserSessionHandlersInstalled = true;
     browserSession.on("will-download", (_event, item) => trackDownload(item));
-    const chromeMatch = (compatibleUserAgent || standardBrowserUserAgent(browserSession)).match(/Chrome\/(\d+)(\.\d+)*/i);
-    const majorVersion = chromeMatch ? chromeMatch[1] : "133";
-    const fullVersion = chromeMatch ? (chromeMatch[0].replace(/^Chrome\//i, "") || `${majorVersion}.0.0.0`) : "133.0.0.0";
 
     const findRequestView = (webContentsId) =>
       [...browserViews.values()].find((candidate) =>
@@ -3102,30 +3373,6 @@ function createBrowserView(window, ownerTabId = "__default__") {
         callback(engineDecision || {});
       },
     );
-    browserSession.webRequest.onBeforeSendHeaders(
-      { urls: ["http://*/*", "https://*/*"] },
-      (details, callback) => {
-        const requestHeaders = { ...details.requestHeaders };
-        const ua = compatibleUserAgent || standardBrowserUserAgent(browserSession);
-        for (const key of Object.keys(requestHeaders)) {
-          const lower = key.toLowerCase();
-          if (lower === "user-agent") {
-            requestHeaders[key] = ua;
-          } else if (lower === "sec-ch-ua") {
-            requestHeaders[key] = `"Chromium";v="${majorVersion}", "Google Chrome";v="${majorVersion}", "Not/A)Brand";v="99"`;
-          } else if (lower === "sec-ch-ua-full-version-list") {
-            requestHeaders[key] = `"Chromium";v="${fullVersion}", "Google Chrome";v="${fullVersion}", "Not/A)Brand";v="99.0.0.0"`;
-          } else if (lower === "sec-ch-ua-platform") {
-            requestHeaders[key] = '"macOS"';
-          } else if (lower === "sec-ch-ua-mobile") {
-            requestHeaders[key] = "?0";
-          } else if (lower === "x-requested-with") {
-            delete requestHeaders[key];
-          }
-        }
-        callback({ requestHeaders });
-      },
-    );
     browserSession.webRequest.onHeadersReceived(
       { urls: ["http://*/*", "https://*/*"] },
       (details, callback) => {
@@ -3140,7 +3387,6 @@ function createBrowserView(window, ownerTabId = "__default__") {
           callback({ cancel: true });
           clearBrowserNavigationTimeout(requestView);
           requestView.__brizoNavigationPending = false;
-          requestView.__brizoNavigationViewport = null;
           requestView.__brizoContentReady = true;
           requestView.__brizoNavigationPreview = "";
           if (requestView === browserView) setBrowserViewVisible(browserVisible);
@@ -3220,9 +3466,6 @@ function createBrowserView(window, ownerTabId = "__default__") {
   });
 
   view.webContents.on("did-create-window", (popupWindow) => {
-    const popupSession = popupWindow.webContents.session;
-    const compatibleUserAgent = standardBrowserUserAgent(popupSession);
-    if (compatibleUserAgent) popupWindow.webContents.setUserAgent(compatibleUserAgent);
     popupWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   });
   installWebContextMenus(view.webContents, window, (url) => {
@@ -3252,28 +3495,44 @@ function createBrowserView(window, ownerTabId = "__default__") {
     requestOpenPdfTab(url, { title: filenameForPdfSource(url) });
   });
   view.webContents.on("did-start-navigation", (_event, url, isSameDocument, isMainFrame) => {
-    if (!isSameDocument) credentialFillBroker.revokeWebContents(viewWebContentsId);
-    if (!isMainFrame || isSameDocument) return;
+    if (!isMainFrame) return;
+    if (isSameDocument) {
+      completeBrowserSameDocumentNavigation(view, url);
+      return;
+    }
+    preserveBrowserNavigationFallback(view);
+    credentialFillBroker.revokeWebContents(viewWebContentsId);
+    const hasActiveDeadline = Number(view.__brizoNavigationDeadlineAt) > 0;
+    if (!isInternalBrowserErrorUrl(url)) clearBrowserErrorState(view);
     applyBrowserPageZoomPolicy(view);
     view.__brizoNavigationGeneration += 1;
+    const navigationGeneration = view.__brizoNavigationGeneration;
     view.__brizoRevealGeneration = -1;
     view.__brizoPaintReadySignal = "";
-    freezeBrowserNavigationViewport(view);
+    clearBrowserRenderableProbe(view);
     view.__brizoContentReady = false;
     view.__brizoNavigationPending = true;
+    view.__brizoNavigationInFlight = true;
+    view.__brizoNavigationStartedFromReady = false;
+    if (!isInternalBrowserErrorUrl(url)) {
+      view.__brizoRequestedUrl = url;
+      view.__brizoDisplayUrl = url;
+    }
+    armBrowserNavigationDeadline(view, {
+      generation: navigationGeneration,
+      restart: !hasActiveDeadline,
+    });
     logBrowserNavigation("started", view, url);
-    if (browserView !== view) return;
+    if (browserView !== view) {
+      setBrowserViewVisible(browserVisible);
+      return;
+    }
     browserNavigationGeneration += 1;
     if (!browserErrorPageActive) browserError = "";
+    if (!isInternalBrowserErrorUrl(url)) browserDisplayUrl = url;
     pageFaviconUrl = "";
+    setBrowserViewVisible(browserVisible);
     publishBrowserState();
-  });
-  view.webContents.on("did-first-visually-non-empty-paint", () => {
-    view.__brizoVisualPaintGeneration = view.__brizoNavigationGeneration;
-    logBrowserNavigation("first-visual-paint", view, view.webContents.getURL());
-    if (!view.__brizoContentReady && view.__brizoNavigationPending) {
-      revealBrowserViewAfterFirstFrame(view, view.__brizoNavigationGeneration);
-    }
   });
   view.webContents.on("dom-ready", () => {
     applyBrowserPageZoomPolicy(view);
@@ -3281,15 +3540,16 @@ function createBrowserView(window, ownerTabId = "__default__") {
     view.__brizoDomReadyGeneration = view.__brizoNavigationGeneration;
     if (view.__brizoIsPdf) {
       clearBrowserNavigationTimeout(view);
+      clearBrowserRenderableProbe(view);
       view.__brizoContentReady = true;
       view.__brizoNavigationPending = false;
+      view.__brizoNavigationInFlight = false;
       view.__brizoNavigationPreview = "";
       if (browserView === view) {
         pageBackgroundColor = view.__brizoBackgroundColor || pdfReaderBackgroundColor;
         setBrowserViewVisible(browserVisible);
         publishBrowserState();
       }
-      releaseBrowserNavigationViewportAfterPaint(view, view.__brizoNavigationGeneration);
       setTimeout(async () => {
         const webContents = getLiveViewWebContents(view);
         if (!webContents || !view.__brizoIsPdf) return;
@@ -3306,10 +3566,8 @@ function createBrowserView(window, ownerTabId = "__default__") {
     revealBrowserViewAfterFirstFrame(view, view.__brizoNavigationGeneration);
   });
   view.webContents.on("did-finish-load", () => {
-    view.__brizoNavigationInFlight = false;
     view.__brizoFinishedGeneration = view.__brizoNavigationGeneration;
     logBrowserNavigation("finished", view, view.webContents.getURL());
-    clearBrowserNavigationTimeout(view);
     if (!view.__brizoContentReady) {
       revealBrowserViewAfterFirstFrame(view, view.__brizoNavigationGeneration);
     }
@@ -3326,8 +3584,15 @@ function createBrowserView(window, ownerTabId = "__default__") {
     setTimeout(() => updatePageBackgroundColor(), 2_500);
   });
   view.webContents.on("page-favicon-updated", async (_event, favicons) => {
+    const navigationGeneration = view.__brizoNavigationGeneration;
+    const pageUrl = view.webContents.getURL();
     const nextFavicon = favicons.find((url) => /^(https?:|data:image\/)/i.test(url)) || "";
-    const localFavicon = await cacheFaviconForPage(view.webContents.getURL(), nextFavicon);
+    const localFavicon = await cacheFaviconForPage(pageUrl, nextFavicon);
+    if (
+      view.webContents.isDestroyed()
+      || view.__brizoNavigationGeneration !== navigationGeneration
+      || view.webContents.getURL() !== pageUrl
+    ) return;
     view.__brizoFaviconUrl = localFavicon || nextFavicon;
     if (browserView !== view) return;
     pageFaviconUrl = view.__brizoFaviconUrl;
@@ -3335,7 +3600,15 @@ function createBrowserView(window, ownerTabId = "__default__") {
   });
 
   view.webContents.on("did-navigate", async (_event, url, httpResponseCode) => {
+    const navigationGeneration = view.__brizoNavigationGeneration;
+    view.__brizoNavigationFallback = null;
+    view.__brizoCommittedGeneration = navigationGeneration;
     logBrowserNavigation("committed", view, url, { httpResponseCode });
+    if (
+      Number(httpResponseCode) < 400
+      && !view.__brizoContentReady
+      && view.__brizoNavigationPending
+    ) scheduleBrowserRenderableProbe(view, navigationGeneration, 0);
     applyBrowserPageZoomPolicy(view);
     applyPageFullWidthBehavior(view.webContents, isFullWidthEnabled).catch(() => {});
     if (view.__brizoIsPdf && view.__brizoPdfSource) {
@@ -3346,19 +3619,33 @@ function createBrowserView(window, ownerTabId = "__default__") {
       && !url.startsWith("data:text/html;charset=utf-8,")) {
       view.__brizoDisplayUrl = url;
     }
-    const localFavicon = await cachedFaviconDataUrl(url);
-    if (localFavicon && !view.webContents.isDestroyed() && view.webContents.getURL() === url) {
-      view.__brizoFaviconUrl = localFavicon;
-      if (browserView === view) {
-        pageFaviconUrl = localFavicon;
-        publishBrowserState();
-      }
-    }
-    if (browserView !== view) return;
     if (Number(httpResponseCode) >= 400) {
-      void showBrowserErrorPage({ statusCode: Number(httpResponseCode), url });
+      if (browserView === view) {
+        void showBrowserErrorPage({ statusCode: Number(httpResponseCode), url });
+      } else {
+        const failure = describeBrowserFailure({ statusCode: Number(httpResponseCode) });
+        view.__brizoNavigationInFlight = false;
+        view.__brizoNavigationPending = false;
+        view.__brizoContentReady = false;
+        view.__brizoErrorPageActive = true;
+        view.__brizoError = `${failure[0]} · ${failure[1]}`;
+        clearBrowserNavigationTimeout(view);
+        clearBrowserRenderableProbe(view);
+      }
       return;
     }
+    const localFavicon = await cachedFaviconDataUrl(url);
+    const committedWebContents = getLiveViewWebContents(view);
+    if (
+      !committedWebContents
+      || view.__brizoNavigationGeneration !== navigationGeneration
+      || committedWebContents.getURL() !== url
+    ) return;
+    if (localFavicon) {
+      view.__brizoFaviconUrl = localFavicon;
+      if (browserView === view) pageFaviconUrl = localFavicon;
+    }
+    if (browserView !== view) return;
     if (!browserErrorPageActive) browserError = "";
     if (!browserErrorPageActive) {
       browserDisplayUrl = view.__brizoIsPdf && view.__brizoPdfSource
@@ -3369,25 +3656,12 @@ function createBrowserView(window, ownerTabId = "__default__") {
     }
     publishBrowserState();
   });
-  view.webContents.on("did-navigate-in-page", (_event, url) => {
-    if (view.__brizoIsPdf && view.__brizoPdfSource) {
-      view.__brizoDisplayUrl = view.__brizoPdfSource;
-    } else if (!view.__brizoErrorPageActive
-      && !isInternalBrowserErrorUrl(url)
-      && typeof url === "string"
-      && !url.startsWith("data:text/html;charset=utf-8,")) {
-      view.__brizoDisplayUrl = url;
-    }
-    if (browserView !== view) return;
-    if (!browserErrorPageActive) browserError = "";
-    if (!browserErrorPageActive) {
-      browserDisplayUrl = view.__brizoIsPdf && view.__brizoPdfSource
-        ? view.__brizoPdfSource
-        : typeof url === "string" && !url.startsWith("data:text/html;charset=utf-8,")
-          ? url
-          : browserDisplayUrl;
-    }
-    publishBrowserState();
+  view.webContents.on("did-navigate-in-page", (_event, url, isMainFrame) => {
+    if (isMainFrame === false) return;
+    completeBrowserSameDocumentNavigation(
+      view,
+      view.__brizoIsPdf && view.__brizoPdfSource ? view.__brizoPdfSource : url,
+    );
   });
   for (const eventName of ["did-start-loading", "did-stop-loading", "page-title-updated"]) {
     view.webContents.on(eventName, () => {
@@ -3400,11 +3674,48 @@ function createBrowserView(window, ownerTabId = "__default__") {
   view.webContents.on(
     "did-fail-load",
     (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
-      if (!isMainFrame || errorCode === -3) return;
+      if (!isMainFrame) return;
+      if (errorCode === -3) {
+        const abortedGeneration = view.__brizoNavigationGeneration;
+        setTimeout(() => {
+          const currentWebContents = getLiveViewWebContents(view);
+          if (
+            !currentWebContents
+            || view.__brizoContentReady
+            || view.__brizoErrorPageActive
+            || !view.__brizoNavigationPending
+          ) return;
+          const currentUrl = currentWebContents.getURL();
+          let mainFrameStillLoading = true;
+          try {
+            mainFrameStillLoading = currentWebContents.isLoadingMainFrame();
+          } catch {
+            // A closing WebContents is not a restorable page.
+          }
+          const fallbackUrl = view.__brizoNavigationFallback?.url || "";
+          const reachedSuccessor = view.__brizoNavigationGeneration !== abortedGeneration
+            || mainFrameStillLoading
+            || (fallbackUrl && currentUrl !== fallbackUrl);
+          if (!reachedSuccessor && restoreAbortedBrowserNavigation(view, abortedGeneration)) {
+            return;
+          }
+          if (!reachedSuccessor) {
+            logBrowserNavigation("aborted-awaiting-successor", view, validatedUrl, {
+              currentUrl: navigationLogUrl(currentUrl),
+            });
+          }
+        }, 180);
+        return;
+      }
       view.__brizoNavigationInFlight = false;
+      view.__brizoNavigationPending = false;
+      view.__brizoNavigationFallback = null;
       clearBrowserNavigationTimeout(view);
+      clearBrowserRenderableProbe(view);
       logBrowserNavigation("failed", view, validatedUrl, { errorCode, errorDescription });
       if (browserView !== view) {
+        view.__brizoContentReady = false;
+        view.__brizoErrorPageActive = true;
         view.__brizoError = `${errorDescription} (${errorCode})`;
         return;
       }
@@ -3439,26 +3750,6 @@ function createBrowserView(window, ownerTabId = "__default__") {
         result.startupNewTabPageVisible = await mainWindow.webContents.executeJavaScript(
           `Boolean(document.querySelector(".new-tab-page"))`,
         );
-        result.sidebarCollapsedAfterLoad = await mainWindow.webContents.executeJavaScript(
-          `document.querySelector(".app-shell")?.classList.contains("spaces-collapsed") ?? true`,
-        );
-        result.sidebarHoverBehavior = await mainWindow.webContents.executeJavaScript(`
-          (async () => {
-            const panel = document.querySelector(".spaces-panel");
-            const shell = document.querySelector(".app-shell");
-            panel?.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
-            await new Promise((resolve) => setTimeout(resolve, 30));
-            const expandedOnEnter = !shell?.classList.contains("spaces-collapsed");
-            panel?.dispatchEvent(new PointerEvent("pointerout", { bubbles: true, relatedTarget: document.body }));
-            // Pointer leave intentionally keeps the complete bookmark rail open
-            // for a 500 ms re-entry grace period.
-            await new Promise((resolve) => setTimeout(resolve, 520));
-            return {
-              collapsedOnLeave: shell?.classList.contains("spaces-collapsed") ?? false,
-              expandedOnEnter,
-            };
-          })()
-        `);
         result.backgroundThrottling = view.webContents.getBackgroundThrottling();
         result.browserViewHiddenAtStartup = !browserVisible
           && browserView.getVisible() === false
@@ -3547,10 +3838,6 @@ function createBrowserView(window, ownerTabId = "__default__") {
         });
         await new Promise((resolve) => setTimeout(resolve, 180));
         result.interactionsAfterTrustedInput = browserInteractionCount;
-        result.sidebarCollapsedAfterTrustedInput =
-          await mainWindow.webContents.executeJavaScript(
-            `document.querySelector(".app-shell")?.classList.contains("spaces-collapsed") ?? false`,
-          );
         setBrowserViewVisible(true);
         await new Promise((resolve) => setTimeout(resolve, 50));
         const layoutAfterOverlay = await view.webContents.executeJavaScript(`
@@ -3778,10 +4065,6 @@ function createBrowserView(window, ownerTabId = "__default__") {
           result.overlayHidePreservesLayoutState &&
           result.interactionsAfterLoad === 0 &&
           result.interactionsAfterTrustedInput > result.interactionsAfterLoad &&
-          result.sidebarCollapsedAfterLoad === false &&
-          result.sidebarHoverBehavior.expandedOnEnter === true &&
-          result.sidebarHoverBehavior.collapsedOnLeave === false &&
-          result.sidebarCollapsedAfterTrustedInput === false &&
           result.visibleScreenshotBytes > 1_000 &&
           result.fullPageScreenshotBytes > 1_000 &&
           result.incognitoIsolated &&
@@ -4227,17 +4510,19 @@ async function withBrowserCommandDeadline(promise, timeout, message) {
   }
 }
 
-async function runCtripFlightCommand({ activeWebContents, intent }) {
-  const url = buildCtripFlightUrl(intent);
+async function runCtripFlightCommand({ activeWebContents, intent, onProgress }) {
   const previousBackgroundThrottling = activeWebContents.getBackgroundThrottling();
   activeWebContents.setBackgroundThrottling(false);
   try {
-    if (!navigateBrowserUrl(url, browserOwnerTabId)) {
-      throw new Error("无法打开携程航班结果页。");
+    const expectedRoute = `oneway-${intent.origin.code.toLocaleLowerCase()}-${intent.destination.code.toLocaleLowerCase()}`;
+    const currentUrl = new URL(activeWebContents.getURL());
+    if (!currentUrl.href.toLocaleLowerCase().includes(expectedRoute)
+      || currentUrl.searchParams.get("depdate") !== intent.date) {
+      throw new Error("请先通过携程公开入口和站内控件到达对应航班结果页，再读取结果。");
     }
+    onProgress?.("正在等待携程航班价格稳定");
     const initialResult = await waitForCtripFlightResults(activeWebContents, { expectedIntent: intent });
     const result = await collectCtripFlightResults(activeWebContents, { expectedIntent: intent }) || initialResult;
-    const expectedRoute = `oneway-${intent.origin.code.toLocaleLowerCase()}-${intent.destination.code.toLocaleLowerCase()}`;
     const resultUrl = new URL(result.url || initialResult.url);
     if (!resultUrl.href.toLocaleLowerCase().includes(expectedRoute)
       || resultUrl.searchParams.get("depdate") !== intent.date) {
@@ -4249,6 +4534,7 @@ async function runCtripFlightCommand({ activeWebContents, intent }) {
         ? `没有找到 ${intent.departureWindow.label} 起飞的合格航班。`
         : "没有从携程结果中识别到有效航班价格。");
     }
+    onProgress?.("正在核对路线、日期与合格航班");
     const highlightedCount = await highlightCtripFlights(
       activeWebContents,
       flights.map((flight) => flight.index),
@@ -4262,6 +4548,7 @@ async function runCtripFlightCommand({ activeWebContents, intent }) {
       `Brizo-${intent.origin.code}-${intent.destination.code}-${intent.date}-${Date.now()}.png`,
     );
     const { captureAndSaveScreenshot } = await loadBrowserToolsModule();
+    onProgress?.("正在保存携程结果截图");
     await captureAndSaveScreenshot({
       mode: "visible-debugger",
       outputPath: screenshotPath,
@@ -4305,8 +4592,7 @@ async function runTaobaoPriceCommand({ activeWebContents, intent }) {
   try {
     const currentQuery = taobaoQueryFromUrl(activeWebContents.getURL());
     if (currentQuery.toLocaleLowerCase() !== intent.query.toLocaleLowerCase()) {
-      const url = buildTaobaoSearchUrl(intent.query);
-      if (!navigateBrowserUrl(url, browserOwnerTabId)) throw new Error("无法打开淘宝搜索页。");
+      throw new Error("请先通过淘宝公开入口和站内搜索到达对应结果页，再读取价格。");
     }
     const result = await waitForTaobaoPriceResults(activeWebContents, { expectedIntent: intent });
     const resultQuery = taobaoQueryFromUrl(result.url);
@@ -4362,15 +4648,32 @@ async function runBrowserCommandWithBoundModel(payload, options = {}) {
   if (!activeWebContents || activeWebContents.isDestroyed() || (usesCurrentBrowserTab && browserView?.__brizoIsPdf)) {
     return { status: "error", message: "请先打开一个普通网页，再运行浏览器命令。" };
   }
-  const ctripIntent = options.webContents ? null : parseCtripFlightCommand(payload?.command);
+  // Dedicated Use always starts from the neutral search entry and follows
+  // visible page controls. Site-specific adapters may inspect an already-open
+  // ordinary page, but they must never cold-load a generated business URL in
+  // the fresh Use partition.
+  const ctripIntent = explicitWebContents ? null : parseCtripFlightCommand(payload?.command);
   if (ctripIntent && isCtripPage(activeWebContents)) {
     try {
       return await withBrowserCommandDeadline(
-        runCtripFlightCommand({ activeWebContents, intent: ctripIntent }),
+        runCtripFlightCommand({
+          activeWebContents,
+          intent: ctripIntent,
+          onProgress: options.onProgress,
+        }),
         40_000,
         "携程页面在 40 秒内没有完成结果读取，已自动停止。",
       );
     } catch (error) {
+      if (error?.code === "BRIZO_SITE_SECURITY_BLOCK") {
+        options.onProgress?.(error.progress || "检测到携程网站安全验证，已停止后续动作");
+        return {
+          status: "blocked",
+          reason: "site-security-block",
+          blockCode: error.blockCode || "ctrip-security-block",
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
       return {
         status: "error",
         message: `携程航班查询失败：${error instanceof Error ? error.message : String(error)}`,
@@ -4420,6 +4723,8 @@ async function runBrowserCommandWithBoundModel(payload, options = {}) {
           content: [
             "你是 Brizo 内置的腾讯 BrowserSkill 规则适配器。根据用户给出的一个有边界目标和当前页面快照，一次只规划一个最短动作。",
             "严格遵循 BrowserSkill 生命周期：建立隔离会话；需要找网站时先用搜索引擎找到最相关的真实网站；每次动作前观察当前页面；页面或 DOM 变化后旧引用立即失效并重新观察；目标满足立即停止；最后清理会话。",
+            "每个 Use 都从中立搜索首页或目标网站公开根入口进入。优先填写当前搜索框并点击真实搜索结果；进入目标网站后必须使用页面当前可见的链接、搜索框、表单和按钮继续。",
+            "禁止猜测、拼接或直接 navigate 到商品、详情、列表、查询结果、预订、结算、交易等业务深链。navigate 只可用于 http(s) 网站的 origin 根入口；路径、查询参数和片段会被执行器确定性移除。",
             "只输出一个 JSON 对象，不要 Markdown、解释或思考。",
             "可用动作：navigate(url)、click(ref)、fill(ref,value)、select(ref,value)、press(ref,key)、scroll(amount)、back、forward、reload、done(message)。",
             "只能使用快照中当前可见的 @eN 引用；页面变化后旧引用失效。先完成目标，确认已完成后立即 done，禁止成功后继续操作。",
@@ -4546,7 +4851,7 @@ async function runBrowserCommandWithBoundModel(payload, options = {}) {
             content: [
               "你是 JSON 格式纠正器。根据原始浏览器控制请求和无效输出，只返回一个合法 JSON 对象。若当前状态或历史表明目标已完成，action 必须为 done。",
               "禁止 Markdown、解释和思考。不得增加原始请求未授权的操作。",
-              "action 只能是 click、fill、select、press、scroll、navigate、back、forward、reload 或 done。",
+              "action 只能是 click、fill、select、press、scroll、navigate、back、forward、reload 或 done。navigate 只能指向网站 origin 根入口，禁止输出业务深链。",
             ].join("\n"),
           },
           {
@@ -4574,6 +4879,7 @@ async function runBrowserCommandWithBoundModel(payload, options = {}) {
   try {
     return await runBrowserCommandAgent({
       command: payload?.command,
+      enforceNormalEntryNavigation: Boolean(explicitWebContents),
       onProgress: options.onProgress,
       planNextAction,
       signal: options.signal,
@@ -4726,7 +5032,17 @@ async function setEgoSpaceRunningPaused(webContents, paused) {
   `).catch(() => {});
 }
 
-async function organizeBrizoUseResult({ command, executionSummary, history, modelContext }) {
+async function removeEgoSpaceRunningEffect(webContents) {
+  if (!webContents || webContents.isDestroyed()) return;
+  await webContents.executeJavaScript(`
+    (() => {
+      document.getElementById("brizo-ego-space-running-effect")?.remove();
+      document.getElementById("brizo-ego-space-running-style")?.remove();
+    })()
+  `).catch(() => {});
+}
+
+async function organizeBrizoUseResult({ command, executionSummary, history, modelContext, signal }) {
   const sourceSites = [...new Set((modelContext.sources || []).map((source) => {
     try {
       return new URL(source.url).hostname.replace(/^www\./i, "");
@@ -4764,6 +5080,7 @@ async function organizeBrizoUseResult({ command, executionSummary, history, mode
     JSON.stringify(modelContext.snapshot?.tables || []),
     JSON.stringify(history || []),
   ].filter(Boolean).join("\n");
+  signal?.throwIfAborted?.();
   const store = await readModelGuardStore();
   const storedProvider = store.providers.find((provider) => provider.id === store.defaultId)
     || store.providers[0];
@@ -4779,6 +5096,13 @@ async function organizeBrizoUseResult({ command, executionSummary, history, mode
     title: source.title,
     url: source.url,
   }));
+  const requestController = new AbortController();
+  const abortRequest = () => requestController.abort(signal?.reason || new DOMException("Use execution stopped", "AbortError"));
+  if (signal?.aborted) abortRequest();
+  else signal?.addEventListener("abort", abortRequest, { once: true });
+  const requestTimeout = setTimeout(() => {
+    requestController.abort(new DOMException("Use result organization timed out", "TimeoutError"));
+  }, 30_000);
   try {
     const response = await fetch(`${provider.baseUrl}/chat/completions`, {
       method: "POST",
@@ -4818,6 +5142,7 @@ async function organizeBrizoUseResult({ command, executionSummary, history, mode
         temperature: 0,
         ...thinkingOffParams(capabilitiesFor(provider.baseUrl), 0),
       }),
+      signal: requestController.signal,
     });
     if (!response.ok) return fallback;
     const body = await response.json();
@@ -4832,8 +5157,12 @@ async function organizeBrizoUseResult({ command, executionSummary, history, mode
       evidence: resultEvidence,
       sourceIntro,
     }).ok ? finalMessage : fallback;
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason || error;
     return fallback;
+  } finally {
+    clearTimeout(requestTimeout);
+    signal?.removeEventListener("abort", abortRequest);
   }
 }
 
@@ -4842,10 +5171,24 @@ async function runBrizoUseWithBoundModel(payload, onProgress) {
     return { status: "error", message: "Brizo 沙箱窗口当前不可用。" };
   }
   const sessionId = String(payload?.sessionId || `${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 80);
+  const requestedViewTabId = String(payload?.viewTabId || "").trim();
+  const viewTabId = /^[a-zA-Z0-9_-]{1,120}$/.test(requestedViewTabId) ? requestedViewTabId : "";
+  const originTabId = String(payload?.originTabId || "").trim().slice(0, 120);
+  const retainSandbox = Boolean(viewTabId);
   const partition = `brizo-use-${sessionId}-${Date.now()}`;
   const runControl = createBrizoUseRunControl();
   brizoUseControllers.get(sessionId)?.abort(new DOMException("Replaced", "AbortError"));
   brizoUseControllers.set(sessionId, runControl);
+  const frameView = retainSandbox ? new View() : null;
+  const inputShieldView = retainSandbox ? new WebContentsView({
+    webPreferences: {
+      backgroundThrottling: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      partition,
+      sandbox: true,
+    },
+  }) : null;
   const view = new WebContentsView({
     webPreferences: {
       backgroundThrottling: false,
@@ -4857,30 +5200,106 @@ async function runBrizoUseWithBoundModel(payload, onProgress) {
     },
   });
   const webContents = view.webContents;
-  view.setBackgroundColor("#faf9f6");
-  view.setBorderRadius(10);
-  view.setBounds({ x: 0, y: 0, width: 1, height: 1 });
+  view.__brizoDisplayUrl = "";
+  view.__brizoRequestedUrl = "";
+  view.__brizoError = "";
+  view.__brizoBackgroundColor = "#ffffff";
+  view.__brizoFaviconUrl = "";
+  view.__brizoErrorPageActive = false;
+  view.__brizoIsPdf = false;
+  view.__brizoPdfSource = "";
+  view.__brizoContentReady = false;
+  view.__brizoNavigationPending = true;
+  view.__brizoNavigationPreview = "";
+  view.__brizoNavigationRequestGeneration = 0;
+  view.__brizoOwnerTabId = viewTabId || sessionId;
+  view.__brizoSleepTimer = undefined;
+  view.__brizoFrameView = frameView;
+  view.__brizoInputShieldView = inputShieldView;
+  view.__brizoIsUseSandbox = true;
+  view.__brizoRetainForUse = retainSandbox;
+  view.__brizoUseRunning = true;
+  view.__brizoUseSessionId = sessionId;
+  applyBrowserPageZoomPolicy(view);
+  view.setBackgroundColor("#ffffff");
+  view.setBorderRadius(retainSandbox ? browserContentBorderRadius : 10);
   view.setVisible(false);
-  mainWindow.contentView.addChildView(view);
-  brizoUseSandboxes.set(sessionId, { view, visible: false });
+  if (retainSandbox) {
+    frameView.setBackgroundColor("#00000000");
+    mainWindow.contentView.addChildView(frameView);
+    frameView.addChildView(view);
+    if (inputShieldView) {
+      inputShieldView.setBackgroundColor("#00000000");
+      inputShieldView.setVisible(false);
+      inputShieldView.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      inputShieldView.webContents.session.setPermissionCheckHandler(() => false);
+      inputShieldView.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+      inputShieldView.webContents.on("before-input-event", (event) => event.preventDefault());
+      void inputShieldView.webContents.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
+        <!doctype html><meta charset="utf-8"><style>
+          html,body{width:100%;height:100%;margin:0;background:transparent;cursor:progress;user-select:none}
+        </style><body aria-label="Use 自动操作期间页面只读"></body>
+      `)}`).catch(() => {});
+      frameView.addChildView(inputShieldView);
+    }
+    browserViews.set(viewTabId, view);
+    setBrowserViewVisible(browserVisible);
+  } else {
+    view.setBounds({ x: 0, y: 0, width: 1, height: 1 });
+    mainWindow.contentView.addChildView(view);
+  }
+  const sandboxRecord = {
+    frameView,
+    originTabId,
+    retainSandbox,
+    sessionId,
+    tabId: viewTabId,
+    view,
+    visible: false,
+  };
+  brizoUseSandboxes.set(sessionId, sandboxRecord);
+  let inputShieldReleased = false;
+  const releaseInputShield = () => {
+    if (inputShieldReleased || !inputShieldView) return;
+    inputShieldReleased = true;
+    view.__brizoInputShieldView = null;
+    try { frameView?.removeChildView(inputShieldView); } catch {}
+    try {
+      if (!inputShieldView.webContents.isDestroyed()) inputShieldView.webContents.close();
+    } catch {}
+  };
+  webContents.once("destroyed", () => {
+    brizoUseControllers.get(sessionId)?.abort(new DOMException("Use child renderer destroyed", "AbortError"));
+    onProgress({
+      detail: "Use 隔离网页进程已关闭",
+      embeddedSandbox: false,
+      viewGone: true,
+    });
+    if (brizoUseSandboxes.get(sessionId)?.view === view) brizoUseSandboxes.delete(sessionId);
+    if (viewTabId && browserViews.get(viewTabId) === view) browserViews.delete(viewTabId);
+    if (browserView === view) {
+      browserView = undefined;
+      browserOwnerTabId = "";
+      browserDisplayUrl = "";
+      browserError = "";
+      pageFaviconUrl = "";
+    }
+    try {
+      releaseInputShield();
+      if (frameView) mainWindow?.contentView.removeChildView(frameView);
+      else mainWindow?.contentView.removeChildView(view);
+    } catch {}
+  });
   const sandboxSession = webContents.session;
   installBrizoUseNetworkPolicy(sandboxSession);
   sandboxSession.setPermissionCheckHandler(() => false);
   sandboxSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  webContents.setWindowOpenHandler(({ url }) => {
-    void validateBrizoUseNetworkTarget(url, sandboxSession)
-      .then((safeUrl) => webContents.loadURL(safeUrl))
-      .catch(() => {});
-    return { action: "deny" };
-  });
-  webContents.on("did-finish-load", () => {
-    webContents.send("brizo:apply-site-hygiene", {
-      ...siteHygieneSettings,
-      credentialAutofill: false,
-    });
-    void installEgoSpaceRunningEffect(webContents, sessionId).then(() =>
-      setEgoSpaceRunningPaused(webContents, runControl.paused)
-    );
+  installWebContextMenus(webContents, mainWindow, (url) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("bean-browser:open-url-tab", url);
+  }, (selectedText) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("bean-browser:ask-selection", selectedText);
   });
   const processSteps = [];
   const progress = (value) => {
@@ -4890,8 +5309,112 @@ async function runBrizoUseWithBoundModel(payload, onProgress) {
       url: webContents.isDestroyed() ? "" : webContents.getURL(),
     } : value;
     if (event?.detail && processSteps.at(-1) !== event.detail) processSteps.push(event.detail);
-    onProgress({ ...event, embeddedSandbox: true });
+    onProgress({
+      ...event,
+      embeddedSandbox: typeof event?.embeddedSandbox === "boolean"
+        ? event.embeddedSandbox
+        : Boolean(view.__brizoContentReady),
+    });
   };
+  webContents.setWindowOpenHandler(({ url, referrer, postBody }) => {
+    let loadOptions;
+    try {
+      loadOptions = useWindowOpenLoadOptions(referrer, postBody);
+    } catch (error) {
+      progress(error instanceof Error ? error.message : String(error));
+      return { action: "deny" };
+    }
+    void validateBrizoUseNetworkTarget(url, sandboxSession)
+      .then((safeUrl) => webContents.loadURL(safeUrl, loadOptions))
+      .catch((error) => {
+        if (!isAbortedBrowserNavigation(error)) {
+          progress(`网页链接打开失败：${error instanceof Error ? error.message : String(error)}`);
+        }
+      });
+    return { action: "deny" };
+  });
+  webContents.on("render-process-gone", () => {
+    brizoUseControllers.get(sessionId)?.abort(new DOMException("Use child renderer process gone", "AbortError"));
+  });
+  const syncUseViewState = () => {
+    if (webContents.isDestroyed()) return;
+    const url = webContents.getURL();
+    view.__brizoDisplayUrl = url;
+    view.__brizoRequestedUrl = url;
+    view.__brizoError = "";
+    view.__brizoErrorPageActive = false;
+    if (browserView === view) {
+      browserDisplayUrl = url;
+      browserError = "";
+      browserErrorPageActive = false;
+      pageBackgroundColor = view.__brizoBackgroundColor || "#ffffff";
+      publishBrowserState();
+    }
+    progress({
+      embeddedSandbox: Boolean(view.__brizoContentReady),
+      title: webContents.getTitle(),
+      url,
+    });
+  };
+  webContents.on("did-start-navigation", (_event, url, isSameDocument, isMainFrame) => {
+    if (!isMainFrame || isSameDocument) return;
+    view.__brizoNavigationPending = true;
+    view.__brizoDisplayUrl = url;
+    view.__brizoRequestedUrl = url;
+    if (browserView === view) {
+      browserDisplayUrl = url;
+      publishBrowserState();
+    }
+  });
+  webContents.on("did-navigate", syncUseViewState);
+  webContents.on("did-navigate-in-page", syncUseViewState);
+  webContents.on("page-title-updated", syncUseViewState);
+  webContents.on("page-favicon-updated", async (_event, favicons) => {
+    const nextFavicon = Array.isArray(favicons)
+      ? favicons.find((favicon) => /^https?:/i.test(favicon || "")) || ""
+      : "";
+    const localFavicon = await cacheFaviconForPage(webContents.getURL(), nextFavicon);
+    if (webContents.isDestroyed()) return;
+    view.__brizoFaviconUrl = localFavicon || nextFavicon;
+    if (browserView === view) {
+      pageFaviconUrl = view.__brizoFaviconUrl;
+      publishBrowserState();
+    }
+  });
+  webContents.on("did-finish-load", () => {
+    view.__brizoNavigationInFlight = false;
+    clearBrowserNavigationTimeout(view);
+    view.__brizoContentReady = true;
+    view.__brizoNavigationPending = false;
+    webContents.send("brizo:apply-site-hygiene", {
+      ...siteHygieneSettings,
+      credentialAutofill: false,
+    });
+    if (view.__brizoUseRunning) {
+      void installEgoSpaceRunningEffect(webContents, sessionId).then(() =>
+        setEgoSpaceRunningPaused(webContents, runControl.paused)
+      );
+    }
+    syncUseViewState();
+    if (browserView === view) setBrowserViewVisible(browserVisible);
+  });
+  webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+    if (!isMainFrame || errorCode === -3) return;
+    view.__brizoNavigationInFlight = false;
+    view.__brizoNavigationPending = false;
+    view.__brizoContentReady = false;
+    clearBrowserNavigationTimeout(view);
+    view.__brizoError = `${errorDescription} (${errorCode})`;
+    progress({
+      detail: `页面加载失败：${errorDescription}`,
+      embeddedSandbox: false,
+      title: webContents.isDestroyed() ? "" : webContents.getTitle(),
+      url: validatedUrl || view.__brizoRequestedUrl,
+    });
+    if (browserView === view && !view.__brizoUseRunning) {
+      void showBrowserErrorPage({ errorCode, url: validatedUrl || view.__brizoRequestedUrl });
+    }
+  });
   runControl.setStateListener((paused) => {
     void setEgoSpaceRunningPaused(webContents, paused);
     progress({
@@ -4902,13 +5425,13 @@ async function runBrizoUseWithBoundModel(payload, onProgress) {
     });
   });
   try {
-    progress("正在创建 Brizo 独立沙箱");
+    progress("正在创建下级自动操作标签");
     await runControl.waitIfPaused();
     await webContents.loadURL(await validateBrizoUseNetworkTarget("https://www.bing.com/", sandboxSession));
     await installEgoSpaceRunningEffect(webContents, sessionId);
     await setEgoSpaceRunningPaused(webContents, runControl.paused);
     await runControl.waitIfPaused();
-    progress("Brizo 沙箱已创建");
+    progress("下级隔离网页已创建");
     const result = await runBrowserCommandWithBoundModel(payload, {
       onProgress: progress,
       signal: runControl.signal,
@@ -4921,14 +5444,22 @@ async function runBrizoUseWithBoundModel(payload, onProgress) {
     const finalSnapshot = result?.finalSnapshot || await snapshotBrowserPage(webContents).catch(() => null);
     const fullEvidence = await collectBrizoUseEvidence(webContents).catch(() => null);
     const snapshot = { ...(finalSnapshot || {}), ...(fullEvidence || {}) };
-    progress("正在整理完整数据表");
+    if (result?.status === "success") progress("正在整理完整数据表");
     const verificationPassed = result?.status !== "success"
       || result?.verification?.ok === true;
     if (!verificationPassed) {
+      progress({
+        detail: "Use 验收未通过",
+        title,
+        url,
+      });
       return {
         status: "error",
         message: "Use 执行证据未通过独立验收，Brizo 已拒绝把本次运行标记为完成。",
+        pageTitle: title,
+        processSteps,
         sources: [],
+        url,
         verification: result.verification,
       };
     }
@@ -4948,31 +5479,57 @@ async function runBrizoUseWithBoundModel(payload, onProgress) {
         executionSummary: result.message,
         history: result.history || [],
         modelContext: { snapshot, sources },
+        signal: runControl.signal,
         });
       })()
       : result?.message;
+    progress({
+      detail: result?.status === "success" ? "Use 已完成" : "Use 已停止",
+      title,
+      url,
+    });
     return {
       ...result,
       evidenceLedger: undefined,
       finalSnapshot: undefined,
       history: undefined,
       message: organizedMessage,
+      pageTitle: title,
       sources,
       processSteps,
       sandbox: "brizo",
       url,
     };
   } catch (error) {
+    const url = webContents.isDestroyed() ? "" : webContents.getURL();
+    const pageTitle = webContents.isDestroyed() ? "Use 操作页" : webContents.getTitle();
+    const message = `Brizo 沙箱执行失败：${error instanceof Error ? error.message : String(error)}`;
+    if (!webContents.isDestroyed()) progress({ detail: message, title: pageTitle, url });
     return {
       status: "error",
-      message: `Brizo 沙箱执行失败：${error instanceof Error ? error.message : String(error)}`,
+      message,
+      pageTitle,
+      processSteps,
       sources: [],
+      url,
     };
   } finally {
     if (brizoUseControllers.get(sessionId) === runControl) brizoUseControllers.delete(sessionId);
-    brizoUseSandboxes.delete(sessionId);
-    try { mainWindow.contentView.removeChildView(view); } catch {}
-    if (!webContents.isDestroyed()) webContents.close();
+    view.__brizoUseRunning = false;
+    releaseInputShield();
+    await removeEgoSpaceRunningEffect(webContents);
+    if (retainSandbox && !webContents.isDestroyed()) {
+      sandboxRecord.status = "retained";
+      view.__brizoContentReady = true;
+      view.__brizoNavigationPending = false;
+      webContents.setBackgroundThrottling(browserView !== view);
+      syncUseViewState();
+      if (browserView === view) setBrowserViewVisible(browserVisible);
+    } else {
+      brizoUseSandboxes.delete(sessionId);
+      try { mainWindow.contentView.removeChildView(view); } catch {}
+      if (!webContents.isDestroyed()) webContents.close();
+    }
   }
 }
 
@@ -5024,6 +5581,86 @@ function registerBrowserIpc() {
     && isTrustedRendererUrl(event.senderFrame?.url),
   );
 
+  ipcMain.on("bean-browser:renderable-page-probe", (event, payload) => {
+    const targetView = getBrowserViewForWebContents(event.sender);
+    const webContents = getLiveViewWebContents(targetView);
+    const navigationGeneration = Number(payload?.navigationGeneration);
+    const probeId = Number(payload?.probeId);
+    const probeNonce = typeof payload?.nonce === "string" ? payload.nonce : "";
+    const probePhase = payload?.phase === "dom" || payload?.phase === "frames"
+      ? payload.phase
+      : "";
+    if (
+      !targetView
+      || !webContents
+      || event.senderFrame !== event.sender.mainFrame
+      || !Number.isInteger(navigationGeneration)
+      || !Number.isInteger(probeId)
+      || !probePhase
+      || targetView.__brizoNavigationGeneration !== navigationGeneration
+      || targetView.__brizoRenderableProbeGeneration !== navigationGeneration
+      || targetView.__brizoRenderableProbeActiveId !== probeId
+      || !probeNonce
+      || targetView.__brizoRenderableProbeActiveNonce !== probeNonce
+      || targetView.__brizoContentReady
+      || targetView.__brizoErrorPageActive
+    ) return;
+    let reportedUrl;
+    let currentUrl;
+    try {
+      reportedUrl = new URL(String(payload?.href || "")).href;
+      currentUrl = new URL(webContents.getURL()).href;
+    } catch {
+      return;
+    }
+    if (
+      reportedUrl !== currentUrl
+      || targetView.__brizoRenderableProbeExpectedUrl !== currentUrl
+    ) return;
+    if (probePhase === "dom") {
+      targetView.__brizoRenderableProbeResponseCount += 1;
+      targetView.__brizoRenderableProbeDocumentReady = payload?.documentReady === true;
+      targetView.__brizoRenderableProbeEvidenceUrl = currentUrl;
+      if (payload?.visualPaint === true) {
+        targetView.__brizoVisualPaintGeneration = navigationGeneration;
+      }
+      if (payload?.renderable === true) return;
+      if (targetView.__brizoRenderableProbeTimer) {
+        clearTimeout(targetView.__brizoRenderableProbeTimer);
+        targetView.__brizoRenderableProbeTimer = undefined;
+      }
+      targetView.__brizoRenderableProbeStableCount = 0;
+      scheduleBrowserRenderableProbe(targetView, navigationGeneration, 360);
+      return;
+    }
+    if (targetView.__brizoRenderableProbeTimer) {
+      clearTimeout(targetView.__brizoRenderableProbeTimer);
+      targetView.__brizoRenderableProbeTimer = undefined;
+    }
+    const framesReady = payload?.framesReady === true;
+    const lifecycleReady = targetView.__brizoDomReadyGeneration === navigationGeneration
+      || targetView.__brizoFinishedGeneration === navigationGeneration
+      || targetView.__brizoCommittedGeneration === navigationGeneration;
+    if (payload?.renderable === true && framesReady && lifecycleReady) {
+      targetView.__brizoRenderableProbeStableCount += 1;
+    } else {
+      targetView.__brizoRenderableProbeStableCount = 0;
+    }
+    if (targetView.__brizoRenderableProbeStableCount >= 2) {
+      markBrowserViewContentReady(
+        targetView,
+        navigationGeneration,
+        "stable-renderable-dom-two-preload-frames",
+      );
+      return;
+    }
+    scheduleBrowserRenderableProbe(
+      targetView,
+      navigationGeneration,
+      payload?.renderable === true && framesReady ? 80 : 360,
+    );
+  });
+
   ipcMain.on("bean-browser:page-interaction", (event, interactionType) => {
     if (interactionType === "window-close") {
       const senderWebContents = event.sender;
@@ -5048,7 +5685,7 @@ function registerBrowserIpc() {
     const targetView = [...browserViews.values()].find(
       (candidate) => getLiveViewWebContents(candidate)?.id === event.sender.id,
     );
-    if (!targetView || targetView.__brizoIsPdf) return;
+    if (!targetView || targetView.__brizoIsPdf || targetView.__brizoIsUseSandbox) return;
     const frame = event.senderFrame;
     const formFingerprint = typeof payload?.formFingerprint === "string"
       ? payload.formFingerprint
@@ -5100,7 +5737,7 @@ function registerBrowserIpc() {
       ? payload.formFingerprint
       : "";
     const frame = event.senderFrame;
-    if (!targetView || targetView.__brizoIsPdf || !id || !nonce || !formFingerprint || !frame || frame.detached) return;
+    if (!targetView || targetView.__brizoIsPdf || targetView.__brizoIsUseSandbox || !id || !nonce || !formFingerprint || !frame || frame.detached) return;
     const pageUrl = frame.url;
     const resolved = resolveSiteHygieneSettings(siteHygieneSettings, pageUrl);
     if (!resolved.enabled || !resolved.credentialAutofill) return;
@@ -5230,23 +5867,38 @@ function registerBrowserIpc() {
   });
   ipcMain.handle("bean-browser:close-tab-view", (event, tabId) => {
     if (!isTrustedSender(event) || typeof tabId !== "string") return false;
-    const useControl = brizoUseControllers.get(tabId);
+    const view = browserViews.get(tabId);
+    const viewSessionId = view?.__brizoUseSessionId || "";
+    const relatedRuns = [...brizoUseSandboxes.values()].filter((record) => (
+      record.tabId === tabId || record.originTabId === tabId
+    ));
+    const useControl = brizoUseControllers.get(viewSessionId || tabId);
     useControl?.abort(new DOMException("Tab closed", "AbortError"));
+    for (const record of relatedRuns) {
+      brizoUseControllers.get(record.sessionId)?.abort(new DOMException("Tab closed", "AbortError"));
+    }
     const abortedSearches = abortSearchesForOwner(
       { sessionId: tabId, tabId },
       new DOMException("Tab closed", "AbortError"),
     );
-    const view = browserViews.get(tabId);
-    if (!view) return Boolean(useControl || abortedSearches);
+    if (!view) return Boolean(useControl || relatedRuns.length || abortedSearches);
     const webContents = getLiveViewWebContents(view);
     browserViews.delete(tabId);
+    if (viewSessionId && brizoUseSandboxes.get(viewSessionId)?.view === view) {
+      brizoUseSandboxes.delete(viewSessionId);
+    }
     if (view === browserView) browserView = undefined;
     webContents?.close();
     return true;
   });
   ipcMain.handle("bean-browser:capture-preview", async (event) => {
     const webContents = getLiveViewWebContents(browserView);
-    if (!isTrustedSender(event) || !webContents) return "";
+    if (
+      !isTrustedSender(event)
+      || !webContents
+      || !browserView.__brizoContentReady
+      || browserView.__brizoNavigationPending
+    ) return "";
     try {
       return (await webContents.capturePage()).toDataURL();
     } catch {
@@ -5279,6 +5931,9 @@ function registerBrowserIpc() {
   ipcMain.handle("bean-browser:open-downloaded-file", (event, id) =>
     isTrustedSender(event) ? openDownloadedFile(id) : { status: "unavailable" },
   );
+  ipcMain.handle("bean-browser:reveal-downloaded-file", (event, id) =>
+    isTrustedSender(event) ? revealDownloadedFile(id) : { status: "unavailable" },
+  );
   ipcMain.handle("bean-browser:delete-downloaded-file", (event, id) =>
     isTrustedSender(event) ? deleteDownloadedFile(id) : { status: "unavailable" },
   );
@@ -5286,21 +5941,21 @@ function registerBrowserIpc() {
     isTrustedSender(event) ? toggleDownloadsWindow(anchorBounds) : { open: false },
   );
   ipcMain.handle("bean-browser:back", (event) => {
-    if (!isTrustedSender(event) || !browserView?.webContents.navigationHistory.canGoBack()) return false;
+    if (!isTrustedSender(event) || browserView?.__brizoUseRunning || !browserView?.webContents.navigationHistory.canGoBack()) return false;
     const targetView = browserView;
     return beginBrowserNavigation(targetView, () => {
       targetView.webContents.navigationHistory.goBack();
     });
   });
   ipcMain.handle("bean-browser:forward", (event) => {
-    if (!isTrustedSender(event) || !browserView?.webContents.navigationHistory.canGoForward()) return false;
+    if (!isTrustedSender(event) || browserView?.__brizoUseRunning || !browserView?.webContents.navigationHistory.canGoForward()) return false;
     const targetView = browserView;
     return beginBrowserNavigation(targetView, () => {
       targetView.webContents.navigationHistory.goForward();
     });
   });
   ipcMain.handle("bean-browser:reload", (event) => {
-    if (!isTrustedSender(event) || !browserView) return false;
+    if (!isTrustedSender(event) || !browserView || browserView.__brizoUseRunning) return false;
     if (browserErrorPageActive && browserDisplayUrl) {
       return navigateBrowserUrl(browserDisplayUrl, browserOwnerTabId);
     }
@@ -5343,11 +5998,13 @@ function registerBrowserIpc() {
     return { status: "success", ...registered };
   });
   ipcMain.handle("bean-browser:set-download-directory", async (event, directory) => {
-    if (!isTrustedSender(event) || typeof directory !== "string" || !directory) return false;
+    if (!isTrustedSender(event) || typeof directory !== "string") return false;
+    const resolvedDirectory = directory.trim() || defaultDownloadDirectory;
+    if (!resolvedDirectory) return false;
     try {
-      const details = await stat(directory);
+      const details = await stat(resolvedDirectory);
       if (!details.isDirectory()) return false;
-      app.setPath("downloads", directory);
+      app.setPath("downloads", resolvedDirectory);
       return true;
     } catch {
       return false;
@@ -5471,6 +6128,13 @@ function registerBrowserIpc() {
     if (!isTrustedSender(event)) return { mutedTopicIds: [], pinnedTopicIds: [], reducedTopicIds: [] };
     return await briefService.savePreferences(payload || {});
   });
+  ipcMain.handle("bean-browser:activate-brizo-use-tab-view", (event, tabId) => {
+    if (!isTrustedSender(event) || typeof tabId !== "string") return false;
+    const view = browserViews.get(tabId);
+    if (!getLiveViewWebContents(view) || !view.__brizoIsUseSandbox) return false;
+    activateBrowserView(view, tabId);
+    return true;
+  });
   ipcMain.handle("bean-browser:run-brizo-use-command", async (event, payload) => {
     if (!isTrustedSender(event)) {
       return { status: "error", message: "Use 浏览器控制请求未获授权。" };
@@ -5563,9 +6227,35 @@ function registerBrowserIpc() {
     if (!isTrustedSender(event)) return [];
     return sanitizeModelProviders(await readModelGuardStore());
   });
+  ipcMain.handle("bean-browser:list-search-services", async (event) => {
+    if (!isTrustedSender(event)) return [];
+    return modelGuard.sanitizeServices(await modelGuard.readStore());
+  });
   ipcMain.handle("bean-browser:save-model-provider", async (event, payload) => {
     if (!isTrustedSender(event)) return { status: "error", message: "请求未获授权。" };
     return await saveModelProvider(payload);
+  });
+  ipcMain.handle("bean-browser:save-search-service-key", async (event, payload) => {
+    if (!isTrustedSender(event)) return { status: "error", message: "请求未获授权。" };
+    if (!safeStorage.isEncryptionAvailable()) {
+      return { status: "error", message: "当前系统无法使用安全凭证存储。" };
+    }
+    const serviceId = typeof payload?.serviceId === "string" ? payload.serviceId : "";
+    const apiKey = typeof payload?.apiKey === "string" ? payload.apiKey.trim() : "";
+    if (!apiKey) return { status: "error", message: "请输入 API Key。" };
+    try {
+      const store = await modelGuard.saveServiceKey(serviceId, apiKey);
+      // Provider clients keep session-scoped capability latches after auth or
+      // quota failures. Rebuild Scout after a key rotation so the new credential
+      // is used immediately instead of inheriting the old client's disabled state.
+      scoutSearchService = undefined;
+      return {
+        status: "saved",
+        services: modelGuard.sanitizeServices(store),
+      };
+    } catch (error) {
+      return { status: "error", message: error?.message || "API Key 保存失败。" };
+    }
   });
   ipcMain.handle("bean-browser:set-default-model-provider", async (event, id) => {
     if (!isTrustedSender(event) || typeof id !== "string") return [];
@@ -5771,6 +6461,13 @@ function registerBrowserIpc() {
     if (!sandbox || sandbox.view.webContents.isDestroyed()) return;
     const visible = Boolean(payload?.visible);
     const raw = payload?.bounds || {};
+    if (sandbox.retainSandbox) {
+      if (visible && sandbox.tabId) activateBrowserView(sandbox.view, sandbox.tabId);
+      if (Number(raw.width) > 2 && Number(raw.height) > 2) setBrowserBounds(raw);
+      setBrowserViewVisible(visible);
+      sandbox.visible = visible;
+      return;
+    }
     const frameInset = 11;
     const outerWidth = Math.max(1, Math.round(Number(raw.width) || 1));
     const outerHeight = Math.max(1, Math.round(Number(raw.height) || 1));
@@ -5883,6 +6580,7 @@ function createWindow() {
   });
   window.webContents.on("render-process-gone", (_event, details) => {
     abortAllActiveSearches(new DOMException("Renderer process gone", "AbortError"));
+    abortAllBrizoUseRuns(new DOMException("Shell renderer process gone", "AbortError"));
     console.error("[renderer-process-gone]", {
       exitCode: details.exitCode,
       reason: details.reason,
@@ -5958,58 +6656,13 @@ function createWindow() {
             };
             document.querySelector('.sidebar-new-tab-btn')?.click();
             await new Promise((resolve) => setTimeout(resolve, 40));
-            const initialExpandedFolderCount =
-              document.querySelectorAll('.bookmark-folder-row[aria-expanded="true"]').length;
-            const bookmarkSidebar = document.querySelector(".bookmark-sidebar-body");
-            document.querySelector(".spaces-panel")?.dispatchEvent(
-              new PointerEvent("pointerover", { bubbles: true }),
-            );
-            // Folder interaction intentionally activates only after the 180 ms
-            // collapsed-to-expanded sidebar transition has completed.
-            await new Promise((resolve) => setTimeout(resolve, 200));
-            const rootBookmarkLinkCount =
-              bookmarkSidebar?.querySelectorAll(":scope > .bookmark-link-row").length || 0;
-            const firstRootItemIsBookmark =
-              bookmarkSidebar?.firstElementChild?.classList.contains("bookmark-link-row") || false;
-            const hasVisibleBookmarkBarFolder = [
-              ...document.querySelectorAll(".bookmark-folder-row .bookmark-tree-copy"),
-            ].some((element) => element.textContent.trim() === "书签栏");
-            for (let depth = 0; depth < 8; depth += 1) {
-              if (document.querySelector(".bookmark-link-row")) break;
-              const collapsedFolder = document.querySelector(
-                '.bookmark-folder-row[aria-expanded="false"]',
-              );
-              collapsedFolder?.click();
-              await new Promise((resolve) => setTimeout(resolve, 10));
-            }
-            const bookmarkLinkCount = document.querySelectorAll(".bookmark-link-row").length;
-            const bookmarkFaviconCount =
-              document.querySelectorAll(".bookmark-link-row .bookmark-favicon img").length;
-            const firstBookmarkRow = document.querySelector(".bookmark-link-row");
-            const firstBookmarkCopy = firstBookmarkRow?.querySelector(".bookmark-tree-copy");
-            const firstBookmarkFavicon = firstBookmarkRow?.querySelector(".bookmark-favicon");
-            const bookmarkCenterDelta = firstBookmarkCopy && firstBookmarkFavicon
-              ? Math.abs(
-                firstBookmarkCopy.getBoundingClientRect().top
-                  + firstBookmarkCopy.getBoundingClientRect().height / 2
-                  - firstBookmarkFavicon.getBoundingClientRect().top
-                  - firstBookmarkFavicon.getBoundingClientRect().height / 2
-              )
-              : 99;
-            const draggableBookmarkCount = document.querySelectorAll(
-              '.bookmark-folder-row[draggable="true"], .bookmark-link-row[draggable="true"]',
-            ).length;
-            bookmarkSidebar?.dispatchEvent(new Event("scroll"));
-            await new Promise((resolve) => setTimeout(resolve, 20));
-            const appScrollbarActive =
-              bookmarkSidebar?.classList.contains("is-scrolling") || false;
             return {
-            startup,
-            title: document.title,
-            uiFontFamily: getComputedStyle(document.documentElement).fontFamily,
-            hasRoot: Boolean(document.querySelector("#root")),
-            hasApp: Boolean(document.querySelector(".app-shell")),
-            brandAssetsLoaded: (() => {
+              startup,
+              title: document.title,
+              uiFontFamily: getComputedStyle(document.documentElement).fontFamily,
+              hasRoot: Boolean(document.querySelector("#root")),
+              hasApp: Boolean(document.querySelector(".app-shell")),
+              brandAssetsLoaded: (() => {
               const mark = document.querySelector(".brizo-mark");
               const wordmark = document.querySelector(".brizo-wordmark");
               const markUrl = decodeURIComponent(mark?.currentSrc || "");
@@ -6023,23 +6676,8 @@ function createWindow() {
                 && /\\/logo word(?:-[^/]+)?\\.svg$/.test(wordmarkUrl),
               );
             })(),
-            heading: document.querySelector("h1")?.textContent?.trim() ?? "",
-            addressValue: document.querySelector(".address-bar input")?.value ?? "",
-            appScrollbarActive,
-            bookmarkFaviconCount,
-            bookmarkLinkCount,
-            bookmarkCenterDelta,
-            bookmarkSidebarWidth: Math.round(
-              document.querySelector(".spaces-panel")?.getBoundingClientRect().width || 0,
-            ),
-            draggableBookmarkCount,
-            initialExpandedFolderCount,
-            firstRootItemIsBookmark,
-            hasVisibleBookmarkBarFolder,
-            rootBookmarkLinkCount,
-            bookmarkModeControlsRemoved: !document.querySelector(
-              ".bookmark-explorer-controls, .bookmark-mode-menu",
-            ),
+              heading: document.querySelector("h1")?.textContent?.trim() ?? "",
+              addressValue: document.querySelector(".address-bar input")?.value ?? "",
             tabCount: document.querySelectorAll(".sidebar-tab-row").length,
             draggablePageTabs: [...document.querySelectorAll(".sidebar-tab-row")]
               .every((tab) => tab.draggable),
@@ -6397,10 +7035,12 @@ function createWindow() {
 
   window.on("closed", () => {
     abortAllActiveSearches(new DOMException("Browser window closed", "AbortError"));
+    abortAllBrizoUseRuns(new DOMException("Browser window closed", "AbortError"));
     for (const view of browserViews.values()) {
       getLiveViewWebContents(view)?.close();
     }
     browserViews.clear();
+    brizoUseSandboxes.clear();
     browserView = undefined;
     mainWindow = undefined;
   });
@@ -6424,6 +7064,7 @@ if (hasSingleInstanceLock) app.whenReady().then(async () => {
     else safeStorage.encryptString("brizo-safe-storage-bootstrap");
   }
   app.setName("Brizo");
+  defaultDownloadDirectory = app.getPath("downloads");
   siteHygieneSettings = await siteHygieneStore.read();
   if (configureSearchKeys) {
     try {

@@ -23,6 +23,7 @@ export const REMOTE_IMAGE_MAX_URL_LENGTH = 4_096;
 // DNS lookup.
 
 const ACCEPT_HEADER = "image/avif,image/webp,image/png,image/jpeg,image/gif;q=0.8";
+const IMAGE_FETCH_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const CONTENT_TYPES = new Map([
   ["image/avif", "image/avif"],
@@ -310,6 +311,13 @@ export function createRemoteImageProxy({
         headers: {
           Accept: ACCEPT_HEADER,
           "Accept-Encoding": "identity",
+          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+          // Some public image CDNs reject the default Node client even though
+          // the same image is publicly readable in Chromium. This fixed,
+          // non-identifying UA preserves cookie/referrer isolation.
+          "User-Agent": IMAGE_FETCH_USER_AGENT,
+          "Sec-Fetch-Dest": "image",
+          "Sec-Fetch-Mode": "no-cors",
         },
         lookup: createPinnedLookup(addresses),
         method: "GET",
@@ -331,8 +339,12 @@ export function createRemoteImageProxy({
           finish(new RemoteImageProxyError("status"));
           return;
         }
-        const declaredType = normalizeContentType(headerValue(response.headers, "content-type"));
-        if (!declaredType) {
+        const rawContentType = headerValue(response.headers, "content-type").split(";", 1)[0].trim().toLowerCase();
+        const declaredType = normalizeContentType(rawContentType);
+        const genericBinaryType = !rawContentType
+          || rawContentType === "application/octet-stream"
+          || rawContentType === "binary/octet-stream";
+        if (!declaredType && !genericBinaryType) {
           response.resume?.();
           finish(new RemoteImageProxyError("content_type"));
           return;
@@ -361,7 +373,7 @@ export function createRemoteImageProxy({
           if (settled) return;
           const bytes = Buffer.concat(chunks, byteLength);
           const detectedType = detectedImageType(bytes);
-          if (!detectedType || detectedType !== declaredType) {
+          if (!detectedType || (declaredType && detectedType !== declaredType)) {
             finish(new RemoteImageProxyError("magic"));
             return;
           }
@@ -381,8 +393,8 @@ export function createRemoteImageProxy({
     }
   });
 
-  const fetchUncached = async (initialUrl) => {
-    const deadline = nowFn() + timeoutMs;
+  const fetchUncached = async (initialUrl, operationTimeoutMs = timeoutMs) => {
+    const deadline = nowFn() + operationTimeoutMs;
     let currentUrl = initialUrl;
     const visited = new Set();
     for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
@@ -414,7 +426,7 @@ export function createRemoteImageProxy({
     throw new RemoteImageProxyError("redirect");
   };
 
-  const getDataUrl = async (value) => {
+  const getDataUrl = async (value, options = {}) => {
     const url = normalizeRemoteImageUrl(value);
     const key = cacheKeyForUrl(url);
     const cached = readCache(key);
@@ -422,8 +434,12 @@ export function createRemoteImageProxy({
     const pending = inflight.get(key);
     if (pending) return await pending;
 
+    const requestedTimeoutMs = Number(options?.timeoutMs);
+    const operationTimeoutMs = Number.isSafeInteger(requestedTimeoutMs) && requestedTimeoutMs >= 250
+      ? Math.min(timeoutMs, requestedTimeoutMs)
+      : timeoutMs;
     const operationGeneration = cacheGeneration;
-    const operation = fetchUncached(url).then((result) => {
+    const operation = fetchUncached(url, operationTimeoutMs).then((result) => {
       if (operationGeneration === cacheGeneration) {
         storeCache(key, result, result.cacheTtlMs);
       }

@@ -5,6 +5,8 @@ import {
   sanitizeBrowserEvidenceUrl,
 } from "./browser-execution-evidence.mjs";
 import { assertBrowserNavigationUrl } from "./browser-navigation-policy.mjs";
+import { detectBrowserSecurityBlock } from "./browser-security-block.mjs";
+import { normalizeUsePlannerNavigation } from "./browser-use-entry-policy.mjs";
 
 const INTERACTIVE_SELECTOR = [
   "a[href]",
@@ -867,7 +869,16 @@ function browserActionFingerprint(action, snapshot) {
   ]);
 }
 
-export async function runBrowserCommandAgent({ command, onProgress = () => {}, planNextAction, signal, validateNavigation, waitIfPaused, webContents }) {
+export async function runBrowserCommandAgent({
+  command,
+  enforceNormalEntryNavigation = false,
+  onProgress = () => {},
+  planNextAction,
+  signal,
+  validateNavigation,
+  waitIfPaused,
+  webContents,
+}) {
   const maxActions = 50;
   const cleanCommand = String(command || "").trim().slice(0, 2000);
   if (!cleanCommand) return { status: "error", message: "请输入浏览器命令。" };
@@ -911,6 +922,26 @@ export async function runBrowserCommandAgent({ command, onProgress = () => {}, p
         history,
       });
     }
+    onProgress(`正在读取 Brizo 沙箱页面`);
+    const snapshot = prefetchedSnapshot || await snapshotBrowserPage(webContents);
+    prefetchedSnapshot = null;
+    lastSnapshot = snapshot;
+    evidence.recordObservation(snapshot);
+    await waitForRunPermission();
+    const securityBlock = detectBrowserSecurityBlock(snapshot);
+    if (securityBlock) {
+      onProgress(securityBlock.progress);
+      return withEvidence({
+        status: "blocked",
+        reason: "site-security-block",
+        blockCode: securityBlock.code,
+        message: securityBlock.message,
+        steps: history.length,
+        url: snapshot.url,
+        finalSnapshot: snapshot,
+        history,
+      }, snapshot);
+    }
     const loginDismissTarget = await findLoginModalDismissTarget(webContents);
     if (loginDismissTarget) {
       const loginDismissFingerprint = JSON.stringify([
@@ -925,13 +956,7 @@ export async function runBrowserCommandAgent({ command, onProgress = () => {}, p
       previousLoginDismissFingerprint = loginDismissFingerprint;
       if (repeatedLoginDismissCount < 2) {
         onProgress(`发现登录弹窗，正在点击${loginDismissTarget.label}`);
-        const beforeSnapshot = prefetchedSnapshot || {
-          elements: [],
-          pageText: "",
-          title: "",
-          url: typeof webContents.getURL === "function" ? webContents.getURL() : "",
-          viewport: {},
-        };
+        const beforeSnapshot = snapshot;
         const evidenceToken = evidence.beginAction({
           action: { action: "dismiss-login" },
           snapshot: beforeSnapshot,
@@ -970,12 +995,6 @@ export async function runBrowserCommandAgent({ command, onProgress = () => {}, p
       previousLoginDismissFingerprint = "";
       repeatedLoginDismissCount = 0;
     }
-    onProgress(`正在读取 Brizo 沙箱页面`);
-    const snapshot = prefetchedSnapshot || await snapshotBrowserPage(webContents);
-    prefetchedSnapshot = null;
-    lastSnapshot = snapshot;
-    evidence.recordObservation(snapshot);
-    await waitForRunPermission();
     const snapshotFingerprint = browserSnapshotFingerprint(snapshot);
     unchangedPageCount = snapshotFingerprint === previousSnapshotFingerprint ? unchangedPageCount + 1 : 0;
     previousSnapshotFingerprint = snapshotFingerprint;
@@ -1022,6 +1041,21 @@ export async function runBrowserCommandAgent({ command, onProgress = () => {}, p
         evidenceLedger: evidence.exportEntries(),
         verification,
       };
+    }
+    if (enforceNormalEntryNavigation && action.action === "navigate") {
+      try {
+        const normalizedNavigation = normalizeUsePlannerNavigation(action.url);
+        if (normalizedNavigation.rewritten) {
+          onProgress("已阻止冷启动业务深链，正在从网站公开入口进入");
+          action = { ...action, url: normalizedNavigation.url };
+        }
+      } catch (error) {
+        return withEvidence({
+          status: "error",
+          message: `BrowserSkill 导航地址无效：${error instanceof Error ? error.message : String(error)}`,
+          history,
+        }, snapshot);
+      }
     }
     const requestedTarget = actionTarget(snapshot, action);
     if (

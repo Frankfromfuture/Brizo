@@ -1,3 +1,5 @@
+import { detectBrowserSecurityBlock } from "./browser-security-block.mjs";
+
 const CITY_CODES = [
   { code: "BJS", names: ["北京", "北京市", "beijing"] },
   { code: "SHA", names: ["上海", "上海市", "shanghai"] },
@@ -36,6 +38,28 @@ function cityAfterMarker(text, marker, startAt = 0) {
     const match = names.find(({ name }) => suffix.startsWith(name.toLocaleLowerCase()));
     if (match) return match.city;
     markerIndex = lowerText.indexOf(lowerMarker, markerIndex + marker.length);
+  }
+  return null;
+}
+
+function cityRoutePair(text) {
+  const lowerText = text.toLocaleLowerCase();
+  const names = CITY_CODES.flatMap((city) => city.names.map((name) => ({ city, name: name.toLocaleLowerCase() })))
+    .sort((left, right) => right.name.length - left.name.length);
+  for (const origin of names) {
+    let originIndex = lowerText.indexOf(origin.name);
+    while (originIndex >= 0) {
+      const afterOrigin = lowerText.slice(originIndex + origin.name.length);
+      const separator = afterOrigin.match(/^\s*(?:到|至|飞往|飞|[-–—~～→])\s*/u)?.[0];
+      if (separator) {
+        const destinationText = afterOrigin.slice(separator.length);
+        const destination = names.find((candidate) => destinationText.startsWith(candidate.name));
+        if (destination && destination.city.code !== origin.city.code) {
+          return { destination: destination.city, origin: origin.city };
+        }
+      }
+      originIndex = lowerText.indexOf(origin.name, originIndex + origin.name.length);
+    }
   }
   return null;
 }
@@ -81,23 +105,34 @@ function departureWindow(command) {
   const period = "(凌晨|早上|上午|中午|下午|傍晚|晚上)?";
   const clock = "(\\d{1,2})(?:\\s*[:：]\\s*(\\d{1,2})|\\s*(?:点|时)(?:\\s*(\\d{1,2})\\s*分?)?)";
   const match = command.match(new RegExp(`${period}\\s*${clock}\\s*(?:到|至|[-—~～])\\s*${period}\\s*${clock}`));
-  if (!match) return null;
-  const startPeriod = match[1] || "";
-  const endPeriod = match[5] || startPeriod;
-  const start = clockMinutes(startPeriod, match[2], match[3] || match[4]);
-  const end = clockMinutes(endPeriod, match[6], match[7] || match[8]);
-  if (start === null || end === null || end <= start) return null;
   const label = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
-  return { end, label: `${label(start)}–${label(end)}`, start };
+  if (match) {
+    const startPeriod = match[1] || "";
+    const endPeriod = match[5] || startPeriod;
+    const start = clockMinutes(startPeriod, match[2], match[3] || match[4]);
+    const end = clockMinutes(endPeriod, match[6], match[7] || match[8]);
+    if (start !== null && end !== null && end > start) {
+      return { end, label: `${label(start)}–${label(end)}`, start };
+    }
+  }
+  const nearby = command.match(new RegExp(`${period}\\s*${clock}\\s*(?:左右|附近|前后)`));
+  if (!nearby) return null;
+  const center = clockMinutes(nearby[1] || "", nearby[2], nearby[3] || nearby[4]);
+  if (center === null) return null;
+  const start = Math.max(0, center - 60);
+  const end = Math.min(23 * 60 + 59, center + 60);
+  return { end, label: `${label(start)}–${label(end)}（${label(center)} 附近）`, start };
 }
 
 export function parseCtripFlightCommand(value, now = new Date()) {
   const command = String(value || "").replace(/\s+/g, " ").trim();
   if (!command || !/(机票|航班|flight)/i.test(command)) return null;
   const fromIndex = command.indexOf("从");
-  const origin = cityAfterMarker(command, "从");
+  const routePair = cityRoutePair(command);
+  const origin = cityAfterMarker(command, "从") || routePair?.origin;
   const destination = cityAfterMarker(command, "到", fromIndex >= 0 ? fromIndex + 1 : 0)
-    || cityAfterMarker(command, "飞往", fromIndex >= 0 ? fromIndex + 1 : 0);
+    || cityAfterMarker(command, "飞往", fromIndex >= 0 ? fromIndex + 1 : 0)
+    || routePair?.destination;
   const date = requestedDate(command, now);
   if (!origin || !destination || origin.code === destination.code || !date) return null;
   return {
@@ -249,9 +284,39 @@ const READ_CTRIP_RESULTS_SCRIPT = `
         };
       })
       .filter((card) => Number.isFinite(card.price));
-    return { cards, title: document.title, url: location.href };
+    const frames = [...document.querySelectorAll("iframe,frame")]
+      .filter(visible)
+      .slice(0, 24)
+      .map((frame) => {
+        let url = "";
+        try {
+          const parsed = new URL(frame.src || "", location.href);
+          url = /^https?:$/.test(parsed.protocol) ? parsed.origin + parsed.pathname : parsed.protocol;
+        } catch {}
+        return {
+          name: clean(frame.getAttribute("aria-label") || frame.title || frame.name).slice(0, 240),
+          url,
+        };
+      });
+    return {
+      cards,
+      frames,
+      pageText: clean(document.body?.innerText || "").slice(0, 12000),
+      title: document.title,
+      url: location.href,
+    };
   })()
 `;
+
+function throwIfCtripSecurityBlocked(observation) {
+  const block = detectBrowserSecurityBlock(observation);
+  if (!block) return;
+  const error = new Error(block.message);
+  error.code = "BRIZO_SITE_SECURITY_BLOCK";
+  error.blockCode = block.code;
+  error.progress = block.progress;
+  throw error;
+}
 
 async function sleep(milliseconds) {
   await new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -291,6 +356,7 @@ export async function waitForCtripFlightResults(webContents, {
         readCtripFlightResults(webContents),
         Math.max(10, Math.min(observationTimeout, deadline - Date.now())),
       );
+      throwIfCtripSecurityBlocked(latest);
       const observationVerified = verifyCtripFlightObservation(latest, expectedIntent).ok;
       if (latest?.cards?.length && observationVerified) {
         const signature = latest.cards
@@ -302,6 +368,7 @@ export async function waitForCtripFlightResults(webContents, {
         lastSignature = "";
       }
     } catch (error) {
+      if (error?.code === "BRIZO_SITE_SECURITY_BLOCK") throw error;
       lastError = error;
       // The previous document can disappear between navigation and the first result paint.
     }
@@ -322,6 +389,7 @@ export async function collectCtripFlightResults(webContents, {
     readCtripFlightResults(webContents),
     Math.max(10, Math.min(1_500, timeout)),
   );
+  throwIfCtripSecurityBlocked(latest);
   if (!verifyCtripFlightObservation(latest, expectedIntent).ok) latest = null;
   let stableAtBottom = 0;
   let previousSignature = "";
@@ -337,6 +405,7 @@ export async function collectCtripFlightResults(webContents, {
       readCtripFlightResults(webContents),
       Math.max(10, Math.min(1_500, deadline - Date.now())),
     );
+    throwIfCtripSecurityBlocked(current);
     if (current?.cards?.length
       && verifyCtripFlightObservation(current, expectedIntent).ok) latest = current;
     const signature = latest?.cards
