@@ -116,7 +116,11 @@ function departureWindow(command) {
     }
   }
   const nearby = command.match(new RegExp(`${period}\\s*${clock}\\s*(?:左右|附近|前后)`));
-  if (!nearby) return null;
+  if (!nearby) {
+    return /下午(?!\s*[0-9一二三四五六七八九十])/.test(command)
+      ? { start: 12 * 60, end: 18 * 60 - 1, label: "12:00–18:00（不含18:00）" }
+      : null;
+  }
   const center = clockMinutes(nearby[1] || "", nearby[2], nearby[3] || nearby[4]);
   if (center === null) return null;
   const start = Math.max(0, center - 60);
@@ -417,7 +421,7 @@ export async function collectCtripFlightResults(webContents, {
     previousSignature = signature;
     if (stableAtBottom >= 2) break;
   }
-  return latest;
+  return latest ? { ...latest, collectionComplete: stableAtBottom >= 2 } : null;
 }
 
 export function selectCheapestFlights(cards) {

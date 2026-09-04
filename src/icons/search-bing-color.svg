@@ -1,0 +1,9 @@
+<svg viewBox="0 0 152 152" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bing-color" gradientUnits="userSpaceOnUse" x1="8.969" x2="104.438" y1="25.219" y2="120.688">
+      <stop offset="0" stop-color="#00B39A" />
+      <stop offset="1" stop-color="#009984" />
+    </linearGradient>
+  </defs>
+  <path d="M63.8 43.5L76 71.9L96.1 80.3L55.7 100.4V23.2L23.2 11V120.7L55.7 141L128.8 96.3V63.8L63.8 43.5Z" fill="url(#bing-color)" />
+</svg>

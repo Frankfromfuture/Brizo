@@ -1,3 +1,4 @@
+import { preferenceContext, preferredSearchQuery, prioritizePreferredSources } from "../../shared/browser-memory.mjs";
 import {
   languageForInput,
   mapWithConcurrency,
@@ -9,7 +10,7 @@ import {
 import { FRESHNESS_TO_BOCHA } from "./bocha-client.mjs";
 import { fuseResults, isEntityOfficialSource, sourceAuthorityTier } from "./fusion.mjs";
 import { FRESHNESS_TO_TBS } from "./serper-client.mjs";
-import { isPrimarySourceQueryCandidate } from "./answer-engine.mjs";
+import { isPrimarySourceQueryCandidate, keywordLookupQueries, keywordLookupSubject } from "./answer-engine.mjs";
 import { auditAnswerCitations, selectRelevantPassages } from "./evidence.mjs";
 import { makeResult } from "./normalize.mjs";
 
@@ -245,6 +246,114 @@ function publicSource(result) {
   };
 }
 
+function isSelectedTabResult(result) {
+  return Array.isArray(result?.hits)
+    && result.hits.some((hit) => hit?.provider === "local");
+}
+
+const NAMED_SUBJECT_MARKERS = [
+  ["brand", /品牌|\bbrand\b/iu],
+  ["organization", /公司|集团|企业|创立|创办|成立于|\b(?:company|corporation|founded)\b/iu],
+  ["person", /出生于|出生地|创始人|演员|作家|歌手|科学家|\b(?:born|actor|author|singer)\b/iu],
+  ["work", /电影|小说|电视剧|专辑|导演|\b(?:novel|film|album)\b/iu],
+  ["product", /型号|系列产品|应用程序|软件|\b(?:model|software|app)\b/iu],
+  ["place", /位于|坐落于|景区|\b(?:located|city|town)\b/iu],
+];
+
+function completeSubjectMatch(value, subject) {
+  const text = safeText(value, 6_000).normalize("NFKC").toLocaleLowerCase();
+  const name = subject.normalize("NFKC").toLocaleLowerCase();
+  if (!name) return null;
+  const passages = [];
+  // A later occurrence can carry the identity (e.g. a product's brand field),
+  // even when the first occurrence is only in its title.
+  for (let at = text.indexOf(name); at >= 0; at = text.indexOf(name, at + name.length)) {
+    if (/^[a-z0-9]/iu.test(name) && /[a-z0-9]/iu.test(text[at - 1] || "")) continue;
+    if (/[a-z0-9]$/iu.test(name) && /[a-z0-9]/iu.test(text[at + name.length] || "")) continue;
+    passages.push(text.slice(Math.max(0, at - 100), at + name.length + 140));
+  }
+  return passages.length ? passages.join("\n") : null;
+}
+
+function namedSubjectCandidate(results, subject) {
+  if (!subject) return null;
+  const support = new Map();
+  for (const result of results) {
+    const nearby = completeSubjectMatch(`${result.title}\n${result.summary || result.snippet || ""}`, subject);
+    if (!nearby) continue;
+    const kind = NAMED_SUBJECT_MARKERS.find(([, pattern]) => pattern.test(nearby))?.[0];
+    if (!kind) continue;
+    const evidence = support.get(kind) || { domains: new Set(), titled: false };
+    evidence.domains.add(result.domain);
+    evidence.titled ||= Boolean(completeSubjectMatch(result.title, subject));
+    support.set(kind, evidence);
+  }
+  const candidate = [...support].filter(([, evidence]) => evidence.titled || evidence.domains.size >= 2)
+    .sort((a, b) => b[1].domains.size - a[1].domains.size)[0];
+  return candidate ? { name: subject, kind: candidate[0] } : null;
+}
+
+function prioritizeCompleteSubject(results, subject) {
+  if (!subject) return results;
+  const priority = (result) => {
+    const nearby = completeSubjectMatch(`${result.title}\n${result.summary || result.snippet || ""}`, subject);
+    return nearby ? (NAMED_SUBJECT_MARKERS.some(([, pattern]) => pattern.test(nearby)) ? 2 : 1) : 0;
+  };
+  return [...results].sort((a, b) => priority(b) - priority(a));
+}
+
+function keepNamedSubjectSources(results, subject) {
+  if (!subject) return results;
+  const identityPattern = NAMED_SUBJECT_MARKERS.find(([kind]) => kind === subject.kind)?.[1];
+  return results.filter((result) => {
+    if (isSelectedTabResult(result) || isEntityOfficialSource(result, subject.name)) return true;
+    const nearby = completeSubjectMatch(`${result.title}\n${result.summary || result.snippet || ""}\n${result.body || ""}`, subject.name);
+    // Word-meaning pages must not supply facts for a confirmed named subject.
+    // Keep identity-bearing evidence instead of letting unrelated high-volume
+    // science/dictionary results steer the answer back to the literal meaning.
+    return Boolean(nearby && (identityPattern?.test(nearby) || /官网|官方网站|\bofficial\b/iu.test(nearby)));
+  });
+}
+
+function namedOrganizationForGrounding(entity, query) {
+  const queryText = safeText(query, 300);
+  const entityName = safeText(entity?.name, 100);
+  if (entity?.kind === "organization"
+    && Number(entity?.confidence) >= 0.72
+    && entityName
+    && normalizedEntityText(queryText).includes(normalizedEntityText(entityName))) {
+    return { ...entity, name: entityName };
+  }
+
+  // Fail closed for an unmistakably named Chinese institution even when the
+  // planner misses its type. This intentionally excludes broad phrases such as
+  // “资本市场” and “投资动态”.
+  const stripped = queryText.replace(/^(?:(?:请问|帮我(?:查|找|看看)?|查询|了解|关于|最近|近期|最新)\s*)+/u, "");
+  const match = stripped.match(/^([\p{Script=Han}A-Za-z0-9·&.-]{2,24}?(?:资本|基金|创投|证券|银行|集团|公司))(?=有|的|最近|近期|最新|动态|消息|新闻|情况|怎么样|如何|$)/u);
+  const name = safeText(match?.[1], 100);
+  return name ? { name, kind: "organization", confidence: 0.82 } : null;
+}
+
+function enforceNamedOrganizationGrounding(results, entity) {
+  if (!entity?.name) return results;
+  return results.filter((result) => {
+    if (isSelectedTabResult(result)) return true;
+    const evidence = `${result?.title || ""} ${result?.summary || result?.snippet || ""} ${result?.body || ""}`;
+    return entityNameMatches(evidence, entity) || isEntityOfficialSource(result, entity.name);
+  });
+}
+
+function prioritizeSelectedTabResults(fusedResults, localResults, limit) {
+  const fusedByKey = new Map(fusedResults.map((result) => [result.key, result]));
+  const localKeys = new Set(localResults.map((result) => result.key));
+  return [
+    ...localResults.map((result) => fusedByKey.get(result.key) || result),
+    ...fusedResults.filter((result) => !localKeys.has(result.key)),
+  ]
+    .slice(0, limit)
+    .map((result, index) => ({ ...result, displayRank: index }));
+}
+
 function removeTopLevelMarkdownHeadings(answer) {
   return String(answer || "")
     .split("\n")
@@ -319,15 +428,25 @@ export function createSearchService({
       let synthesisDurationMs = 0;
       const query = safeText(payload?.query, 4_000);
       if (!query) throw new Error("请输入搜索内容。");
-      const contextLabel = payload?.context?.tab?.url
-        ? `${safeText(payload.context.tab.title || payload.context.tab.url, 300)} (${safeText(payload.context.tab.url, 2_000)})`
+      const contextTabs = Array.isArray(payload?.context?.tabs) && payload.context.tabs.length
+        ? payload.context.tabs.slice(0, 8)
+        : payload?.context?.tab ? [payload.context.tab] : [];
+      const contextLabel = contextTabs.length
+        ? `Selected browser tabs:\n${contextTabs.map((tab, index) =>
+          `${index + 1}. ${safeText(tab?.title || tab?.url, 300)} (${safeText(tab?.url, 2_000)})`
+        ).join("\n")}`
+        : "";
+      const selectedTabsAnswerPolicy = contextTabs.length
+        ? "Answer order for this request: first give a section based only on relevant evidence from sources marked as selected browser tabs. Then place external corroboration, broader web evidence, or model-led synthesis in a later clearly labeled supplement section. If the selected tabs contain no material relevant to the question, say that plainly in the first section before giving the supplement."
         : "";
       const attachmentContext = safeText(payload?.context?.attachmentText, 100_000);
       const threadContext = (Array.isArray(payload?.thread) ? payload.thread : []).slice(-3).map((turn) => [
         `Earlier question: ${safeText(turn?.query, 800)}`,
         `Earlier answer: ${safeText(turn?.answer, 3_000)}`,
       ].join("\n")).join("\n\n");
-      const researchContext = [contextLabel, attachmentContext, threadContext].filter(Boolean).join("\n\n");
+      const preferredSites = Array.isArray(payload?.preferredSites) ? payload.preferredSites.slice(0, 5) : [];
+      const researchContext = [contextLabel, attachmentContext, threadContext, preferenceContext(preferredSites)].filter(Boolean).join("\n\n");
+      const answerContext = [researchContext, selectedTabsAnswerPolicy].filter(Boolean).join("\n\n");
 
       emit({ type: "stage", stage: "planning", detail: "正在理解问题并规划检索" });
       const planningStartedAt = Date.now();
@@ -342,10 +461,14 @@ export function createSearchService({
         .map((item) => safeText(item, 180))
         .filter((item) => item && isPrimarySourceQueryCandidate(item, requestedLanguage));
       const officialQuery = officialIntentQuery(query);
+      const lookupSubject = keywordLookupSubject(query);
+      const subjectQueries = keywordLookupQueries(query);
       const plan = {
         ...planned,
         language: requestedLanguage,
-        queries: [...new Set([query, officialQuery, ...plannedQueries].filter(Boolean))].slice(0, 3),
+        queries: [...new Set((lookupSubject
+          ? [query, ...subjectQueries, preferredSearchQuery(query, preferredSites), officialQuery, ...plannedQueries]
+          : [preferredSearchQuery(query, preferredSites), query, officialQuery, ...plannedQueries]).filter(Boolean))].slice(0, 3),
       };
       emit({ type: "plan", ...plan });
 
@@ -387,6 +510,17 @@ export function createSearchService({
           count: plan.depth === "deep" ? 20 : plan.depth === "fast" ? 10 : 15,
           signal: retrievalSignal,
         }).then((value) => ({ provider: "bocha", value })));
+      }
+      // Preserve exact-name and habitual-site supplements for Bocha-only setups.
+      const supplementalBochaQueries = lookupSubject ? plan.queries.slice(1)
+        : preferredSearchQuery(query, preferredSites) ? [query] : [];
+      for (const supplementalQuery of bochaConfigured && !serperConfigured ? supplementalBochaQueries : []) {
+        taskProviders.push("bocha-supplement");
+        tasks.push(bocha.webSearch(supplementalQuery, {
+          freshness: FRESHNESS_TO_BOCHA[plan.freshness] || "noLimit",
+          count: 10,
+          signal: retrievalSignal,
+        }).then(value => ({ provider: "bocha-supplement", value })));
       }
       if (!professionalConfigured) {
         taskProviders.push("legacy");
@@ -513,7 +647,11 @@ export function createSearchService({
         ({ value }) => value.results || value.groups?.flat() || [],
       );
       const retrievalResults = keepRequestedLanguage(unfilteredRetrievalResults, requestedLanguage, query);
-      const localResults = keepRequestedLanguage(resolvedLocalResults, requestedLanguage, query);
+      // The user explicitly selected these tabs. Their source language may differ
+      // from the question language, so the ordinary provider-language guard must
+      // never discard them.
+      const localResults = (Array.isArray(resolvedLocalResults) ? resolvedLocalResults : [])
+        .filter((result) => result?.key && result?.title && result?.body);
       const serperResult = fulfilled.find((item) => item.provider === "serper")?.value;
       const bochaResult = fulfilled.find((item) => item.provider === "bocha")?.value;
 
@@ -526,13 +664,31 @@ export function createSearchService({
         throw new Error(reasons || "没有找到可用于回答的真实网页结果。");
       }
 
-      let ranked = fuseResults([...retrievalResults, ...localResults], {
-        query,
-        freshness: plan.freshness,
-        blocks: serperResult?.blocks,
-        limit: plan.depth === "deep" ? 12 : 10,
-      }).map((result, index) => ({ ...result, displayRank: index }));
+      const resultLimit = plan.depth === "deep" ? 12 : 10;
+      plan.namedSubject = namedSubjectCandidate([...localResults, ...retrievalResults], lookupSubject);
+      const rankForAnswer = (results) => prioritizeSelectedTabResults(
+        prioritizeCompleteSubject(prioritizePreferredSources(fuseResults(results, {
+          query,
+          freshness: plan.freshness,
+          blocks: serperResult?.blocks,
+          // Resolve exact-name relevance before trimming the evidence budget.
+          limit: lookupSubject ? results.length : resultLimit + localResults.length,
+        }), preferredSites), plan.namedSubject?.name), localResults, resultLimit,
+      );
+      let ranked = rankForAnswer(keepNamedSubjectSources([...localResults, ...retrievalResults], plan.namedSubject));
       if (!ranked.length) throw new Error("没有找到可用于回答的真实网页结果。");
+
+      const groundingOrganization = namedOrganizationForGrounding(visualEntity, query);
+      if (groundingOrganization) {
+        const externalBefore = ranked.filter((result) => !isSelectedTabResult(result)).length;
+        ranked = enforceNamedOrganizationGrounding(ranked, groundingOrganization);
+        const externalAfter = ranked.filter((result) => !isSelectedTabResult(result)).length;
+        logger.info?.("[search-entity-grounding]", {
+          entity: groundingOrganization.name,
+          keptExternal: externalAfter,
+          rejectedExternal: Math.max(0, externalBefore - externalAfter),
+        });
+      }
 
       const resolvedVisualEntity = resolveEntityKind(visualEntity, query, ranked);
       const resolvedEntityImagesPromise = !visualEntity && isEntityVisualEligible(resolvedVisualEntity)
@@ -565,7 +721,13 @@ export function createSearchService({
       if (serperConfigured && plan.vertical !== "web") {
         try {
           const vertical = await serper.vertical(plan.vertical, plan.queries[0], { ...locale, signal });
-          const items = keepRequestedLanguage(vertical.items, requestedLanguage, query);
+          const languageMatchedItems = keepRequestedLanguage(vertical.items, requestedLanguage, query);
+          const items = groundingOrganization
+            ? languageMatchedItems.filter((item) => entityNameMatches(
+              `${item?.title || item?.name || ""} ${item?.summary || item?.snippet || item?.description || ""}`,
+              groundingOrganization,
+            ))
+            : languageMatchedItems;
           if (items.length) {
             cards.push({ kind: vertical.kind, items });
             items.forEach((item, index) => {
@@ -594,12 +756,8 @@ export function createSearchService({
       const rendererCards = cards.length ? await localizeSearchCards(cards) : [];
       if (rendererCards.length) emit({ type: "cards", cards: rendererCards });
       if (verticalEvidence.length) {
-        ranked = fuseResults([...ranked, ...verticalEvidence], {
-          query,
-          freshness: plan.freshness,
-          blocks: serperResult?.blocks,
-          limit: plan.depth === "deep" ? 12 : 10,
-        }).map((result, index) => ({ ...result, displayRank: index }));
+        ranked = rankForAnswer(keepNamedSubjectSources([...ranked, ...verticalEvidence], plan.namedSubject));
+        ranked = enforceNamedOrganizationGrounding(ranked, groundingOrganization);
       }
       emit({
         type: "sources",
@@ -612,10 +770,11 @@ export function createSearchService({
       retrievalDurationMs = Date.now() - retrievalStartedAt;
 
       const scrapeCount = serperConfigured ? DEPTH_SCRAPE_COUNT[plan.depth] || 0 : 0;
-      if (scrapeCount > 0) {
+      if (scrapeCount > 0 && ranked.length > 0) {
         emit({ type: "stage", stage: "reading", detail: `正在阅读 ${Math.min(scrapeCount, ranked.length)} 篇高相关网页` });
         const readingStartedAt = Date.now();
         const enriched = await mapWithConcurrency(ranked.slice(0, scrapeCount), 3, async (result) => {
+          if (isSelectedTabResult(result)) return result;
           const cached = await scrapeCache.get(result.url);
           if (cached?.markdown || cached?.text) {
             return {
@@ -646,12 +805,8 @@ export function createSearchService({
           return result;
         });
         ranked = [...enriched, ...ranked.slice(scrapeCount)];
-        ranked = fuseResults(ranked, {
-          query,
-          freshness: plan.freshness,
-          blocks: serperResult?.blocks,
-          limit: plan.depth === "deep" ? 12 : 10,
-        }).map((result, index) => ({ ...result, displayRank: index }));
+        ranked = rankForAnswer(ranked);
+        ranked = enforceNamedOrganizationGrounding(ranked, groundingOrganization);
         emit({
           type: "sources",
           sources: ranked.map(publicSource).map((source) => ({ ...source, imageUrl: "" })),
@@ -663,24 +818,11 @@ export function createSearchService({
       const freeSignals = [
         ...(serperResult?.blocks?.peopleAlsoAsk || []),
         ...(serperResult?.blocks?.relatedSearches || []),
-      ].filter((item) => matchesRequestedLanguage(
-        item?.question || item?.query || item,
-        requestedLanguage,
-      ));
-      let followupsPromise = null;
-      const startFollowups = () => {
-        if (!followupsPromise) {
-          followupsPromise = answerEngine.followups({
-            query,
-            answer: "",
-            plan,
-            freeSignals,
-            signal,
-          });
-        }
-        return followupsPromise;
-      };
-
+      ].filter((item) => {
+        const text = item?.question || item?.query || item;
+        return matchesRequestedLanguage(text, requestedLanguage)
+          && (!groundingOrganization || entityNameMatches(text, groundingOrganization));
+      });
       emit({ type: "stage", stage: "writing", detail: "正在撰写带引用的答案" });
       const synthesisStartedAt = Date.now();
       let streamedAnswer = "";
@@ -688,15 +830,13 @@ export function createSearchService({
         query,
         plan,
         sources: ranked,
-        context: researchContext,
+        context: answerContext,
         signal,
         onToken: (text) => {
           streamedAnswer += text;
           emit({ type: "token", text });
-          // The answer is already visible at this point. Generate the five
-          // follow-ups alongside the remaining stream instead of adding another
-          // serial model round-trip after the answer has finished.
-          startFollowups();
+          // Follow-up metadata is generated in this same response and stripped
+          // by the answer engine before any text reaches the visible stream.
         },
         onRetry: () => emit({ type: "stage", stage: "writing", detail: "模型思考模式未关闭，正在切换兼容方式重试" }),
       });
@@ -707,13 +847,14 @@ export function createSearchService({
         throw new Error("生成答案与问题语言不一致，已拦截该答案，请重试。");
       }
       const sources = ranked.map(publicSource).map((source) => ({ ...source, imageUrl: "" }));
-      const relatedQuestions = (await (followupsPromise || answerEngine.followups({
+      const relatedQuestions = (await answerEngine.followups({
         query,
         answer: cleanedAnswer,
         plan,
+        generatedQuestions: streamed.questions,
         freeSignals,
         signal,
-      }))).filter((item) => matchesRequestedLanguage(item, requestedLanguage)).slice(0, 5);
+      })).filter((item) => matchesRequestedLanguage(item, requestedLanguage)).slice(0, 5);
       synthesisDurationMs = Date.now() - synthesisStartedAt;
       const entityImages = await entityImagesTask;
       const totalDurationMs = Date.now() - searchStartedAt;

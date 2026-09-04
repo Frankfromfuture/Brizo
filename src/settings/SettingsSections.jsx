@@ -1,3 +1,4 @@
+import { BrowserMemorySection } from "./BrowserMemorySection.jsx";
 import {
   CheckCircle,
   DownloadSimple,
@@ -53,7 +54,7 @@ function PendingPage({ children, title }) {
   );
 }
 
-function PeopleSection({ actions, state }) {
+function PeopleSection({ actions, state, onNavigate }) {
   const profile = state.accountProfile || { name: "本地用户", email: "" };
   return (
     <SettingsSection title="您与 Brizo">
@@ -79,6 +80,7 @@ function PeopleSection({ actions, state }) {
         >
           <UploadSimple size={17} aria-hidden="true" />
         </SettingsRow>
+        <SettingsRow label="导入浏览记录与画像" description="让 Ask、Use 和地址栏优先参考常用网站" onClick={() => onNavigate("memory")} />
         <SettingsRow label="整理收藏夹" onClick={actions.openBookmarkOrganizer}>
           <FolderOpen size={17} aria-hidden="true" />
         </SettingsRow>
@@ -197,12 +199,12 @@ function PerformanceSection() {
   );
 }
 
-function AiSection({ actions, state }) {
+function AiSection({ actions, state, onNavigate }) {
   return (
     <SettingsSection title="AI 创新功能">
       <SettingsGroup>
         <PendingToggleRow label="更改密码时使用 AI 保护" />
-        <SettingsRow label="历史记录搜索" pending />
+        <SettingsRow label="浏览记忆" description="导入历史、整理画像与常用网站偏好" onClick={() => onNavigate("memory")} />
         <SettingsRow label="帮我写" pending />
         <SettingsRow label="AI 建议" pending />
         <SettingsRow label="内联提示菜单" pending />
@@ -244,6 +246,26 @@ function AiSection({ actions, state }) {
   );
 }
 
+function SmartBrowsingSection({ actions, state, onNavigate }) {
+  return (
+    <SettingsSection title="智能浏览">
+      <SettingsGroup title="收藏夹">
+        <SettingsRow
+          label="收藏夹按浏览权重排序"
+          description="默认开启。合并原浏览器与 Brizo 的访问记录，同层收藏按使用次数排序，文件夹按其内收藏的总权重排序。关闭后恢复手动顺序。"
+        >
+          <SettingsToggle
+            ariaLabel="收藏夹按浏览权重排序"
+            checked={state.appPreferences.smartBookmarkSorting !== false}
+            onChange={(smartBookmarkSorting) => actions.updateAppPreferences({ smartBookmarkSorting })}
+          />
+        </SettingsRow>
+        <SettingsRow label="浏览记忆" description="导入历史记录、查看画像和管理常用网站" onClick={() => onNavigate("memory")} />
+      </SettingsGroup>
+    </SettingsSection>
+  );
+}
+
 function AppearanceSection({ actions, state }) {
   return (
     <SettingsSection title="外观">
@@ -257,16 +279,6 @@ function AppearanceSection({ actions, state }) {
             ariaLabel="显示书签栏"
             checked={state.appPreferences.showBookmarksBar !== false}
             onChange={(showBookmarksBar) => actions.updateAppPreferences({ showBookmarksBar })}
-          />
-        </SettingsRow>
-        <SettingsRow
-          label="智能排序收藏夹"
-          description="从收藏夹打开满 5 次后，同层网页按次数置顶；文件夹按其内网页总次数排序"
-        >
-          <SettingsToggle
-            ariaLabel="智能排序收藏夹"
-            checked={state.appPreferences.smartBookmarkSorting !== false}
-            onChange={(smartBookmarkSorting) => actions.updateAppPreferences({ smartBookmarkSorting })}
           />
         </SettingsRow>
         <SettingsRow label="标签页位置" action="纵向" pending />
@@ -520,11 +532,13 @@ function HelpSection({ state }) {
 
 export function SettingsSectionContent({ actions, onNavigate, section, state }) {
   switch (section) {
-    case "people": return <PeopleSection actions={actions} state={state} />;
+    case "people": return <PeopleSection actions={actions} state={state} onNavigate={onNavigate} />;
+    case "smartBrowsing": return <SmartBrowsingSection actions={actions} state={state} onNavigate={onNavigate} />;
+    case "memory": return <BrowserMemorySection actions={actions} />;
     case "autofill": return <AutofillSection actions={actions} state={state} />;
     case "privacy": return <PrivacySection actions={actions} state={state} />;
     case "performance": return <PerformanceSection />;
-    case "ai": return <AiSection actions={actions} state={state} />;
+    case "ai": return <AiSection actions={actions} state={state} onNavigate={onNavigate} />;
     case "appearance": return <AppearanceSection actions={actions} state={state} />;
     case "search": return <SearchSection onNavigate={onNavigate} state={state} />;
     case "defaultBrowser": return <DefaultBrowserSection />;
@@ -536,6 +550,6 @@ export function SettingsSectionContent({ actions, onNavigate, section, state }) 
     case "reset": return <ResetSection actions={actions} />;
     case "extensions": return <ExtensionsSection />;
     case "help": return <HelpSection state={state} />;
-    default: return <PeopleSection actions={actions} state={state} />;
+    default: return <PeopleSection actions={actions} state={state} onNavigate={onNavigate} />;
   }
 }

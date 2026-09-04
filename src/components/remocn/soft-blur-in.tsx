@@ -16,7 +16,7 @@ const DEFAULT_UI_SELECTOR = [
   ".app-shell [role='menu']",
   ".app-shell [role='listbox']",
   ".app-shell [role='dialog']",
-  "[role='tooltip']",
+  "[role='tooltip']:not(.soft-blur-in-skip)",
   ".app-shell .address-bar",
 ].join(",");
 

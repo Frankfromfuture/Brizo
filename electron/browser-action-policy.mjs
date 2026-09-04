@@ -26,6 +26,18 @@ const COMMAND_AUTHORIZATION_PATTERNS = {
 const SUBMIT_TARGET_PATTERN = /提交|发送|发布|保存|确认|下单|购买|付款|支付|转账|授权|同意|注册|报名|订阅|搜索|检索|submit|send|publish|post|save|confirm|order|purchase|buy|pay|transfer|authorize|accept|register|sign\s*up|subscribe|search/i;
 const EXPLICIT_ENTER_PATTERN = /按(?:下)?(?:回车|enter)|press\s+enter/i;
 const SEARCH_INTENT_PATTERN = /搜索|检索|查找|search|find/i;
+// “搜” also covers colloquial requests such as “去淘宝搜 10 个产品” and “搜一下”.
+const QUERY_INTENT_PATTERN = /搜|查询|检索|查找|查.{0,80}(?:航班|机票|车票|酒店|商品|价格|时间|资料|信息|差评|好评|评论|影评|评价|评分)|\b(?:search|find|look\s+up)\b/i;
+
+function isRequestedReadOnlySearch(command, target) {
+  // Search forms often use native submit buttons. The user's query authorizes
+  // that search, but never an adjacent purchase/confirmation or combined action.
+  const label = String(target?.name || "")
+    .replace(/[\uE000-\uF8FF\s]/gu, "")
+    .trim();
+  return QUERY_INTENT_PATTERN.test(String(command || ""))
+    && /^(?:(?:搜索|查询|检索|查找)(?:航班|机票|车票|酒店|商品|价格|结果)?|search|find)$/i.test(label);
+}
 
 export function hasNegativeSubmissionConstraint(command) {
   const value = String(command || "")
@@ -47,7 +59,7 @@ function targetRiskCategory(target) {
 
 export function isSubmitLikeBrowserAction(action, target) {
   const kind = String(action?.action || "").toLowerCase();
-  if (kind === "press" && String(action?.key || "").toLowerCase() === "enter") return true;
+  if (kind === "press" && /^(?:enter|return)$/i.test(String(action?.key || ""))) return true;
   if (kind !== "click") return false;
   const label = `${target?.name || ""} ${target?.purpose || ""} ${target?.type || ""}`;
   const buttonLike = target?.tag === "button"
@@ -78,7 +90,8 @@ export function authorizeBrowserAction({ action, command, target }) {
   // Positive authority is derived exclusively from the original user command.
   if (kind === "click") {
     const category = targetRiskCategory(target);
-    if (category && !commandAuthorizesCategory(command, category)) {
+    const requestedSearch = category === "submission" && isRequestedReadOnlySearch(command, target);
+    if (category && !requestedSearch && !commandAuthorizesCategory(command, category)) {
       return {
         allowed: false,
         code: "explicit-authorization-required",
@@ -87,11 +100,14 @@ export function authorizeBrowserAction({ action, command, target }) {
     }
   }
 
-  if (kind === "press" && String(action?.key || "").toLowerCase() === "enter") {
+  if (kind === "press" && /^(?:enter|return)$/i.test(String(action?.key || ""))) {
     const explicitlyRequested = EXPLICIT_ENTER_PATTERN.test(String(command || ""));
     const targetLabel = `${target?.name || ""} ${target?.purpose || ""} ${target?.type || ""}`;
     const targetedSearch = Boolean(target)
-      && SEARCH_INTENT_PATTERN.test(String(command || ""))
+      && (
+        QUERY_INTENT_PATTERN.test(String(command || ""))
+        || Boolean(String(target?.value || "").trim())
+      )
       && (target?.type === "search" || SEARCH_INTENT_PATTERN.test(targetLabel));
     const submissionRequested = Object.values(COMMAND_AUTHORIZATION_PATTERNS)
       .some((pattern) => pattern.test(String(command || "")));

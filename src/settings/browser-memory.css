@@ -1,0 +1,44 @@
+.brizo-memory-intro { margin: -4px 0 22px; font-size: 12px; line-height: 1.8; color: #777; }
+.brizo-memory-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 9px 14px; border: 1px solid #dedbd4; border-radius: 18px; background: #fff; color: #55514a; font-size: 12px; white-space: nowrap; }
+.brizo-memory-button.is-primary { background: #e9e5d9; border-color: #e9e5d9; color: #625a46; }
+.brizo-memory-section button:disabled { opacity: .45; cursor: default; }
+.brizo-memory-section button:focus-visible { outline: 2px solid #92866b; outline-offset: 3px; }
+.brizo-memory-import-body, .brizo-memory-profile { padding: 6px 20px 20px; }
+.brizo-memory-import-body p, .brizo-memory-profile p { font-size: 12px; line-height: 1.8; color: #6f6f6f; }
+.brizo-memory-sources { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 8px 0; }
+.brizo-memory-sources label { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: #555; }
+.brizo-memory-sources input { accent-color: #94856a; }
+.brizo-memory-text-button { border: 0; padding: 3px 0; background: transparent; color: #786b50; font-size: 12px; }
+.brizo-memory-import-body .brizo-memory-notice { margin-bottom: 0; color: #62674f; }
+.brizo-memory-notice:empty { display: none; }
+.brizo-memory-import-body .brizo-memory-error { color: #985949; white-space: pre-line; }
+.brizo-memory-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; padding: 18px 0 12px; }
+.brizo-memory-stats span { display: flex; flex-direction: column; gap: 5px; }
+.brizo-memory-stats strong { font-size: 25px; font-weight: 400; color: #4c4a44; }
+.brizo-memory-stats small, .brizo-memory-profile > small { font-size: 11px; color: #888; line-height: 1.7; }
+.brizo-memory-topics { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
+.brizo-memory-topics > span { display: inline-flex; gap: 8px; align-items: center; padding: 6px 10px; border-radius: 7px; background: #f4f3ef; font-size: 12px; color: #625d51; }
+.brizo-memory-topics small { color: #99958a; font-size: 10px; }
+.brizo-memory-excluded { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px 20px; font-size: 11px; color: #888; }
+.brizo-memory-excluded button { border: 0; background: none; color: #786b50; font-size: 11px; }
+.brizo-memory-history-toolbar { display: flex; gap: 15px; align-items: center; padding: 16px 20px; color: #888; font-size: 11px; }
+.brizo-memory-history-toolbar label { display: flex; gap: 8px; align-items: center; flex: 1; min-width: 0; background: #f5f5f5; border-radius: 18px; padding: 9px 12px; }
+.brizo-memory-history-toolbar input { min-width: 0; width: 100%; border: 0; outline: none; background: transparent; font-size: 12px; color: #555; }
+.brizo-memory-history-row { display: flex; gap: 12px; align-items: center; padding: 12px 20px; border-top: 1px solid #f2f2f2; color: #888; }
+.brizo-memory-history-row > svg { flex-shrink: 0; }
+.brizo-memory-history-link { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; border: 0; padding: 0; background: transparent; text-align: left; }
+.brizo-memory-history-link strong, .brizo-memory-history-link small { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
+.brizo-memory-history-link strong { font-size: 12px; color: #555; }
+.brizo-memory-history-link small { color: #999; font-size: 10px; }
+.brizo-memory-icon { display: grid; place-items: center; border: 0; background: transparent; color: #888; width: 27px; height: 27px; border-radius: 7px; flex-shrink: 0; }
+.brizo-memory-icon:hover { background: #f1f1f1; }
+.brizo-memory-empty { margin: 0; padding: 20px; color: #999; font-size: 12px; }
+.brizo-memory-pagination { display: flex; justify-content: flex-end; align-items: center; gap: 18px; padding: 16px 20px; color: #888; font-size: 11px; }
+.brizo-memory-pagination button { background: none; border: 0; color: #786b50; font-size: 12px; }
+.brizo-memory-clear { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 12px; color: #888; margin: 20px 0; }
+.address-memory-copy { display: flex; flex-direction: column; min-width: 0; gap: 3px; text-align: left; }
+.address-memory-copy strong { font-size: 12px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.address-memory-copy small { font-size: 10px; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 700px) { .brizo-memory-section .brizo-settings-row { flex-wrap: wrap; gap: 12px; } .brizo-memory-stats { gap: 10px; } }
+
+.address-suggestions button[aria-selected="true"] { background: rgba(0, 0, 0, .04); }

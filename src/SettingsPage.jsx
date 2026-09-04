@@ -17,7 +17,7 @@ import {
   SidebarSimple,
   UserCircle,
 } from "@phosphor-icons/react";
-import brizoLogoUrl from "../logo.svg";
+import brizoLogoUrl from "../logo pic.svg";
 import { SETTINGS_SECTIONS } from "./settings/settingsCatalog.js";
 import { SettingsSectionContent } from "./settings/SettingsSections.jsx";
 
@@ -33,6 +33,8 @@ const SECTION_ICONS = {
   languages: GlobeHemisphereWest,
   onStartup: Rocket,
   people: UserCircle,
+  memory: Brain,
+  smartBrowsing: Brain,
   performance: Leaf,
   privacy: ShieldCheck,
   reset: ArrowUUpLeft,

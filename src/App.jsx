@@ -1,3 +1,4 @@
+import { createBookmarkVisitWeights } from "../shared/bookmark-visit-weights.mjs";
 import {
   lazy,
   Suspense,
@@ -10,6 +11,8 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { BorderBeam } from "border-beam";
+import { ASK_BEAM_PRESET } from "./components/ask-beam-preset.mjs";
+import { formatUseUsage, normalizeUseUsage } from "../shared/use-usage.mjs";
 import {
   ArrowBendDownLeft,
   ArrowLeft,
@@ -85,6 +88,7 @@ import { CompassIcon } from "./components/remocn/icon-compass";
 import { SoftBlurIn } from "./components/remocn/soft-blur-in";
 import { RemocnSelect } from "./components/remocn/RemocnSelect";
 import { NewTabParticleBackground } from "./components/NewTabParticleBackground";
+import { UseTaskIcon } from "./components/UseTaskIcon.jsx";
 import { BookmarkFolderIcon } from "./components/BookmarkFolderIcon.jsx";
 import { LibraryPageFrame } from "./LibraryPageFrame.jsx";
 import { SettingsPage } from "./SettingsPage.jsx";
@@ -93,12 +97,14 @@ import {
   DEFAULT_SITE_HYGIENE_PREFERENCES,
   SETTINGS_SECTIONS,
 } from "./settings/settingsCatalog.js";
-import brizoLogoUrl from "../logo.svg";
+import brizoLogoUrl from "../logo pic.svg";
 import brizoWordLogoUrl from "../logo word.svg";
-import logoPicUrl from "../logo pic.svg";
-import modelGuardIconUrl from "../logo.svg";
 import errorTabIconUrl from "./anchor.svg";
-import newTabIconUrl from "./compass-alt.svg";
+import brizoStarIconUrl from "./icons/brizo-star.svg";
+import bingSearchIconUrl from "./icons/search-bing.svg";
+import bingSearchColorIconUrl from "./icons/search-bing-color.svg";
+import googleSearchIconUrl from "./icons/search-google.svg";
+import googleSearchColorIconUrl from "./icons/search-google-color.svg";
 import downloadIconUrl from "./icons/download.svg";
 import refreshIconUrl from "./icons/refresh.svg";
 import {
@@ -122,10 +128,12 @@ const NEW_TAB_CHROME_COLOR = "rgb(252, 250, 250)";
 const BOOKMARK_SMART_RANK_THRESHOLD = 5;
 const COLLAPSED_TAB_HOVER_DELAY_MS = 500;
 const COLLAPSED_TAB_FOCUS_DELAY_MS = 120;
+const COLLAPSED_TAB_HOVER_DISMISS_DELAY_MS = 600;
 const COLLAPSED_TAB_HOVERCARD_ID = "brizo-collapsed-tab-hovercard";
-const COLLAPSED_TAB_HOVERCARD_WIDTH = 264;
-const COLLAPSED_TAB_HOVERCARD_GAP = 9;
+const COLLAPSED_TAB_HOVERCARD_WIDTH = 180;
+const COLLAPSED_TAB_HOVERCARD_GAP = 10;
 const COLLAPSED_TAB_HOVERCARD_VIEWPORT_INSET = 8;
+const SIDEBAR_AUTO_COLLAPSE_WIDTH = 860;
 
 const BROWSER_ERROR_COPY = {
   401: ["需要授权", "请登录或取得授权后再访问。", "Sign in or request access to view this page."],
@@ -265,28 +273,26 @@ function formatAddressForDisplay(address) {
 function formatCollapsedTabHoverAddress(tab) {
   const address = String(tab?.url || "").trim();
   if (!address) return "";
-  try {
-    const url = new URL(address);
-    if (!["http:", "https:"].includes(url.protocol)) return address;
-    url.username = "";
-    url.password = "";
-    url.hash = "";
-    const pathname = url.pathname === "/" ? "" : url.pathname;
-    return `${url.host}${pathname}${url.search}`;
-  } catch {
-    return address;
-  }
+  return getPrimaryDomain(address || tab?.domain);
 }
 
-function getCollapsedTabHovercardPosition(anchor, hasAddress) {
+function getCollapsedTabHovercardPosition(anchor) {
   const rect = anchor.getBoundingClientRect();
+  const sidebarRect = document.querySelector(".spaces-panel")?.getBoundingClientRect();
+  const tabsRect = document.querySelector(".sidebar-tabs-section")?.getBoundingClientRect();
+  const browserSurfaceRect = document.querySelector(".browser-surface")?.getBoundingClientRect();
   const viewportInset = COLLAPSED_TAB_HOVERCARD_VIEWPORT_INSET;
   const width = Math.min(
     COLLAPSED_TAB_HOVERCARD_WIDTH,
     Math.max(0, window.innerWidth - (viewportInset * 2)),
   );
-  const estimatedHeight = hasAddress ? 58 : 42;
-  const preferredLeft = rect.right + COLLAPSED_TAB_HOVERCARD_GAP;
+  const estimatedHeight = 115;
+  const visualSidebarBoundary = Math.max(
+    sidebarRect?.right || rect.right,
+    tabsRect?.right || 0,
+    browserSurfaceRect?.left || 0,
+  );
+  const preferredLeft = visualSidebarBoundary + COLLAPSED_TAB_HOVERCARD_GAP;
   const left = preferredLeft + width <= window.innerWidth - viewportInset
     ? preferredLeft
     : Math.max(viewportInset, rect.left - width - COLLAPSED_TAB_HOVERCARD_GAP);
@@ -486,6 +492,7 @@ function createSearchHistorySnapshot(result) {
   return {
     message: String(result.message || "").slice(0, 50_000),
     mode: typeof result.mode === "string" ? result.mode : "",
+    useUsage: normalizeUseUsage(result.useUsage),
     relatedQuestions: Array.isArray(result.relatedQuestions)
       ? result.relatedQuestions.filter((item) => typeof item === "string").slice(0, 5)
       : [],
@@ -574,7 +581,7 @@ function formatHistoryTime(timestamp) {
 function Logo({ collapsed = false }) {
   return (
     <div className={`brand${collapsed ? " is-collapsed" : ""}`} aria-label="Brizo home">
-      <img className="brizo-mark" src={logoPicUrl} alt="Brizo" />
+      <img className="brizo-mark" src={brizoLogoUrl} alt="Brizo" />
       <img className="brizo-wordmark" src={brizoWordLogoUrl} alt="Brizo" />
     </div>
   );
@@ -750,14 +757,47 @@ function SearchEntityImages({ entity, images, onOpenSource }) {
   );
 }
 
+const sourceFaviconRequests = new Map();
+
+function resolveSourceFavicon(origin) {
+  if (!window.beanBrowser?.resolveBookmarkFavicons) return Promise.resolve("");
+  if (!sourceFaviconRequests.has(origin)) {
+    // Share both pending requests and resolved icons across cards and the stack.
+    // The existing native resolver also reuses the on-disk website-icon cache.
+    const request = Promise.resolve()
+      .then(() => window.beanBrowser.resolveBookmarkFavicons([{ url: `${origin}/` }]))
+      .then((items) => items?.find((item) => item?.faviconUrl)?.faviconUrl || "")
+      .catch(() => "");
+    sourceFaviconRequests.set(origin, request);
+    if (sourceFaviconRequests.size > 128) sourceFaviconRequests.delete(sourceFaviconRequests.keys().next().value);
+  }
+  return sourceFaviconRequests.get(origin);
+}
+
 function SourceFavicon({ className = "", source }) {
-  const [failed, setFailed] = useState(false);
-  const faviconUrl = /^(?:data:image\/|blob:)/iu.test(source.imageUrl || "") ? source.imageUrl : "";
+  const [resolved, setResolved] = useState({ origin: "", url: "" });
+  const [failedUrl, setFailedUrl] = useState("");
+  const suppliedIcon = /^(?:data:image\/|blob:)/iu.test(source.imageUrl || "") ? source.imageUrl : "";
+  let origin = "";
+  try {
+    const page = new URL(source.url);
+    if (["http:", "https:"].includes(page.protocol)) origin = page.origin;
+  } catch { /* A source without a web address keeps its fallback glyph. */ }
+  useEffect(() => {
+    if (suppliedIcon || !origin) return undefined;
+    let cancelled = false;
+    // Presentation-only work: never await icons in the search/token pipeline.
+    resolveSourceFavicon(origin).then((url) => {
+      if (!cancelled && /^(?:data:image\/|blob:)/iu.test(url)) setResolved({ origin, url });
+    });
+    return () => { cancelled = true; };
+  }, [origin, suppliedIcon]);
+  const faviconUrl = suppliedIcon || (resolved.origin === origin ? resolved.url : "");
   const fallback = (source.domain || source.title || "网").slice(0, 1).toUpperCase();
   return (
-    <span className={className}>
-      {faviconUrl && !failed
-        ? <img src={faviconUrl} alt="" onError={() => setFailed(true)} />
+    <span className={`${className}${faviconUrl && failedUrl !== faviconUrl ? " has-image" : ""}`} aria-hidden="true">
+      {faviconUrl && failedUrl !== faviconUrl
+        ? <img src={faviconUrl} alt="" decoding="async" onError={() => setFailedUrl(faviconUrl)} />
         : <span>{fallback}</span>}
     </span>
   );
@@ -775,7 +815,6 @@ function SearchSources({ expanded, id, onOpenSource, onToggle, sources }) {
     <section className={`new-tab-sources${expanded ? " is-expanded" : ""}`} aria-label="来源">
       <div className="new-tab-sources-heading">
         <h3>来源</h3>
-        <span>按权威性与相关度排序</span>
       </div>
       <div className="new-tab-source-list" id={id}>
         {visibleSources.map((source) => {
@@ -784,16 +823,14 @@ function SearchSources({ expanded, id, onOpenSource, onToggle, sources }) {
               data-context-url={source.url}
               key={`${source.url}-${source.citationIndex}`}
               type="button"
+              aria-label={`打开来源 ${source.citationIndex}：${source.title || source.domain || source.url}`}
               onClick={() => onOpenSource(source.url)}
             >
               <span className="new-tab-source-card-meta">
                 <SourceFavicon className="new-tab-source-favicon" source={source} />
                 <small>{source.domain || source.url}</small>
-                <span className="new-tab-source-index">{source.citationIndex}</span>
               </span>
               <strong>{source.title || source.domain || "网页来源"}</strong>
-              {source.snippet && <em>{source.snippet}</em>}
-              <LinkSimple size={14} />
             </button>
           );
         })}
@@ -1066,87 +1103,97 @@ function groupDownloads(downloads) {
   })).filter((group) => group.downloads.length);
 }
 
-function DownloadPanel({ downloadGroups, onAction, onOpenDirectory }) {
+function DownloadPanel({ downloads, onAction, onOpenDirectory, onOpenDownloads }) {
   return (
     <>
       <header className="downloads-popover-header">
-        <strong>下载</strong>
-        <button
-          className="downloads-folder-button"
-          type="button"
-          aria-label="打开下载目录"
-          title="打开下载目录"
-          onClick={onOpenDirectory}
-        >
-          <FolderOpen size={17} />
-        </button>
+        <h2>最近下载</h2>
+        <div className="downloads-popover-header-actions">
+          <button
+            className="downloads-header-button"
+            type="button"
+            aria-label="显示下载内容"
+            title="显示下载内容"
+            onClick={onOpenDownloads}
+          >
+            <ListBullets size={17} />
+          </button>
+          <button
+            className="downloads-header-button"
+            type="button"
+            aria-label="打开下载目录"
+            title="打开下载目录"
+            onClick={onOpenDirectory}
+          >
+            <FolderOpen size={17} />
+          </button>
+        </div>
       </header>
       <div className="downloads-list">
-        {downloadGroups.length ? downloadGroups.map((group) => (
-          <section className="download-group" key={group.key}>
-            <h3>{group.label}</h3>
-            {group.downloads.map((download) => {
-              const isActive = download.state === "downloading" || download.state === "paused";
-              const isCompleted = download.state === "completed" && !download.isMissing;
-              return (
-                <div
-                  className={`download-row${download.isMissing ? " is-missing" : ""}`}
-                  data-state={download.state}
-                  key={download.id}
-                >
-                  <span className="download-row-icon" aria-hidden="true">
-                    <AttachedIcon src={downloadIconUrl} size={16} />
-                  </span>
-                  <span className="download-row-copy" title={download.filename}>
-                    <strong>{download.filename}</strong>
-                  </span>
-                  <span className="download-row-actions">
-                    {isActive && (
-                      <button
-                        type="button"
-                        aria-label={download.state === "paused" ? `继续下载 ${download.filename}` : `暂停下载 ${download.filename}`}
-                        title={download.state === "paused" ? "继续" : "暂停"}
-                        onClick={() => onAction(download.state === "paused" ? "resume" : "pause", download)}
-                      >
-                        {download.state === "paused" ? <Play size={15} weight="fill" /> : <Pause size={15} weight="fill" />}
-                      </button>
-                    )}
-                    {isActive && (
-                      <button
-                        type="button"
-                        aria-label={`取消下载 ${download.filename}`}
-                        title="关闭"
-                        onClick={() => onAction("cancel", download)}
-                      >
-                        <X size={15} />
-                      </button>
-                    )}
-                    {isCompleted && (
-                      <button
-                        type="button"
-                        aria-label={`打开 ${download.filename}`}
-                        title="打开"
-                        onClick={() => onAction("open", download)}
-                      >
-                        <ArrowSquareOut size={15} />
-                      </button>
-                    )}
-                    {(isCompleted || download.isMissing || download.state === "interrupted" || download.state === "cancelled") && (
-                      <button
-                        type="button"
-                        aria-label={`删除 ${download.filename}`}
-                        title="删除"
-                        onClick={() => onAction("delete", download)}
-                      >
-                        <Trash size={15} />
-                      </button>
-                    )}
-                  </span>
-                </div>
-              );
-            })}
-          </section>
-        )) : (
+        {downloads.length ? downloads.map((download) => {
+          const isActive = download.state === "downloading" || download.state === "paused";
+          const isCompleted = download.state === "completed" && !download.isMissing;
+          return (
+            <div
+              className={`download-row${download.isMissing ? " is-missing" : ""}`}
+              data-state={download.state}
+              key={download.id}
+            >
+              <span className="download-row-icon" aria-hidden="true">
+                {download.thumbnailDataUrl && !download.isMissing
+                  ? <img className="is-thumbnail" src={download.thumbnailDataUrl} alt="" />
+                  : download.fileIconDataUrl && !download.isMissing
+                    ? <img className="is-file-icon" src={download.fileIconDataUrl} alt="" />
+                    : <AttachedIcon src={downloadIconUrl} size={16} />}
+              </span>
+              <span className="download-row-copy" title={download.filename}>
+                <strong>{download.filename}</strong>
+              </span>
+              <span className="download-row-actions">
+                {isActive && (
+                  <button
+                    type="button"
+                    aria-label={download.state === "paused" ? `继续下载 ${download.filename}` : `暂停下载 ${download.filename}`}
+                    title={download.state === "paused" ? "继续" : "暂停"}
+                    onClick={() => onAction(download.state === "paused" ? "resume" : "pause", download)}
+                  >
+                    {download.state === "paused" ? <Play size={15} weight="fill" /> : <Pause size={15} weight="fill" />}
+                  </button>
+                )}
+                {isActive && (
+                  <button
+                    type="button"
+                    aria-label={`取消下载 ${download.filename}`}
+                    title="关闭"
+                    onClick={() => onAction("cancel", download)}
+                  >
+                    <X size={15} />
+                  </button>
+                )}
+                {isCompleted && (
+                  <button
+                    type="button"
+                    aria-label={`打开 ${download.filename}`}
+                    title="打开"
+                    onClick={() => onAction("open", download)}
+                  >
+                    <ArrowSquareOut size={15} />
+                  </button>
+                )}
+                {(isCompleted || download.isMissing || download.state === "interrupted" || download.state === "cancelled") && (
+                  <button
+                    type="button"
+                    aria-label={`删除 ${download.filename}`}
+                    title="删除"
+                    onClick={() => onAction("delete", download)}
+                  >
+                    <Trash size={15} />
+                  </button>
+                )}
+              </span>
+            </div>
+          );
+        }) : (
           <p className="downloads-empty">暂无下载文件</p>
         )}
       </div>
@@ -1191,7 +1238,7 @@ function NewTabCommandLight({ active }) {
       const fade = Math.sin(progress * Math.PI);
       const lightWidth = Math.max(1, width - 2);
       const lightHeight = Math.max(1, height - 2);
-      const cornerRadius = Math.min(20, lightHeight / 2);
+      const cornerRadius = Math.min(24, lightHeight / 2);
 
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       context.clearRect(0, 0, width, height);
@@ -1269,7 +1316,7 @@ function SearchLoadingState({ label, startedAt }) {
   );
 }
 
-function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, initialContextTab = null, initialMode = "ask", initialPrompt, initialUseCommand = "", onNotify, onOpenSource, onRestoreHistory, onSearchComplete, onSubmit, onUseProgress, onUseSubmit, prefillPrompt = "", restoredResult = null, tabs, useTodayGreeting }) {
+function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, initialContextTab = null, initialMode = "ask", initialPrompt, initialUseCommand = "", onNotify, onOpenSource, onRestoreHistory, onRestorePreviousSession, onSearchComplete, onSubmit, onUseProgress, onUseSubmit, prefillPrompt = "", restoredResult = null, tabs, useTodayGreeting }) {
   const [greeting] = useState(() => {
     const pair = NEW_TAB_GREETINGS[Math.floor(Math.random() * NEW_TAB_GREETINGS.length)];
     return pair[useTodayGreeting ? 0 : 1];
@@ -1278,7 +1325,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
   const [commandMode, setCommandMode] = useState(initialMode === "use" ? "use" : "ask");
   const [promptFocused, setPromptFocused] = useState(false);
   const [attachments, setAttachments] = useState([]);
-  const [contextTab, setContextTab] = useState(() => initialContextTab);
+  const [contextTabs, setContextTabs] = useState(() => initialContextTab ? [initialContextTab] : []);
   const [tabMenuOpen, setTabMenuOpen] = useState(false);
   const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
   const model = availableModels[0] || "";
@@ -1298,6 +1345,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
   const [sourcesExpanded, setSourcesExpanded] = useState(false);
   const [resultPdfExporting, setResultPdfExporting] = useState(false);
   const historyMenuRef = useRef(null);
+  const tabMenuRef = useRef(null);
   const promptInputRef = useRef(null);
   const resultsRef = useRef(null);
   const useStepsRef = useRef(null);
@@ -1315,9 +1363,18 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
   const initialUseStarted = useRef(false);
   const useRunActive = useRunPending.current
     && (searchState === "loading" || searchState === "streaming");
-  const availableTabs = tabs
-    .filter((tab) => tab.id !== activeTabId && !tab.isNewTab)
-    .slice(0, 3);
+  const availableTabs = useMemo(
+    () => tabs.filter((tab) =>
+      tab.id !== activeTabId
+      && !tab.isNewTab
+      && /^https?:\/\//i.test(tab.url || "")
+    ),
+    [activeTabId, tabs],
+  );
+  const selectedContextTabIds = useMemo(
+    () => new Set(contextTabs.map((tab) => tab.id)),
+    [contextTabs],
+  );
   const promptSuggestions = useMemo(
     () => commandMode === "ask" && promptFocused && searchState === "idle"
       ? newTabSuggestionsFor(prompt, bookmarks, tabs, history)
@@ -1340,6 +1397,34 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [historyMenuOpen]);
+
+  useEffect(() => {
+    const availableById = new Map(availableTabs.map((tab) => [tab.id, tab]));
+    setContextTabs((current) => {
+      const next = current
+        .filter((tab) => availableById.has(tab.id))
+        .map((tab) => availableById.get(tab.id) || tab);
+      const unchanged = next.length === current.length
+        && next.every((tab, index) => tab === current[index]);
+      return unchanged ? current : next;
+    });
+  }, [availableTabs]);
+
+  useEffect(() => {
+    if (!tabMenuOpen) return undefined;
+    const closeOnOutsidePointer = (event) => {
+      if (!tabMenuRef.current?.contains(event.target)) setTabMenuOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setTabMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [tabMenuOpen]);
 
   const onSearchCompleteRef = useRef(onSearchComplete);
   useEffect(() => {
@@ -1475,7 +1560,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
     setSourcesExpanded(false);
     followStream.current = true;
     setSearchStage("正在启动检索");
-    const result = await onSubmit({ attachments, contextTab, depth: "auto", model, searchId, tabId: activeTabId, thread: searchThread, value });
+    const result = await onSubmit({ attachments, contextTabs, depth: "auto", model, searchId, tabId: activeTabId, thread: searchThread, value });
     if (searchSequence.current !== sequence || result?.status === "navigated") return;
     if (result?.status === "started" || result?.status === "streaming") return;
     activeSearchId.current = "";
@@ -1703,7 +1788,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
           aria-label="历史搜索记录"
           aria-expanded={historyMenuOpen}
           aria-haspopup="menu"
-          title="历史搜索记录"
+          data-tooltip="历史搜索记录"
           onClick={() => {
             setTabMenuOpen(false);
             setHistoryMenuOpen((open) => !open);
@@ -1879,14 +1964,20 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
 
             <SearchVerticalCards cards={searchResult?.cards} onOpenSource={onOpenSource} />
 
+            {commandMode === "use" && ["success", "error"].includes(searchState) && (
+              <p className="brizo-use-usage-footer" role="note" aria-label="Use 模型与 token 用量">
+                {formatUseUsage(searchResult?.useUsage)}
+              </p>
+            )}
+
             {searchState === "success" && searchResult?.message && (
               <div className="new-tab-result-actions" aria-label="搜索结果操作">
-                <button type="button" title="复制搜索结果" aria-label="复制搜索结果" onClick={copySearchResult}>
+                <button type="button" data-tooltip="复制搜索结果" aria-label="复制搜索结果" onClick={copySearchResult}>
                   <CopySimple size={15} />
                 </button>
                 <button
                   type="button"
-                  title="下载 PDF"
+                  data-tooltip="下载 PDF"
                   aria-label="下载 PDF"
                   disabled={resultPdfExporting}
                   onClick={exportSearchPdf}
@@ -1895,7 +1986,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
                     ? <ArrowsClockwise className="is-spinning" size={15} />
                     : <FilePdf size={15} />}
                 </button>
-                <button type="button" title="分享：复制搜索地址" aria-label="分享并复制搜索地址" onClick={shareSearchResult}>
+                <button type="button" data-tooltip="分享并复制搜索地址" aria-label="分享并复制搜索地址" onClick={shareSearchResult}>
                   <ShareNetwork size={15} />
                 </button>
               </div>
@@ -1928,17 +2019,17 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
 
       <div className="new-tab-compose">
       <div className="new-tab-intro" aria-hidden={hasResults}>
-          <img className="new-tab-logo" src={logoPicUrl} alt="" />
+          <img className="new-tab-logo" src={brizoLogoUrl} alt="" />
           <h1>{greeting}</h1>
         </div>
 
         <BorderBeam
+          {...ASK_BEAM_PRESET}
           active={active}
-          borderRadius={20}
+          borderRadius={24}
           className="new-tab-beam"
-          colorVariant="sunset"
-          size={commandMode === "use" ? "pulse-outside" : "md"}
-          strength={commandMode === "use" ? 0.84 : 0.85}
+          size={commandMode === "use" ? "pulse-outside" : ASK_BEAM_PRESET.size}
+          strength={commandMode === "use" ? 0.84 : ASK_BEAM_PRESET.strength}
         >
           <form className={`new-tab-command-surface is-${commandMode}-mode`} onSubmit={submitPrompt}>
           <NewTabCommandLight active={active && !hasResults} />
@@ -2022,7 +2113,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
                             ? label
                             : mode === "ask"
                               ? <StarIcon className="new-tab-mode-icon" size={16} strokeWidth={1.9} />
-                              : <MonitorIcon className="new-tab-mode-icon" size={17} strokeWidth={1.9} />}
+                              : <UseTaskIcon className="new-tab-mode-icon" size={17} />}
                         </span>
                       </span>
                     </label>
@@ -2036,47 +2127,73 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
                   type="button"
                   tabIndex={commandMode === "ask" ? 0 : -1}
                   aria-label="插入本地文档"
-                  title={attachments.length ? `已选择 ${attachments.length} 个文档` : "插入 PDF 或文本文件"}
+                  data-tooltip={attachments.length ? `已选择 ${attachments.length} 个文档` : "插入 PDF 或文本文件"}
                   onClick={() => void chooseAttachments()}
                 >
                   <Paperclip size={20} />
                   {attachments.length > 0 && <span className="new-tab-tool-count">{attachments.length}</span>}
                 </button>
 
-                <div className="new-tab-menu-anchor">
+                <div className="new-tab-menu-anchor" ref={tabMenuRef}>
                   <button
-                    className={contextTab ? "new-tab-tool-button has-selection" : "new-tab-tool-button"}
+                    className={contextTabs.length ? "new-tab-tool-button has-selection" : "new-tab-tool-button"}
                     type="button"
                     tabIndex={commandMode === "ask" ? 0 : -1}
                     aria-expanded={tabMenuOpen}
-                    aria-haspopup="menu"
+                    aria-haspopup="listbox"
                     aria-label="插入已有标签页"
-                    title={contextTab ? `已插入：${contextTab.shortTitle}` : "插入已有标签页"}
+                    data-tooltip={contextTabs.length ? `已插入 ${contextTabs.length} 个标签页` : "插入已有标签页"}
                     onClick={() => {
                       setTabMenuOpen((value) => !value);
                     }}
                   >
                     <Browsers size={20} />
-                    {contextTab && <span className="new-tab-selection-dot" />}
+                    {contextTabs.length > 0 && <span className="new-tab-tool-count">{contextTabs.length}</span>}
                   </button>
                   {tabMenuOpen && commandMode === "ask" && (
-                    <div className="new-tab-tab-menu" role="menu" aria-label="选择已有标签页">
-                      {availableTabs.length ? availableTabs.map((tab) => (
-                        <button
-                          key={tab.id}
-                          type="button"
-                          role="menuitem"
-                          onClick={() => {
-                            setContextTab(tab);
-                            setTabMenuOpen(false);
-                            promptInputRef.current?.focus();
-                          }}
-                        >
-                          <SiteIcon id={tab.id} faviconUrl={tab.faviconUrl} isError={tab.loadError} isNewTab={tab.isNewTab} isPdf={tab.isPdf} />
-                          <span>{tab.shortTitle}</span>
-                          {contextTab?.id === tab.id && <Check size={15} weight="bold" />}
-                        </button>
-                      )) : <span className="new-tab-menu-empty">没有可插入的标签页</span>}
+                    <div className="new-tab-tab-menu" aria-label="选择已有标签页">
+                      <div className="new-tab-tab-menu-list" role="listbox" aria-label="选择已有标签页" aria-multiselectable="true">
+                        {availableTabs.length ? availableTabs.map((tab) => {
+                          const selected = selectedContextTabIds.has(tab.id);
+                          const selectionLimitReached = contextTabs.length >= 8 && !selected;
+                          return (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              role="option"
+                              aria-selected={selected}
+                              disabled={selectionLimitReached}
+                              onClick={() => {
+                                setContextTabs((current) => selected
+                                  ? current.filter((item) => item.id !== tab.id)
+                                  : current.length < 8 ? [...current, tab] : current);
+                              }}
+                            >
+                              <SiteIcon id={tab.id} faviconUrl={tab.faviconUrl} isError={tab.loadError} isNewTab={tab.isNewTab} isPdf={tab.isPdf} />
+                              <span>{tab.shortTitle || tab.title || tab.url}</span>
+                              {selected && <Check size={15} weight="bold" />}
+                            </button>
+                          );
+                        }) : <span className="new-tab-menu-empty">没有可插入的网页标签</span>}
+                      </div>
+                      {availableTabs.length > 0 && (
+                        <div className="new-tab-tab-menu-footer">
+                          <span>已选 {contextTabs.length}/8</span>
+                          {contextTabs.length > 0 && (
+                            <button type="button" className="new-tab-tab-menu-clear" onClick={() => setContextTabs([])}>清除</button>
+                          )}
+                          <button
+                            type="button"
+                            className="new-tab-tab-menu-done"
+                            onClick={() => {
+                              setTabMenuOpen(false);
+                              promptInputRef.current?.focus();
+                            }}
+                          >
+                            完成
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2086,11 +2203,17 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
             <div className="new-tab-action-group new-tab-submit-group">
               {commandMode === "ask" && (
                 <>
-                  <button className="new-tab-engine-button is-bing" type="button" aria-label="使用 Bing 搜索当前内容" title="Bing 搜索" disabled={searchState === "loading" || searchState === "streaming"} onClick={() => searchWithEngine("bing")}>
-                    <span aria-hidden="true">B</span>
+                  <button className="new-tab-engine-button is-bing" type="button" aria-label="使用 Bing 搜索当前内容" data-tooltip="Bing 搜索" disabled={searchState === "loading" || searchState === "streaming"} onClick={() => searchWithEngine("bing")}>
+                    <span className="new-tab-engine-icon-stack" aria-hidden="true">
+                      <img className="is-muted" src={bingSearchIconUrl} alt="" />
+                      <img className="is-color" src={bingSearchColorIconUrl} alt="" />
+                    </span>
                   </button>
-                  <button className="new-tab-engine-button is-google" type="button" aria-label="使用 Google 搜索当前内容" title="Google 搜索" disabled={searchState === "loading" || searchState === "streaming"} onClick={() => searchWithEngine("google")}>
-                    <span aria-hidden="true">G</span>
+                  <button className="new-tab-engine-button is-google" type="button" aria-label="使用 Google 搜索当前内容" data-tooltip="Google 搜索" disabled={searchState === "loading" || searchState === "streaming"} onClick={() => searchWithEngine("google")}>
+                    <span className="new-tab-engine-icon-stack" aria-hidden="true">
+                      <img className="is-muted" src={googleSearchIconUrl} alt="" />
+                      <img className="is-color" src={googleSearchColorIconUrl} alt="" />
+                    </span>
                   </button>
                 </>
               )}
@@ -2098,6 +2221,7 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
                 className={`new-tab-submit-button is-primary${commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? " is-pause" : ""}`}
                 type="submit"
                 aria-label={commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? `${usePaused ? "继续" : "暂停"} BrowserSkill` : commandMode === "ask" ? "确认" : "执行 Use"}
+                data-tooltip={commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? (usePaused ? "继续 Use" : "暂停 Use") : commandMode === "ask" ? "Ask Brizo" : "Use Brizo"}
                 disabled={commandMode === "ask" && (searchState === "loading" || searchState === "streaming")}
               >
                 <span className="new-tab-submit-label" aria-hidden="true">{commandMode === "use" && (searchState === "loading" || searchState === "streaming") ? (usePaused ? "继续" : "暂停") : commandMode === "ask" ? "Ask Brizo" : "Use Brizo"}</span>
@@ -2105,17 +2229,20 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
                   <span className="new-tab-submit-transition" />
                   <span className="new-tab-submit-gradient" />
                 </span>
-                {commandMode === "use" && (searchState === "loading" || searchState === "streaming")
-                  ? (usePaused ? <Play size={18} weight="fill" /> : <Pause size={18} weight="fill" />)
-                  : commandMode === "ask"
-                    ? <SparklesIcon className="new-tab-submit-sparkles" size={20.4} softLoop={active} strokeWidth={1.9} />
-                    : <MonitorIcon className="new-tab-submit-monitor" size={20.4} strokeWidth={1.9} />}
+                {commandMode === "ask"
+                  ? <SparklesIcon className="new-tab-submit-sparkles" size={20.4} softLoop={active} strokeWidth={1.9} />
+                  : <UseTaskIcon className="new-tab-submit-use" size={20.4} animate={active && useRunActive && !usePaused} />}
               </button>
             </div>
           </div>
           </form>
         </BorderBeam>
       </div>
+      {!hasResults && onRestorePreviousSession && (
+        <button className="new-tab-restore-session" type="button" onClick={onRestorePreviousSession}>
+          是否恢复上次打开的标签页？
+        </button>
+      )}
       {!hasResults && (
         <SoftBlurIn
           as="p"
@@ -2137,6 +2264,18 @@ function NewTabPage({ active, activeTabId, availableModels, bookmarks, history, 
 }
 
 function BrandCustomIcon({ name }) {
+  if (name === "downloads") {
+    return <DownloadSimple data-brizo-tab-icon="downloads" size={16} weight="regular" />;
+  }
+  if (name === "history") {
+    return <ClockCounterClockwise data-brizo-tab-icon="history" size={16} weight="regular" />;
+  }
+  if (name === "settings") {
+    return <GearSix data-brizo-tab-icon="settings" size={16} weight="regular" />;
+  }
+  if (name === "bookmarks") {
+    return <BookmarkSimple data-brizo-tab-icon="bookmarks" size={16} weight="regular" />;
+  }
   if (name === "calendar") {
     return (
       <svg viewBox="0 0 24 24" width="24" height="24" fill="none">
@@ -2256,9 +2395,31 @@ function BrandCustomIcon({ name }) {
   return null;
 }
 
-function SiteIcon({ id = 1, iconKey = "", url = "", faviconUrl = "", isError = false, isNewTab = false, isPdf = false }) {
+function isTabAutomating(tab) {
+  return tab?.agentStatus === "agent" || (tab?.isUseAutomationTab && ["running", "paused"].includes(tab.useStatus));
+}
+
+function useIconStatusForTab(tab, tabs) {
+  if (tab.isUseAutomationTab) return tab.useStatus || "idle";
+  if ((tab.isNewTab || tab.hasNewTabSession)
+    && (tab.initialMode === "use" || tab.initialUseCommand || tab.title?.startsWith("Use: "))) {
+    const children = tabs.filter((child) => child.parentTabId === tab.id);
+    return children.find((child) => child.useStatus === "running")?.useStatus
+      || children.find((child) => child.useStatus === "paused")?.useStatus
+      || "idle";
+  }
+  return "";
+}
+
+function SiteIcon({ id = 1, iconKey = "", url = "", faviconUrl = "", isError = false, isNewTab = false, isPdf = false, isAutomating = false, useIconStatus = "" }) {
+  if (useIconStatus) return <span className="site-icon is-use-task" aria-hidden="true"><UseTaskIcon size={20} animate={useIconStatus === "running"} /></span>;
+  if (isAutomating) return <span className="site-icon is-automating" aria-hidden="true"><MonitorIcon size={20} strokeWidth={1.9} /></span>;
   let matchedKey = iconKey;
-  if (!matchedKey && url) {
+  if (/^brizo:\/\/downloads(?:\/|$)/i.test(url)) matchedKey = "downloads";
+  else if (/^brizo:\/\/history(?:\/|$)/i.test(url)) matchedKey = "history";
+  else if (/^brizo:\/\/settings(?:\/|$)/i.test(url)) matchedKey = "settings";
+  else if (/^brizo:\/\/bookmarks(?:\/|$)/i.test(url)) matchedKey = "bookmarks";
+  else if (!matchedKey && url) {
     if (url.includes("calendar.google.com")) matchedKey = "calendar";
     else if (url.includes("mail.google.com")) matchedKey = "gmail";
     else if (url.includes("slack.com")) matchedKey = "slack";
@@ -2289,12 +2450,13 @@ function SiteIcon({ id = 1, iconKey = "", url = "", faviconUrl = "", isError = f
     7: Leaf,
   };
   const Icon = icons[id] ?? Compass;
+  const usesDefaultCompass = !isPdf && !isNewTab && !isError && !faviconUrl && Icon === Compass;
   return (
-    <span className={`site-icon${faviconUrl ? " has-favicon" : ""}${isNewTab ? " is-new-tab" : ""}${isError ? " is-error" : ""}`} aria-hidden="true">
+    <span className={`site-icon${faviconUrl ? " has-favicon" : ""}${isNewTab ? " is-new-tab" : ""}${isError ? " is-error" : ""}${usesDefaultCompass ? " is-default-compass" : ""}`} aria-hidden="true">
       {isPdf
         ? <FilePdf size={14} weight="fill" />
         : isNewTab
-        ? <img src={logoPicUrl} alt="" />
+        ? <img className="brizo-new-tab-star" src={brizoStarIconUrl} alt="" />
         : isError
           ? <img src={errorTabIconUrl} alt="" />
         : faviconUrl
@@ -2419,12 +2581,16 @@ function bookmarkOpenCount(bookmark) {
   return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
 }
 
-function createBookmarkRankingContext(bookmarkTree, enabled) {
+function bookmarkDisplayWeight(bookmark, ranking) {
+  return ranking?.weights?.get(bookmark.url) ?? bookmarkOpenCount(bookmark);
+}
+
+function createBookmarkRankingContext(bookmarkTree, enabled, weights) {
   const folderTotals = new WeakMap();
   const collectFolderTotal = (node) => {
     if (!node || typeof node !== "object") return 0;
     const bookmarkTotal = (node.bookmarks || []).reduce(
-      (sum, bookmark) => sum + bookmarkOpenCount(bookmark),
+      (sum, bookmark) => sum + (weights.get(bookmark.url) || 0),
       0,
     );
     const childTotal = Object.values(node.folders || {}).reduce(
@@ -2436,17 +2602,14 @@ function createBookmarkRankingContext(bookmarkTree, enabled) {
     return total;
   };
   collectFolderTotal(bookmarkTree);
-  return { enabled: Boolean(enabled), folderTotals };
+  return { enabled: Boolean(enabled), folderTotals, weights };
 }
 
 function compareBookmarksForDisplay(left, right, ranking) {
   if (ranking?.enabled) {
-    const leftCount = bookmarkOpenCount(left);
-    const rightCount = bookmarkOpenCount(right);
-    const leftRanked = leftCount >= BOOKMARK_SMART_RANK_THRESHOLD;
-    const rightRanked = rightCount >= BOOKMARK_SMART_RANK_THRESHOLD;
-    if (leftRanked !== rightRanked) return leftRanked ? -1 : 1;
-    if (leftRanked && leftCount !== rightCount) return rightCount - leftCount;
+    const leftCount = bookmarkDisplayWeight(left, ranking);
+    const rightCount = bookmarkDisplayWeight(right, ranking);
+    if (leftCount !== rightCount) return rightCount - leftCount;
   }
   return compareBookmarks(left, right);
 }
@@ -2956,7 +3119,7 @@ function HorizontalBookmarksBar({
                       <BookmarkFavicon
                         bookmark={bookmark}
                         rankGlow={bookmarkRanking?.enabled
-                          && bookmarkOpenCount(bookmark) >= BOOKMARK_SMART_RANK_THRESHOLD
+                          && bookmarkDisplayWeight(bookmark, bookmarkRanking) >= BOOKMARK_SMART_RANK_THRESHOLD
                           && !bookmark.smartPromotionSeenAt}
                         onRankGlowComplete={onRankGlowComplete}
                       />
@@ -3043,7 +3206,7 @@ function HorizontalBookmarksBar({
           <BookmarkFavicon
             bookmark={bookmark}
             rankGlow={bookmarkRanking?.enabled
-              && bookmarkOpenCount(bookmark) >= BOOKMARK_SMART_RANK_THRESHOLD
+              && bookmarkDisplayWeight(bookmark, bookmarkRanking) >= BOOKMARK_SMART_RANK_THRESHOLD
               && !bookmark.smartPromotionSeenAt}
             onRankGlowComplete={onRankGlowComplete}
           />
@@ -3284,7 +3447,7 @@ function BookmarkDropdownCascade({
             <BookmarkFavicon
               bookmark={bookmark}
               rankGlow={bookmarkRanking?.enabled
-                && bookmarkOpenCount(bookmark) >= BOOKMARK_SMART_RANK_THRESHOLD
+                && bookmarkDisplayWeight(bookmark, bookmarkRanking) >= BOOKMARK_SMART_RANK_THRESHOLD
                 && !bookmark.smartPromotionSeenAt}
               onRankGlowComplete={onRankGlowComplete}
             />
@@ -3374,13 +3537,13 @@ function BookmarkFavicon({ bookmark, rankGlow = false, onRankGlowComplete }) {
   );
 }
 
-function IconButton({ label, children, className = "", disabled = false, onClick }) {
+function IconButton({ label, tooltip = label, children, className = "", disabled = false, onClick }) {
   return (
     <button
       className={`icon-button ${className}`}
       type="button"
       aria-label={label}
-      title={label}
+      data-tooltip={tooltip}
       disabled={disabled}
       onClick={onClick}
     >
@@ -3670,44 +3833,52 @@ function buildBookmarkTree(bookmarks) {
 export function App() {
   const browserApi = window.beanBrowser;
   const desktopMode = Boolean(browserApi);
-  const initialAddress = "";
-  const [tabs, setTabsState] = useState(() => {
+  const [windowLaunch] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!desktopMode || !params.get("windowId")) return null;
+    const url = params.get("startUrl") || "";
+    if (!/^https?:\/\//i.test(url)) return null;
+    const domain = new URL(url).hostname.replace(/^www\./i, "");
+    return { id: `window-tab-${params.get("windowId")}`, domain, title: domain, shortTitle: domain, url };
+  });
+  const tabStorage = windowLaunch ? sessionStorage : localStorage;
+  const initialAddress = windowLaunch?.url || "";
+  const [startupSession] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("bean:open-tabs") || "null");
       const savedPinned = JSON.parse(localStorage.getItem("bean:pinned-tabs") || "null");
-      const restorableSaved = Array.isArray(saved)
-        ? saved.filter((tab) => !tab?.isUseAutomationTab)
-        : saved;
-
-      let pinnedList = Array.isArray(savedPinned) && savedPinned.length
-        ? savedPinned
-        : (Array.isArray(restorableSaved) && restorableSaved.filter((t) => t.isPinned).length
-            ? restorableSaved.filter((t) => t.isPinned)
-            : INITIAL_TABS.filter((t) => t.isPinned));
-
-      if (!pinnedList.some((t) => t.id === "pinned-brief" || t.isBrief || t.url === "brizo://brief")) {
-        pinnedList = [INITIAL_TABS[0], ...pinnedList];
+      const savedTabs = Array.isArray(saved)
+        ? saved.filter((tab) => tab && typeof tab.id === "string" && !tab.isUseAutomationTab)
+        : [];
+      let pinned = Array.isArray(savedPinned)
+        ? savedPinned.filter((tab) => tab?.isPinned && !tab.isUseAutomationTab)
+        : savedTabs.filter((tab) => tab.isPinned);
+      if (!Array.isArray(savedPinned) && !pinned.length) pinned = INITIAL_TABS.filter((tab) => tab.isPinned);
+      if (!pinned.some((tab) => tab.id === "pinned-brief" || tab.isBrief || tab.url === "brizo://brief")) {
+        pinned = [INITIAL_TABS[0], ...pinned];
       }
-
-      const unpinnedList = Array.isArray(restorableSaved) && restorableSaved.length
-        ? restorableSaved.filter((t) => !t.isPinned && t.id !== "pinned-brief")
-        : INITIAL_TABS.filter((t) => !t.isPinned && t.id !== "pinned-brief");
-
-      return [...pinnedList, ...unpinnedList];
+      const previousTabs = savedTabs.filter((tab) => !tab.isPinned && tab.id !== "pinned-brief");
+      const hasPreviousContent = previousTabs.some((tab) => tab.url || tab.searchQuery
+        || tab.initialPrompt || tab.initialUseCommand || tab.prefillPrompt || tab.restoredResult
+        || (tab.title && tab.title !== "新标签页"));
+      return {
+        pinned,
+        previousTabs: !windowLaunch && hasPreviousContent ? previousTabs : [],
+        activeId: localStorage.getItem("bean:active-tab") || "",
+      };
     } catch {
-      return INITIAL_TABS;
+      return { pinned: INITIAL_TABS.filter((tab) => tab.isPinned), previousTabs: [], activeId: "" };
     }
   });
-  const [activeTab, setActiveTab] = useState(() => {
-    if (IDLE_BENCHMARK_MODE) return "pinned-brizo";
-    try {
-      const saved = JSON.parse(localStorage.getItem("bean:open-tabs") || "null");
-      const restorableSaved = Array.isArray(saved) ? saved.filter((tab) => !tab?.isUseAutomationTab) : [];
-      return restorableSaved.find((t) => !t.isPinned)?.id || restorableSaved[0]?.id || "tab-maps";
-    } catch {
-      return "tab-maps";
-    }
-  });
+  // Capture the previous session before the first persistence effect writes
+  // the new, empty session. Restoration is explicitly requested by the user.
+  const previousSessionTabs = useRef(startupSession.previousTabs);
+  const [previousSessionAvailable, setPreviousSessionAvailable] = useState(startupSession.previousTabs.length > 0);
+  const [tabs, setTabsState] = useState(() => [
+    ...startupSession.pinned,
+    windowLaunch || { ...START_TAB },
+  ]);
+  const [activeTab, setActiveTab] = useState(windowLaunch?.id || START_TAB.id);
   const tabsRef = useRef(tabs);
   const activeTabRef = useRef(activeTab);
   const setTabs = useCallback((nextValue) => {
@@ -3726,9 +3897,42 @@ export function App() {
   const [tabContextMenu, setTabContextMenu] = useState(null);
   const [draggedTabId, setDraggedTabId] = useState("");
   const [draggedGroupId, setDraggedGroupId] = useState("");
+  const [agentStates, setAgentStates] = useState({});
+  useEffect(() => {
+    if (!browserApi?.onAgentState) return undefined;
+    let live = true;
+    const receive = state => {
+      if (!live || !state?.id) return;
+      const previous = tabsRef.current.filter(tab => tab.agentSessionId === state.id);
+      const selected = tabsRef.current.find(tab => tab.id === activeTabRef.current);
+      setAgentStates(current => ({ ...current, [state.id]: state }));
+      const groupTabs = (state.status === "closed" ? [] : state.tabs).map(tab => ({
+        id: tab.id, title: tab.title, shortTitle: tab.title, url: tab.url, domain: "brizo-agent",
+        isUseAutomationTab: true, useSandboxReady: true, useStatus: state.status,
+        agentSessionId: state.id, agentClient: state.client, agentStatus: state.status,
+      }));
+      setTabs(current => {
+        const index = current.findIndex(tab => tab.agentSessionId === state.id);
+        const next = current.filter(tab => tab.agentSessionId !== state.id);
+        next.splice(index < 0 ? next.filter(tab => tab.isPinned).length : index, 0, ...groupTabs);
+        return next;
+      });
+      if (groupTabs.length && (!previous.length || (state.focusTab && selected?.agentSessionId === state.id))) {
+        setActiveSurface("tab"); activateTabId(state.activeId);
+      } else if (selected?.agentSessionId === state.id && !groupTabs.some(tab => tab.id === selected.id)) {
+        const fallback = groupTabs[0] || tabsRef.current.find(tab => !tab.isPinned) || tabsRef.current[0];
+        if (fallback) selectArticle(fallback);
+      }
+    };
+    const unsubscribe = browserApi.onAgentState(receive);
+    browserApi.getAgentStates().then(states => states.forEach(receive)).catch(() => {});
+    return () => { live = false; unsubscribe(); };
+  }, [browserApi, setTabs, activateTabId]);
 
   const pinnedTabs = useMemo(() => tabs.filter((tab) => tab.isPinned), [tabs]);
   const unpinnedTabs = useMemo(() => tabs.filter((tab) => !tab.isPinned), [tabs]);
+  const pinnedGridRows = Math.max(1, Math.ceil(pinnedTabs.length / 3));
+  const pinnedGridHeight = 14 + (pinnedGridRows * 44) + ((pinnedGridRows - 1) * 6);
 
   useEffect(() => {
     tabsRef.current = tabs;
@@ -3740,13 +3944,17 @@ export function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem("bean:open-tabs", JSON.stringify(tabs.filter((tab) => !tab.isUseAutomationTab)));
+      tabStorage.setItem("bean:open-tabs", JSON.stringify(tabs.filter((tab) => !tab.isUseAutomationTab)));
       const pinned = tabs.filter((t) => t.isPinned && !t.isUseAutomationTab);
       localStorage.setItem("bean:pinned-tabs", JSON.stringify(pinned));
     } catch {
       // ignore
     }
   }, [tabs]);
+
+  useEffect(() => {
+    try { tabStorage.setItem("bean:active-tab", activeTab); } catch { /* Keep navigation usable without storage. */ }
+  }, [activeTab, tabStorage]);
 
   const handleTabContextMenu = (e, tab) => {
     e.preventDefault();
@@ -3814,6 +4022,10 @@ export function App() {
     setTabContextMenu(null);
   };
   const [addressText, setAddressText] = useState(() => formatAddressForDisplay(initialAddress));
+  const [memorySuggestions, setMemorySuggestions] = useState({ query: "", items: [] });
+  const [memoryRevision, setMemoryRevision] = useState(0);
+  const [storedBookmarkVisits, setStoredBookmarkVisits] = useState({ records: [], excludedHosts: [] });
+  const [addressSuggestionIndex, setAddressSuggestionIndex] = useState(-1);
   const [searchHistory, setSearchHistory] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem("bean:search-history") || "[]");
@@ -3866,6 +4078,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [collapsedTabHover, setCollapsedTabHover] = useState(null);
+  const [viewportTooltip, setViewportTooltip] = useState(null);
   const [systemUsesDarkAppearance, setSystemUsesDarkAppearance] = useState(() => (
     window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false
   ));
@@ -3996,12 +4209,17 @@ export function App() {
   const addressInput = useRef(null);
   const addressValue = useRef(initialAddress);
   const bookmarkDragJustEnded = useRef(false);
+  const bookmarkControlRef = useRef(null);
+  const bookmarkEditorRef = useRef(null);
   const bookmarkFolderTriggerRef = useRef(null);
   const bookmarkNameInputRef = useRef(null);
   const bookmarkContextFolderTriggerRef = useRef(null);
   const bookmarkContextNameInputRef = useRef(null);
   const bookmarkFaviconAttempts = useRef(new Set());
   const bookmarkFaviconResolution = useRef(null);
+  const downloadsMenuRef = useRef(null);
+  const downloadsPopoverRef = useRef(null);
+  const browserSurfaceRef = useRef(null);
   const browserPreviewReleaseFrame = useRef(0);
   const browserMenuRef = useRef(null);
   const sidebarSettingsRef = useRef(null);
@@ -4011,6 +4229,7 @@ export function App() {
   const tabHistoryRef = useRef(null);
   const modelGuardDockRef = useRef(null);
   const collapsedTabHoverTimer = useRef(0);
+  const viewportTooltipRef = useRef(null);
   const webContentHost = useRef(null);
   const addressBarRef = useRef(null);
   const addressLoadAnimation = useRef(0);
@@ -4023,6 +4242,9 @@ export function App() {
   const [activeIndicatorWidth, setActiveIndicatorWidth] = useState(null);
   const [activeIndicatorHeight, setActiveIndicatorHeight] = useState(35);
   const tabRowRefs = useRef({});
+  const tabLayoutItemRefs = useRef({});
+  const tabLayoutPositions = useRef({ groups: new Map(), rows: new Map() });
+  const tabRemovalAnimationPending = useRef(false);
   const sidebarTabsListRef = useRef(null);
   const [tabsScrollFlags, setTabsScrollFlags] = useState({ top: false, bottom: false });
   const tabsAutoScrollTimer = useRef(null);
@@ -4037,28 +4259,50 @@ export function App() {
     setCollapsedTabHover((current) => (current ? null : current));
   }, [clearCollapsedTabHoverTimer]);
 
+  const scheduleCollapsedTabHoverDismiss = useCallback(() => {
+    clearCollapsedTabHoverTimer();
+    collapsedTabHoverTimer.current = window.setTimeout(() => {
+      setCollapsedTabHover((current) => (current ? null : current));
+      collapsedTabHoverTimer.current = 0;
+    }, COLLAPSED_TAB_HOVER_DISMISS_DELAY_MS);
+  }, [clearCollapsedTabHoverTimer]);
+
   const scheduleCollapsedTabHover = useCallback((event, tab, delay = COLLAPSED_TAB_HOVER_DELAY_MS) => {
     clearCollapsedTabHoverTimer();
-    if (!sidebarCollapsed || draggedTabId || draggedGroupId) return;
+    if (draggedTabId || draggedGroupId) return;
     const anchor = event.currentTarget;
     const tabId = tab?.id;
     if (!anchor || !tabId) return;
-    setCollapsedTabHover(null);
-    collapsedTabHoverTimer.current = window.setTimeout(() => {
+    const showHovercard = () => {
       const liveTab = tabsRef.current.find((candidate) => candidate.id === tabId);
       if (!anchor.isConnected || !liveTab) return;
       const title = liveTab.title || liveTab.shortTitle || "新标签页";
       const address = formatCollapsedTabHoverAddress(liveTab);
-      const position = getCollapsedTabHovercardPosition(anchor, Boolean(address));
+      const position = getCollapsedTabHovercardPosition(anchor);
+      if (liveTab.useLoginRequired) {
+        setCollapsedTabHover(null);
+        browserApi?.setUseLoginPromptLayout?.({ sessionId: liveTab.useSessionId, ...position, reopen: true });
+        return;
+      }
       setCollapsedTabHover({
         address,
+        canOpenWindow: /^https?:\/\//i.test(String(liveTab.url || "")),
+        isPinned: Boolean(liveTab.isPinned),
+        isUseAutomationTab: Boolean(liveTab.isUseAutomationTab),
         tabId,
         title,
+        url: liveTab.url || "",
         ...position,
       });
       collapsedTabHoverTimer.current = 0;
-    }, delay);
-  }, [clearCollapsedTabHoverTimer, draggedGroupId, draggedTabId, sidebarCollapsed]);
+    };
+    if (collapsedTabHover) {
+      showHovercard();
+      return;
+    }
+    setCollapsedTabHover(null);
+    collapsedTabHoverTimer.current = window.setTimeout(showHovercard, delay);
+  }, [browserApi, clearCollapsedTabHoverTimer, collapsedTabHover, draggedGroupId, draggedTabId]);
 
   useEffect(() => {
     const dismissOnEscape = (event) => {
@@ -4085,10 +4329,147 @@ export function App() {
   }, [activeTab, collapsedGroups, draggedGroupId, draggedTabId, sidebarCollapsed, dismissCollapsedTabHover]);
 
   useEffect(() => {
+    const collapseSidebarWhenNarrow = () => {
+      if (window.innerWidth <= SIDEBAR_AUTO_COLLAPSE_WIDTH) {
+        setSidebarCollapsed(true);
+      }
+    };
+    collapseSidebarWhenNarrow();
+    window.addEventListener("resize", collapseSidebarWhenNarrow);
+    return () => window.removeEventListener("resize", collapseSidebarWhenNarrow);
+  }, []);
+
+  useEffect(() => {
     if (collapsedTabHover && !tabs.some((tab) => tab.id === collapsedTabHover.tabId)) {
       dismissCollapsedTabHover();
     }
   }, [collapsedTabHover, dismissCollapsedTabHover, tabs]);
+
+  const showViewportTooltip = useCallback((target) => {
+    const anchor = target?.currentTarget || target;
+    const text = String(
+      anchor?.dataset?.tooltip
+      || anchor?.getAttribute?.("title")
+      || anchor?.getAttribute?.("aria-label")
+      || "",
+    ).trim();
+    if (!anchor || !text) return;
+    if (anchor.hasAttribute("title")) anchor.removeAttribute("title");
+    setViewportTooltip({
+      anchor,
+      left: 0,
+      placement: "above",
+      positioned: false,
+      text,
+      top: 0,
+    });
+  }, []);
+
+  const hideViewportTooltip = useCallback(() => {
+    setViewportTooltip(null);
+  }, []);
+
+  useEffect(() => {
+    const tooltipTargetForEvent = (event) => {
+      if (!(event.target instanceof Element)) return null;
+      const explicitTarget = event.target.closest("[data-tooltip]");
+      if (explicitTarget) return explicitTarget;
+      const iconButton = event.target.closest("button[aria-label], button[title]");
+      return iconButton && !String(iconButton.textContent || "").trim() ? iconButton : null;
+    };
+    const enteredFromOutside = (target, relatedTarget) => (
+      !(relatedTarget instanceof Node) || !target.contains(relatedTarget)
+    );
+    const showFromEvent = (event) => {
+      const target = tooltipTargetForEvent(event);
+      if (target && enteredFromOutside(target, event.relatedTarget)) {
+        showViewportTooltip(target);
+      }
+    };
+    const hideFromEvent = (event) => {
+      const target = tooltipTargetForEvent(event);
+      if (target && enteredFromOutside(target, event.relatedTarget)) {
+        hideViewportTooltip();
+      }
+    };
+
+    document.addEventListener("pointerover", showFromEvent, true);
+    document.addEventListener("pointerout", hideFromEvent, true);
+    document.addEventListener("focusin", showFromEvent, true);
+    document.addEventListener("focusout", hideFromEvent, true);
+    document.addEventListener("click", hideViewportTooltip, true);
+    return () => {
+      document.removeEventListener("pointerover", showFromEvent, true);
+      document.removeEventListener("pointerout", hideFromEvent, true);
+      document.removeEventListener("focusin", showFromEvent, true);
+      document.removeEventListener("focusout", hideFromEvent, true);
+      document.removeEventListener("click", hideViewportTooltip, true);
+    };
+  }, [hideViewportTooltip, showViewportTooltip]);
+
+  useLayoutEffect(() => {
+    if (!viewportTooltip) return undefined;
+    const tooltip = viewportTooltipRef.current;
+    const anchor = viewportTooltip.anchor;
+    if (!tooltip || !anchor?.isConnected) {
+      setViewportTooltip(null);
+      return undefined;
+    }
+
+    const reposition = () => {
+      if (!anchor.isConnected) {
+        setViewportTooltip(null);
+        return;
+      }
+      const anchorBounds = anchor.getBoundingClientRect();
+      const tooltipBounds = tooltip.getBoundingClientRect();
+      const inset = 8;
+      const gap = 7;
+      const roomAbove = anchorBounds.top - inset - gap;
+      const roomBelow = window.innerHeight - inset - anchorBounds.bottom - gap;
+      const placement = roomAbove >= tooltipBounds.height || roomAbove >= roomBelow
+        ? "above"
+        : "below";
+      const preferredTop = placement === "above"
+        ? anchorBounds.top - gap - tooltipBounds.height
+        : anchorBounds.bottom + gap;
+      const maximumLeft = Math.max(inset, window.innerWidth - inset - tooltipBounds.width);
+      const maximumTop = Math.max(inset, window.innerHeight - inset - tooltipBounds.height);
+      const left = Math.min(
+        Math.max(inset, anchorBounds.left + ((anchorBounds.width - tooltipBounds.width) / 2)),
+        maximumLeft,
+      );
+      const top = Math.min(Math.max(inset, preferredTop), maximumTop);
+      setViewportTooltip((current) => {
+        if (!current || current.anchor !== anchor) return current;
+        const nextLeft = Math.round(left);
+        const nextTop = Math.round(top);
+        if (
+          current.left === nextLeft
+          && current.top === nextTop
+          && current.placement === placement
+          && current.positioned
+        ) return current;
+        return {
+          ...current,
+          left: nextLeft,
+          placement,
+          positioned: true,
+          top: nextTop,
+        };
+      });
+    };
+
+    reposition();
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("blur", hideViewportTooltip);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("blur", hideViewportTooltip);
+    };
+  }, [hideViewportTooltip, viewportTooltip?.anchor, viewportTooltip?.text]);
 
   const updateTabsScrollFlags = useCallback(() => {
     const el = sidebarTabsListRef.current;
@@ -4168,6 +4549,7 @@ export function App() {
   const briefOpen = Boolean(currentArticle?.isBrief || currentArticle?.url === "brizo://brief" || currentArticle?.id === "pinned-brief");
   const newTabOpen = !briefOpen && Boolean(currentArticle?.isNewTab);
   const useAutomationOpen = !briefOpen && Boolean(currentArticle?.isUseAutomationTab);
+  const currentAgent = agentStates[currentArticle?.agentSessionId];
   const markUseChildUnavailable = useCallback((tabId) => {
     browserApi?.setVisible?.(false);
     setTabs((currentTabs) => currentTabs.map((tab) => tab.id === tabId ? {
@@ -4177,7 +4559,7 @@ export function App() {
       useViewMissing: true,
     } : tab));
   }, [browserApi, setTabs]);
-  const useFamilyNavigationLocked = tabs.some((tab) => (
+  const useFamilyNavigationLocked = currentAgent?.status === "agent" || tabs.some((tab) => (
     ["running", "paused"].includes(tab.useStatus)
     && (tab.id === currentArticle?.id || tab.parentTabId === currentArticle?.id)
   ));
@@ -4244,6 +4626,16 @@ export function App() {
       : null,
     [bookmarkLibrary, currentPageBookmarkKey],
   );
+  const collapsedTabHoverBookmarkKey = useMemo(
+    () => canonicalizeUrl(collapsedTabHover?.url || ""),
+    [collapsedTabHover?.url],
+  );
+  const collapsedTabHoverIsBookmarked = useMemo(
+    () => Boolean(collapsedTabHoverBookmarkKey && bookmarkLibrary.some((bookmark) => (
+      canonicalizeUrl(bookmark.url) === collapsedTabHoverBookmarkKey
+    ))),
+    [bookmarkLibrary, collapsedTabHoverBookmarkKey],
+  );
   const bookmarkFolderRows = useMemo(() => {
     const rows = [{ depth: 0, name: "书签栏", path: "" }];
     const appendChildren = (parentPath, depth) => {
@@ -4304,6 +4696,15 @@ export function App() {
 
     unpinnedList.forEach((tab) => {
       if (!tab) return;
+      if (tab.agentSessionId) {
+        const groupId = `agent-${tab.agentSessionId}`;
+        if (!processedGroups.has(groupId)) {
+          processedGroups.add(groupId);
+          items.push({ type: "group", groupId, primaryDomain: "brizo-agent", siteName: `${tab.agentClient || "AI"} 操作`, iconTab: tab,
+            tabs: unpinnedList.filter(item => item.agentSessionId === tab.agentSessionId) });
+        }
+        return;
+      }
       if (tab.parentTabId && tabIds.has(tab.parentTabId)) return;
       const useChildren = unpinnedList.filter((candidate) => candidate?.parentTabId === tab.id);
       if (useChildren.length > 0) {
@@ -4408,6 +4809,81 @@ export function App() {
     updateTabsScrollFlags();
   }, [activeTab, briefOpen, unpinnedTabs, groupedTabItems, collapsedGroups, sidebarCollapsed, updateActiveIndicator, updateTabsScrollFlags]);
 
+  useLayoutEffect(() => {
+    const listEl = sidebarTabsListRef.current;
+    if (!listEl) return;
+    const listRect = listEl.getBoundingClientRect();
+    const readTop = (element) => {
+      const rect = element?.getBoundingClientRect?.();
+      return rect ? rect.top - listRect.top + listEl.scrollTop : null;
+    };
+    const nextGroups = new Map();
+    const nextRows = new Map();
+    Object.entries(tabLayoutItemRefs.current).forEach(([key, element]) => {
+      const top = readTop(element);
+      if (top === null) return;
+      if (key.startsWith("group:")) nextGroups.set(key.slice(6), top);
+    });
+    Object.entries(tabRowRefs.current).forEach(([tabId, element]) => {
+      const top = readTop(element);
+      if (top !== null) nextRows.set(tabId, top);
+    });
+
+    if (tabRemovalAnimationPending.current) {
+      const prefersReducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+      if (!prefersReducedMotion) {
+        const previous = tabLayoutPositions.current;
+        const animateUpwardFill = (element, previousTop, nextTop) => {
+          const delta = previousTop - nextTop;
+          if (delta <= 0.5) return;
+          element.animate(
+            [
+              { transform: `translateY(${delta}px)` },
+              { transform: "translateY(0)" },
+            ],
+            { duration: 280, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+          );
+        };
+
+        groupedTabItems.forEach((item) => {
+          if (item.type === "group") {
+            const groupElement = tabLayoutItemRefs.current[`group:${item.groupId}`];
+            const previousGroupTop = previous.groups.get(item.groupId);
+            const nextGroupTop = nextGroups.get(item.groupId);
+            const groupDelta = previousGroupTop !== undefined && nextGroupTop !== undefined
+              ? previousGroupTop - nextGroupTop
+              : 0;
+            if (groupElement && previousGroupTop !== undefined && nextGroupTop !== undefined) {
+              animateUpwardFill(groupElement, previousGroupTop, nextGroupTop);
+            }
+            if (groupDelta <= 0.5) {
+              item.tabs.forEach((tab) => {
+                const element = tabRowRefs.current[tab.id];
+                const previousTop = previous.rows.get(tab.id);
+                const nextTop = nextRows.get(tab.id);
+                if (element && previousTop !== undefined && nextTop !== undefined) {
+                  animateUpwardFill(element, previousTop, nextTop);
+                }
+              });
+            }
+            return;
+          }
+
+          const tabId = item.tab.id;
+          const element = tabRowRefs.current[tabId];
+          const previousTop = previous.rows.get(tabId);
+          const nextTop = nextRows.get(tabId);
+          if (element && previousTop !== undefined && nextTop !== undefined) {
+            animateUpwardFill(element, previousTop, nextTop);
+          }
+        });
+      }
+      tabRemovalAnimationPending.current = false;
+    }
+
+    tabLayoutPositions.current = { groups: nextGroups, rows: nextRows };
+  }, [collapsedGroups, groupedTabItems, sidebarCollapsed]);
+
   useEffect(() => {
     const el = sidebarTabsListRef.current;
     if (!el) return undefined;
@@ -4478,20 +4954,42 @@ export function App() {
     return () => appearanceQuery.removeEventListener("change", syncAppearance);
   }, []);
 
-  const addressSuggestions = useMemo(() => {
-    if (!addressFocused || !addressInputDirty) return [];
-    if (looksLikeWebsiteInput(addressText)) {
-      return addressSuggestionsFor(addressText, bookmarkLibrary, tabs)
-        .slice(0, 3)
-        .map((item) => ({ ...item, type: "url", value: item.url }));
-    }
-    return newTabSuggestionsFor(
-      addressText,
-      bookmarkLibrary,
-      tabs,
-      searchHistory,
-    );
-  }, [addressFocused, addressInputDirty, addressText, bookmarkLibrary, searchHistory, tabs]);
+  useEffect(() => browserApi?.onBrowserMemoryChanged?.(() => {
+    setMemorySuggestions({ query: "", items: [] });
+    setMemoryRevision(value => value + 1);
+  }), [browserApi]);
+
+  useEffect(() => {
+    const query = addressText.trim();
+    setAddressSuggestionIndex(-1);
+    if (!addressFocused || !addressInputDirty || !query || !browserApi?.suggestHistory) return;
+    let live = true;
+    const timer = window.setTimeout(() => {
+      browserApi.suggestHistory(query).then(items => {
+        if (live) setMemorySuggestions({ query, items });
+      }).catch(() => { if (live) setMemorySuggestions({ query, items: [] }); });
+    }, 120);
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [addressFocused, addressInputDirty, addressText, browserApi, memoryRevision]);
+
+  const addressInputIntent = useMemo(() => {
+    const input = addressText.trim();
+    if (!addressFocused || !addressInputDirty || !input) return { kind: "idle", suggestions: [] };
+    const websiteMatches = addressSuggestionsFor(input, bookmarkLibrary, tabs);
+    const historyMatches = memorySuggestions.query === input ? memorySuggestions.items : [];
+    const resemblesWebsite = !/\s/.test(input) && (looksLikeWebsiteInput(input) || websiteMatches.length > 0
+      || historyMatches.some(item => item.host.startsWith(input.toLowerCase()) || item.title.toLowerCase() === input.toLowerCase()));
+    const candidates = looksLikeWebsiteInput(input)
+      ? [...websiteMatches, ...historyMatches.map(item => ({ ...item, fromMemory: true }))]
+      : [...historyMatches.map(item => ({ ...item, fromMemory: true })), ...websiteMatches];
+    const seen = new Set();
+    const suggestions = candidates.filter(item => {
+      if (seen.has(item.url)) return false;
+      seen.add(item.url); return true;
+    }).slice(0, 6).map(item => ({ ...item, type: "url", value: item.url }));
+    return { kind: resemblesWebsite ? "website" : "search", suggestions };
+  }, [addressFocused, addressInputDirty, addressText, bookmarkLibrary, tabs, memorySuggestions]);
+  const addressSuggestions = addressInputIntent.suggestions;
 
   useEffect(() => {
     window.cancelAnimationFrame(addressLoadAnimation.current);
@@ -4569,23 +5067,39 @@ export function App() {
     () => buildBookmarkTree(filteredBookmarkLibrary),
     [filteredBookmarkLibrary],
   );
+  const bookmarkVisitUrls = useMemo(() => JSON.stringify([...new Set(bookmarkLibrary.map(item => item.url))].sort()), [bookmarkLibrary]);
+  useEffect(() => {
+    if (!browserApi?.getBookmarkVisitWeights) return;
+    let live = true;
+    const timer = window.setTimeout(() => {
+      browserApi.getBookmarkVisitWeights(JSON.parse(bookmarkVisitUrls)).then(value => {
+        if (live) setStoredBookmarkVisits(value);
+      }).catch(() => { if (live) setStoredBookmarkVisits({ records: [], excludedHosts: [] }); });
+    }, 120);
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [browserApi, bookmarkVisitUrls, memoryRevision, browserHistory]);
+  const bookmarkVisitWeights = useMemo(
+    () => createBookmarkVisitWeights(bookmarkLibrary, storedBookmarkVisits, browserHistory),
+    [bookmarkLibrary, storedBookmarkVisits, browserHistory],
+  );
   const bookmarkRanking = useMemo(
     () => createBookmarkRankingContext(
       bookmarkTree,
       appPreferences.smartBookmarkSorting !== false,
+      bookmarkVisitWeights,
     ),
-    [appPreferences.smartBookmarkSorting, bookmarkTree],
+    [appPreferences.smartBookmarkSorting, bookmarkTree, bookmarkVisitWeights],
   );
   const acknowledgeBookmarkSmartPromotion = useCallback((url) => {
     const seenAt = Date.now();
     setBookmarkLibrary((current) => current.map((bookmark) => (
       bookmark.url === url
-        && bookmarkOpenCount(bookmark) >= BOOKMARK_SMART_RANK_THRESHOLD
+        && bookmarkDisplayWeight(bookmark, bookmarkRanking) >= BOOKMARK_SMART_RANK_THRESHOLD
         && !bookmark.smartPromotionSeenAt
         ? { ...bookmark, smartPromotionSeenAt: seenAt }
         : bookmark
     )));
-  }, []);
+  }, [bookmarkRanking]);
   const otherBrowserShellOverlayOpen = bookmarkEditorOpen
     || Boolean(bookmarkContextEditor)
     || downloadsOpen
@@ -4595,7 +5109,9 @@ export function App() {
     || settingsMenuOpen
     || Boolean(settingsPanel)
     || addressSuggestions.length > 0;
-  const browserShellOverlayOpen = otherBrowserShellOverlayOpen || Boolean(collapsedTabHover);
+  const browserShellOverlayOpen = otherBrowserShellOverlayOpen
+    || Boolean(collapsedTabHover)
+    || Boolean(viewportTooltip);
 
   useEffect(() => {
     if (otherBrowserShellOverlayOpen) dismissCollapsedTabHover();
@@ -4728,6 +5244,7 @@ export function App() {
       || !navigationState.title
       || !/^https?:\/\//i.test(url || "")
     ) return;
+    void browserApi?.recordBrowserMemory?.({ url, title: navigationState.title, updatedAt: Date.now() }).catch(() => {});
     setBrowserHistory((current) => {
       const existing = current.find((item) => item.url === url);
       const next = [{
@@ -5122,6 +5639,75 @@ export function App() {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [bookmarkEditorOpen]);
+
+  useLayoutEffect(() => {
+    if (!bookmarkEditorOpen) return undefined;
+    const editor = bookmarkEditorRef.current;
+    const anchor = editor?.parentElement;
+    if (!editor || !anchor) return undefined;
+
+    const keepEditorInViewport = () => {
+      const viewportInset = 8;
+      const viewportWidth = document.documentElement.clientWidth;
+      const anchorBounds = anchor.getBoundingClientRect();
+      const editorWidth = editor.getBoundingClientRect().width;
+      const centeredLeft = anchorBounds.left + (anchorBounds.width - editorWidth) / 2;
+      const maximumLeft = Math.max(viewportInset, viewportWidth - viewportInset - editorWidth);
+      const clampedLeft = Math.min(Math.max(centeredLeft, viewportInset), maximumLeft);
+      editor.style.setProperty("--bookmark-editor-shift-x", `${clampedLeft - centeredLeft}px`);
+    };
+
+    keepEditorInViewport();
+    window.addEventListener("resize", keepEditorInViewport);
+    return () => window.removeEventListener("resize", keepEditorInViewport);
+  }, [bookmarkEditorOpen]);
+
+  useLayoutEffect(() => {
+    if (!downloadsOpen) return undefined;
+    const anchor = downloadsMenuRef.current;
+    const popover = downloadsPopoverRef.current;
+    if (!anchor || !popover) return undefined;
+
+    const keepPopoverInViewport = () => {
+      const viewportInset = 8;
+      const viewportWidth = document.documentElement.clientWidth;
+      const anchorBounds = anchor.getBoundingClientRect();
+      const popoverWidth = popover.getBoundingClientRect().width;
+      const centeredLeft = anchorBounds.left + (anchorBounds.width - popoverWidth) / 2;
+      const maximumLeft = Math.max(viewportInset, viewportWidth - viewportInset - popoverWidth);
+      const clampedLeft = Math.min(Math.max(centeredLeft, viewportInset), maximumLeft);
+      popover.style.setProperty("--downloads-popover-shift-x", `${clampedLeft - centeredLeft}px`);
+    };
+
+    keepPopoverInViewport();
+    window.addEventListener("resize", keepPopoverInViewport);
+    return () => window.removeEventListener("resize", keepPopoverInViewport);
+  }, [downloadsOpen]);
+
+  useEffect(() => {
+    if (!bookmarkEditorOpen) return undefined;
+    const closeOnOutsidePointer = (event) => {
+      const editor = bookmarkEditorRef.current;
+      const trigger = bookmarkControlRef.current?.querySelector(".bookmark-action-button");
+      if (editor?.contains(event.target) || trigger?.contains(event.target)) return;
+      setBookmarkFolderMenuOpen(false);
+      setBookmarkEditorOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+  }, [bookmarkEditorOpen]);
+
+  useEffect(() => {
+    if (!downloadsOpen) return undefined;
+    const closeOnOutsidePointer = (event) => {
+      const popover = downloadsPopoverRef.current;
+      const trigger = downloadsMenuRef.current?.querySelector(":scope > .icon-button");
+      if (popover?.contains(event.target) || trigger?.contains(event.target)) return;
+      setDownloadsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+  }, [downloadsOpen]);
 
   useEffect(() => {
     if (!bookmarkContextEditor) return undefined;
@@ -5541,7 +6127,10 @@ export function App() {
       : modelProviders;
     return [...new Set(orderedProviders.flatMap((provider) => provider.models || []))];
   }, [defaultModelProvider, modelProviders]);
-  const downloadGroups = useMemo(() => groupDownloads(downloads), [downloads]);
+  const recentDownloads = useMemo(() => downloads
+    .slice()
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+    .slice(0, 5), [downloads]);
   const downloadPageCounts = useMemo(() => ({
     active: downloads.filter(isActiveDownload).length,
     all: downloads.length,
@@ -5565,8 +6154,19 @@ export function App() {
       const parts = splitFolderPath(bookmark.folder);
       parts.forEach((_part, index) => paths.add(parts.slice(0, index + 1).join(" / ")));
     });
+    if (bookmarkRanking.enabled) {
+      const ordered = [];
+      const collect = (node, parent = "") => {
+        for (const [name, child] of sortBookmarkFolderEntries(node, folderOrders, parent, bookmarkRanking)) {
+          const path = parent ? `${parent} / ${name}` : name;
+          ordered.push(path); collect(child, path);
+        }
+      };
+      collect(bookmarkTree);
+      return ordered;
+    }
     return [...paths].sort((left, right) => left.localeCompare(right, "zh-CN"));
-  }, [bookmarkLibrary]);
+  }, [bookmarkLibrary, bookmarkRanking, bookmarkTree, folderOrders]);
   const managedBookmarks = useMemo(() => {
     const needle = bookmarkManageQuery.trim().toLocaleLowerCase();
     return bookmarkLibrary
@@ -5574,8 +6174,8 @@ export function App() {
         ? [bookmark.title, bookmark.url, bookmark.folder]
           .some((value) => String(value || "").toLocaleLowerCase().includes(needle))
         : bookmark.folder === bookmarkManageFolder)
-      .sort(compareBookmarks);
-  }, [bookmarkLibrary, bookmarkManageFolder, bookmarkManageQuery]);
+      .sort((left, right) => compareBookmarksForDisplay(left, right, bookmarkRanking));
+  }, [bookmarkLibrary, bookmarkManageFolder, bookmarkManageQuery, bookmarkRanking]);
   const bookmarkManageChildFolders = useMemo(() => bookmarkManageQuery.trim()
     ? []
     : bookmarkManageFolders.filter((path) => parentFolderPath(path) === bookmarkManageFolder),
@@ -5641,6 +6241,48 @@ export function App() {
     } else if (!browserApi && !article.isNewTab && !article.isBookmarksPage && !article.isHistoryPage && !article.isDownloadsPage && !article.isSettingsPage && !article.isBrief && article.id !== "pinned-brief" && article.url !== "brizo://brief" && !/^brizo:\/\/(?:settings|bookmarks|history|downloads)(?:\/|$)/i.test(article.url || "")) {
       showToast(`Opened ${article.domain}`);
     }
+  };
+
+  const windowLaunchStarted = useRef(false);
+  useEffect(() => {
+    if (!windowLaunch || windowLaunchStarted.current) return;
+    windowLaunchStarted.current = true;
+    selectArticle(windowLaunch);
+  }, [windowLaunch]);
+
+  const restorePreviousSession = () => {
+    const previous = previousSessionTabs.current;
+    if (!previous.length) return;
+    previousSessionTabs.current = [];
+    setPreviousSessionAvailable(false);
+    const restored = previous.map((tab) => {
+      const query = tab.searchQuery || tab.initialPrompt || tab.initialUseCommand || tab.prefillPrompt
+        || (tab.title?.startsWith("Use: ") ? tab.title.slice(5) : "");
+      const savedResult = tab.restoredResult || (query
+        ? searchHistory.find((entry) => entry.query === query && entry.result)
+        : null);
+      return {
+        ...tab,
+        id: `restored-tab-${window.crypto.randomUUID()}`,
+        parentTabId: "",
+        initialPrompt: "",
+        initialUseCommand: "",
+        initialContextTab: null,
+        initialMode: tab.initialMode || (tab.title?.startsWith("Use: ") ? "use" : "ask"),
+        prefillPrompt: savedResult?.result ? "" : query,
+        restoredResult: savedResult?.result ? { query: savedResult.query || query, result: savedResult.result } : null,
+        useSessionId: "",
+        useStatus: "",
+        useSandboxReady: false,
+        useLoginRequired: false,
+      };
+    });
+    const selectedIndex = previous.findIndex((tab) => tab.id === startupSession.activeId);
+    setTabs((current) => {
+      const retained = current.filter((tab) => !(tab.id === START_TAB.id && tab.isNewTab && !tab.searchQuery));
+      return [...retained.filter((tab) => tab.isPinned), ...restored, ...retained.filter((tab) => !tab.isPinned)];
+    });
+    selectArticle(restored[Math.max(0, selectedIndex)]);
   };
 
   const restoreClosedTab = useCallback(() => {
@@ -5727,7 +6369,7 @@ export function App() {
       setTabs((currentTabs) => [{
         domain: "brizo",
         id: tabId,
-        iconKey: "brizo",
+        iconKey: "bookmarks",
         isBookmarksPage: true,
         shortTitle: "收藏夹",
         title: "收藏夹",
@@ -5753,7 +6395,7 @@ export function App() {
       setTabs((currentTabs) => [{
         domain: "brizo",
         id: tabId,
-        iconKey: "brizo",
+        iconKey: "history",
         isHistoryPage: true,
         shortTitle: "历史记录",
         title: "历史记录",
@@ -5790,7 +6432,7 @@ export function App() {
       setTabs((currentTabs) => [{
         domain: "brizo",
         id: tabId,
-        iconKey: "brizo",
+        iconKey: "downloads",
         isDownloadsPage: true,
         shortTitle: "下载内容",
         title: "下载内容",
@@ -5823,7 +6465,7 @@ export function App() {
       setTabs((currentTabs) => [{
         domain: "brizo",
         id: tabId,
-        iconKey: "brizo",
+        iconKey: "settings",
         isSettingsPage: true,
         shortTitle: "设置",
         settingsHistory: [route],
@@ -5985,6 +6627,7 @@ export function App() {
       setTabs((currentTabs) => currentTabs.map((tab) => tab.id === activeTab ? {
         ...tab,
         domain,
+        iconKey: "",
         isBookmarksPage: false,
         isDownloadsPage: false,
         isHistoryPage: false,
@@ -6026,7 +6669,7 @@ export function App() {
   const submitAddressValue = (value) => {
     const selectedTabId = activeTabRef.current;
     const lockedUseTab = tabsRef.current.find((tab) => (
-      ["running", "paused"].includes(tab.useStatus)
+      (["running", "paused"].includes(tab.useStatus) || tab.agentStatus === "agent")
       && (tab.id === selectedTabId || tab.parentTabId === selectedTabId)
     ));
     if (lockedUseTab) {
@@ -6035,7 +6678,7 @@ export function App() {
       addressEditing.current = false;
       addressValue.current = selectedTab?.url || "";
       setAddressText(selectedTab?.isNewTab ? "" : formatAddressForDisplay(selectedTab?.url || ""));
-      showToast("Use 运行期间请在父标签查看记录；完成后可继续导航");
+      showToast(lockedUseTab.agentSessionId ? "请先点击「接管网页」，再手动导航" : "Use 运行期间请在父标签查看记录；完成后可继续导航");
       return;
     }
     const sharedQuery = queryFromSearchShareUrl(value);
@@ -6046,7 +6689,24 @@ export function App() {
 
   const submitAddress = (event) => {
     event.preventDefault();
-    submitAddressValue(addressValue.current);
+    const selected = addressSuggestions[addressSuggestionIndex];
+    submitAddressValue(selected?.value || (addressInputIntent.kind === "website" ? addressSuggestions[0]?.value : "") || addressValue.current);
+  };
+
+  const submitAddressQuickAction = (engine) => {
+    const query = addressValue.current.trim();
+    if (!query) {
+      addressInput.current?.focus();
+      return;
+    }
+    if (engine === "ask") {
+      submitAddressValue(query);
+      return;
+    }
+    const searchUrl = engine === "bing"
+      ? `https://www.bing.com/search?q=${encodeURIComponent(query)}`
+      : `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+    submitAddressValue(searchUrl);
   };
 
   const saveCompletedSearch = useCallback(({ query: completedQuery, result }) => {
@@ -6061,7 +6721,7 @@ export function App() {
     });
   }, []);
 
-  const submitNewTabPrompt = async ({ attachments, contextTab, depth, model, searchId, tabId, thread, value }) => {
+  const submitNewTabPrompt = async ({ attachments, contextTabs = [], depth, model, searchId, tabId, thread, value }) => {
     const looksLikeDestination = looksLikeWebsiteInput(value);
 
     if (looksLikeDestination) {
@@ -6093,7 +6753,8 @@ export function App() {
       shortTitle: searchTitle,
       title: searchTitle,
     } : tab));
-    const contextCount = attachments.length + (contextTab ? 1 : 0);
+    const selectedTabs = contextTabs.slice(0, 8);
+    const contextCount = attachments.length + selectedTabs.length;
     if (contextCount) {
       showToast(`${model} · 已加入 ${contextCount} 项上下文`);
     }
@@ -6103,7 +6764,8 @@ export function App() {
       result = await browserApi.startSearch({
         context: {
           attachmentTokens: attachments.map((file) => file.token).filter(Boolean).slice(0, 8),
-          tab: contextTab ? { id: contextTab.id, title: contextTab.title, url: contextTab.url } : null,
+          tab: selectedTabs[0] ? { id: selectedTabs[0].id, title: selectedTabs[0].title, url: selectedTabs[0].url } : null,
+          tabs: selectedTabs.map((tab) => ({ id: tab.id, title: tab.title, url: tab.url })),
         },
         depth,
         model,
@@ -6135,6 +6797,7 @@ export function App() {
           useSandboxReady: false,
           useStatus: "error",
           useViewMissing: true,
+          useLoginRequired: false,
         };
       }
       return {
@@ -6146,9 +6809,32 @@ export function App() {
         useStatus: typeof event?.paused === "boolean"
           ? (event.paused ? "paused" : "running")
           : tab.useStatus,
+        useLoginRequired: typeof event?.loginRequired === "boolean" ? event.loginRequired : tab.useLoginRequired,
       };
     }));
   }, []);
+
+  useEffect(() => {
+    const waitingTabs = tabs.filter((tab) => tab.useLoginRequired);
+    if (!waitingTabs.length) return undefined;
+    const positionPrompts = () => {
+      for (const tab of waitingTabs) {
+        const anchor = document.querySelector(`[data-use-login-tab="${CSS.escape(tab.id)}"]`)
+          || document.querySelector(`[data-use-login-group="${CSS.escape(tab.parentTabId)}"]`)
+          || document.querySelector(".sidebar-tabs-section");
+        if (!anchor) continue;
+        browserApi?.setUseLoginPromptLayout?.({ sessionId: tab.useSessionId, ...getCollapsedTabHovercardPosition(anchor) });
+      }
+    };
+    const frame = requestAnimationFrame(positionPrompts);
+    window.addEventListener("resize", positionPrompts);
+    document.addEventListener("scroll", positionPrompts, true);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", positionPrompts);
+      document.removeEventListener("scroll", positionPrompts, true);
+    };
+  }, [tabs, activeTab, sidebarCollapsed, collapsedGroups, browserApi]);
 
   const submitNewTabUse = async ({ command, sessionId, tabId }) => {
     const value = String(command || "").trim();
@@ -6224,6 +6910,7 @@ export function App() {
       useSandboxReady: !ipcFailed,
       useViewMissing: ipcFailed,
       useStatus: result?.status === "success" || result?.status === "preview" ? "complete" : "error",
+      useLoginRequired: false,
     } : tab));
 
     if (activeTabRef.current === childTabId && tabsRef.current.some((tab) => tab.id === tabId)) {
@@ -7015,6 +7702,7 @@ export function App() {
     const closingIndex = tabs.findIndex((tab) => tab.id === tabId);
     if (closingIndex < 0 || tabs.length === 1) return;
 
+    tabRemovalAnimationPending.current = true;
     const closingTab = tabs[closingIndex];
     if (!closingTab.isUseAutomationTab) {
       setClosedTabs((prev) => [...prev, { tab: { ...closingTab }, index: closingIndex }]);
@@ -7034,8 +7722,52 @@ export function App() {
     selectArticle(nextArticle);
   };
 
+  const openHoveredTabInWindow = () => {
+    const hoveredTab = tabsRef.current.find((tab) => tab.id === collapsedTabHover?.tabId);
+    const url = String(hoveredTab?.url || "").trim();
+    if (!/^https?:\/\//i.test(url)) return;
+    dismissCollapsedTabHover();
+    if (browserApi?.openLinkWindow) {
+      void Promise.resolve(browserApi.openLinkWindow(url)).then((opened) => {
+        if (!opened) showToast("无法在新窗口打开此网页");
+      });
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+  };
+
+  const toggleHoveredTabBookmark = () => {
+    const hoveredTab = tabsRef.current.find((tab) => tab.id === collapsedTabHover?.tabId);
+    const url = String(hoveredTab?.url || "").trim();
+    if (!/^https?:\/\//i.test(url)) return;
+    const bookmarkKey = canonicalizeUrl(url);
+    const existing = bookmarkLibrary.find((bookmark) => canonicalizeUrl(bookmark.url) === bookmarkKey);
+    if (existing) {
+      setBookmarkLibrary((library) => library.filter((bookmark) => canonicalizeUrl(bookmark.url) !== bookmarkKey));
+      showToast("已移除书签");
+    } else {
+      const now = Date.now();
+      const bookmark = normalizeImportedBookmark({
+        createdAt: now,
+        faviconUrl: hoveredTab.faviconUrl || "",
+        folder: "",
+        manualOrder: null,
+        source: "brizo",
+        sourceOrder: bookmarkLibrary.length,
+        title: hoveredTab.title || hoveredTab.shortTitle || url,
+        updatedAt: now,
+        url,
+      });
+      setBookmarkLibrary((library) => [bookmark, ...library]);
+      setBookmarkCelebrationUrl(url);
+      showToast("已加入收藏");
+    }
+    dismissCollapsedTabHover();
+  };
+
   const closeTabGroup = (groupTabs) => {
     if (!groupTabs || groupTabs.length === 0) return;
+    tabRemovalAnimationPending.current = true;
     const groupRecords = groupTabs.map((t) => {
       const idx = tabs.findIndex((item) => item.id === t.id);
       return { tab: { ...t }, index: idx >= 0 ? idx : 0 };
@@ -7281,7 +8013,12 @@ export function App() {
         </header>
 
         {pinnedTabs.length > 0 && (
-          <div className="pinned-tabs-grid" role="tablist" aria-label="常驻标签">
+          <div
+            className="pinned-tabs-grid"
+            role="tablist"
+            aria-label="常驻标签"
+            style={{ "--pinned-grid-expanded-height": `${pinnedGridHeight}px` }}
+          >
             {pinnedTabs.map((tab) => {
               const isSelected = briefOpen
                 ? Boolean(tab.isBrief || tab.id === "pinned-brief" || tab.url === "brizo://brief")
@@ -7294,12 +8031,12 @@ export function App() {
                   role="tab"
                   aria-selected={isSelected}
                   aria-label={tab.title || tab.shortTitle || "标签页"}
-                  aria-describedby={collapsedTabHover?.tabId === tab.id ? COLLAPSED_TAB_HOVERCARD_ID : undefined}
-                  title={sidebarCollapsed ? undefined : (tab.title || tab.shortTitle)}
+                  aria-controls={collapsedTabHover?.tabId === tab.id ? COLLAPSED_TAB_HOVERCARD_ID : undefined}
+                  aria-haspopup="dialog"
                   onMouseEnter={(event) => scheduleCollapsedTabHover(event, tab)}
-                  onMouseLeave={dismissCollapsedTabHover}
+                  onMouseLeave={scheduleCollapsedTabHoverDismiss}
                   onFocus={(event) => scheduleCollapsedTabHover(event, tab, COLLAPSED_TAB_FOCUS_DELAY_MS)}
-                  onBlur={dismissCollapsedTabHover}
+                  onBlur={scheduleCollapsedTabHoverDismiss}
                   onClick={() => {
                     dismissCollapsedTabHover();
                     selectArticle(tab);
@@ -7317,6 +8054,8 @@ export function App() {
                     isError={tab.loadError}
                     isNewTab={tab.isNewTab}
                     isPdf={tab.isPdf}
+                    isAutomating={isTabAutomating(tab)}
+                    useIconStatus={useIconStatusForTab(tab, tabs)}
                   />
                 </button>
               );
@@ -7378,7 +8117,16 @@ export function App() {
                 return (
                   <div
                     className={`sidebar-tab-group${isCollapsed ? " is-collapsed" : ""}${draggedGroupId === item.groupId ? " is-dragging" : ""}`}
+                    data-use-login-group={item.isUseFamily ? item.tabs.find((tab) => tab.parentTabId)?.parentTabId : undefined}
                     key={item.groupId}
+                    ref={(el) => {
+                      const key = `group:${item.groupId}`;
+                      if (el) {
+                        tabLayoutItemRefs.current[key] = el;
+                      } else {
+                        delete tabLayoutItemRefs.current[key];
+                      }
+                    }}
                     onDragOver={(event) => {
                       event.preventDefault();
                       event.dataTransfer.dropEffect = "move";
@@ -7405,6 +8153,13 @@ export function App() {
                       tabIndex={0}
                       draggable
                       aria-expanded={!isCollapsed}
+                      onMouseEnter={(event) => {
+                        if (runningUseTab?.useLoginRequired) scheduleCollapsedTabHover(event, runningUseTab);
+                      }}
+                      onMouseLeave={scheduleCollapsedTabHoverDismiss}
+                      onFocus={(event) => {
+                        if (runningUseTab?.useLoginRequired) scheduleCollapsedTabHover(event, runningUseTab, 0);
+                      }}
                       onClick={() => toggleGroupCollapse(item.groupId)}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
@@ -7430,13 +8185,15 @@ export function App() {
                           isError={item.iconTab.loadError}
                           isNewTab={item.iconTab.isNewTab}
                           isPdf={item.iconTab.isPdf}
+                          isAutomating={isTabAutomating(item.iconTab)}
+                          useIconStatus={useIconStatusForTab(item.iconTab, tabs)}
                         />
                       </span>
                       <span className="sidebar-tab-group-title" title={`${item.siteName} (${item.tabs.length})`}>
                         {item.siteName}
                       </span>
                       {runningUseTab && (
-                        <span className={`sidebar-tab-use-status is-${runningUseTab.useStatus}`} aria-label={runningUseTab.useStatus === "paused" ? "Use 已暂停" : "Use 正在自动操作"} />
+                        <span className={`sidebar-tab-use-status is-${runningUseTab.useStatus}`} aria-label={runningUseTab.useLoginRequired ? "Use 等待登录" : runningUseTab.useStatus === "paused" ? "Use 已暂停" : "Use 正在自动操作"} />
                       )}
                       <span className="sidebar-tab-group-toggle" aria-hidden="true">
                         <CaretDown size={13} weight="bold" />
@@ -7512,15 +8269,16 @@ export function App() {
                               <button
                                 type="button"
                                 className="sidebar-tab-select"
+                                data-use-login-tab={tab.id}
                                 role="tab"
                                 aria-selected={isSelected}
                                 aria-label={tab.title || tab.shortTitle || "标签页"}
-                                aria-describedby={collapsedTabHover?.tabId === tab.id ? COLLAPSED_TAB_HOVERCARD_ID : undefined}
-                                title={sidebarCollapsed ? undefined : (tab.title || tab.shortTitle)}
+                                aria-controls={collapsedTabHover?.tabId === tab.id ? COLLAPSED_TAB_HOVERCARD_ID : undefined}
+                                aria-haspopup="dialog"
                                 onMouseEnter={(event) => scheduleCollapsedTabHover(event, tab)}
-                                onMouseLeave={dismissCollapsedTabHover}
+                                onMouseLeave={scheduleCollapsedTabHoverDismiss}
                                 onFocus={(event) => scheduleCollapsedTabHover(event, tab, COLLAPSED_TAB_FOCUS_DELAY_MS)}
-                                onBlur={dismissCollapsedTabHover}
+                                onBlur={scheduleCollapsedTabHoverDismiss}
                                 onClick={() => {
                                   dismissCollapsedTabHover();
                                   selectArticle(tab);
@@ -7534,6 +8292,8 @@ export function App() {
                                   isError={tab.loadError}
                                   isNewTab={tab.isNewTab}
                                   isPdf={tab.isPdf}
+                                  isAutomating={isTabAutomating(tab)}
+                                  useIconStatus={useIconStatusForTab(tab, tabs)}
                                 />
                                 <span className="sidebar-tab-title"><span>{tab.shortTitle || tab.title}</span></span>
                                 {tab.isUseAutomationTab && ["running", "paused"].includes(tab.useStatus) && (
@@ -7619,15 +8379,16 @@ export function App() {
                   <button
                     type="button"
                     className="sidebar-tab-select"
+                    data-use-login-tab={tab.id}
                     role="tab"
                     aria-selected={isSelected}
                     aria-label={tab.title || tab.shortTitle || "标签页"}
-                    aria-describedby={collapsedTabHover?.tabId === tab.id ? COLLAPSED_TAB_HOVERCARD_ID : undefined}
-                    title={sidebarCollapsed ? undefined : (tab.title || tab.shortTitle)}
+                    aria-controls={collapsedTabHover?.tabId === tab.id ? COLLAPSED_TAB_HOVERCARD_ID : undefined}
+                    aria-haspopup="dialog"
                     onMouseEnter={(event) => scheduleCollapsedTabHover(event, tab)}
-                    onMouseLeave={dismissCollapsedTabHover}
+                    onMouseLeave={scheduleCollapsedTabHoverDismiss}
                     onFocus={(event) => scheduleCollapsedTabHover(event, tab, COLLAPSED_TAB_FOCUS_DELAY_MS)}
-                    onBlur={dismissCollapsedTabHover}
+                    onBlur={scheduleCollapsedTabHoverDismiss}
                     onClick={() => {
                       dismissCollapsedTabHover();
                       selectArticle(tab);
@@ -7641,6 +8402,8 @@ export function App() {
                       isError={tab.loadError}
                       isNewTab={tab.isNewTab}
                       isPdf={tab.isPdf}
+                      isAutomating={isTabAutomating(tab)}
+                    useIconStatus={useIconStatusForTab(tab, tabs)}
                     />
                     <span className="sidebar-tab-title"><span>{tab.shortTitle || tab.title}</span></span>
                     {tab.isUseAutomationTab && ["running", "paused"].includes(tab.useStatus) && (
@@ -7681,9 +8444,7 @@ export function App() {
             className={`sidebar-dock-btn sidebar-settings-btn${settingsMenuOpen ? " is-active" : ""}`}
             type="button"
             aria-label="打开设置菜单"
-            title="设置"
             data-tooltip="设置"
-            data-tooltip-pos="left"
             onClick={() => {
               setSidebarHistoryOpen(false);
               setSettingsMenuOpen((value) => {
@@ -7699,7 +8460,6 @@ export function App() {
             className={`sidebar-dock-btn${closedTabs.length === 0 ? " is-empty" : ""}`}
             type="button"
             aria-label="恢复关闭的标签页"
-            title="恢复关闭的标签页"
             data-tooltip="恢复关闭标签"
             onClick={restoreClosedTab}
           >
@@ -7710,7 +8470,6 @@ export function App() {
             className={`sidebar-dock-btn sidebar-dock-history-btn${sidebarHistoryOpen ? " is-active" : ""}`}
             type="button"
             aria-label="历史记录"
-            title="历史记录"
             data-tooltip="历史记录"
             onClick={() => {
               setSettingsMenuOpen(false);
@@ -7724,9 +8483,7 @@ export function App() {
             className="sidebar-dock-btn is-danger"
             type="button"
             aria-label="删除全部标签"
-            title="删除全部标签"
             data-tooltip="删除全部标签"
-            data-tooltip-pos="right"
             onClick={closeAllTabs}
           >
             <Trash size={18} />
@@ -7842,6 +8599,7 @@ export function App() {
       >
         <div
           className="browser-surface"
+          ref={browserSurfaceRef}
           style={{ "--page-background-color": pageBackgroundColor }}
         >
           <header
@@ -7851,7 +8609,6 @@ export function App() {
             <div className="browser-toolbar-left">
               <IconButton
                 label={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
-                title={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
                 className="browser-sidebar-toggle-btn"
                 onClick={() => setSidebarCollapsed((prev) => !prev)}
               >
@@ -7863,6 +8620,7 @@ export function App() {
               <div className="browser-nav">
                 <IconButton
                   label="Back"
+                  tooltip="后退"
                   disabled={useFamilyNavigationLocked || briefOpen || newTabOpen || internalLibraryPageOpen || (settingsPageOpen ? !canSettingsGoBack : (desktopMode && !navigationState.canGoBack && !canReturnToNewTab))}
                   onClick={navigateBack}
                 >
@@ -7870,6 +8628,7 @@ export function App() {
                 </IconButton>
                 <IconButton
                   label="Forward"
+                  tooltip="前进"
                   disabled={useFamilyNavigationLocked || briefOpen || newTabOpen || internalLibraryPageOpen || (settingsPageOpen ? !canSettingsGoForward : (desktopMode && !navigationState.canGoForward))}
                   onClick={navigateForward}
                 >
@@ -7877,6 +8636,7 @@ export function App() {
                 </IconButton>
                 <IconButton
                   label="Reload"
+                  tooltip="重新加载"
                   disabled={useFamilyNavigationLocked || briefOpen || newTabOpen || internalLibraryPageOpen || settingsPageOpen}
                   onClick={() => desktopMode ? browserApi.reload() : showToast("Page refreshed")}
                 >
@@ -7925,24 +8685,81 @@ export function App() {
                   setAddressFocused(false);
                   setAddressText(formatAddressForDisplay(addressValue.current));
                 }}
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={addressSuggestions.length > 0}
+                aria-controls={addressSuggestions.length ? "brizo-address-suggestions" : undefined}
+                aria-activedescendant={addressSuggestionIndex >= 0 ? `brizo-address-option-${addressSuggestionIndex}` : undefined}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown" && addressSuggestions.length) {
+                    event.preventDefault(); setAddressSuggestionIndex(index => (index + 1) % addressSuggestions.length);
+                  } else if (event.key === "ArrowUp" && addressSuggestions.length) {
+                    event.preventDefault(); setAddressSuggestionIndex(index => index <= 0 ? addressSuggestions.length - 1 : index - 1);
+                  } else if (event.key === "Escape") {
+                    event.preventDefault(); setAddressInputDirty(false); setAddressSuggestionIndex(-1);
+                  }
+                }}
                 aria-label="Address"
                 placeholder={!(currentPageUrl && /^https?:\/\//i.test(currentPageUrl)) || newTabOpen || internalLibraryPageOpen || settingsPageOpen || briefOpen ? "搜索或输入网址" : ""}
               />
-              {addressSuggestions.length > 0 && (
+              {addressInputIntent.kind === "search" && (
+                <div className="address-quick-actions" aria-label="搜索方式">
+                  <button
+                    className="address-engine-button is-bing"
+                    type="button"
+                    aria-label="使用 Bing 搜索"
+                    data-tooltip="Bing 搜索"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => submitAddressQuickAction("bing")}
+                  >
+                    <span className="address-engine-icon-stack" aria-hidden="true">
+                      <img className="is-muted" src={bingSearchIconUrl} alt="" />
+                      <img className="is-color" src={bingSearchColorIconUrl} alt="" />
+                    </span>
+                  </button>
+                  <button
+                    className="address-engine-button is-google"
+                    type="button"
+                    aria-label="使用 Google 搜索"
+                    data-tooltip="Google 搜索"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => submitAddressQuickAction("google")}
+                  >
+                    <span className="address-engine-icon-stack" aria-hidden="true">
+                      <img className="is-muted" src={googleSearchIconUrl} alt="" />
+                      <img className="is-color" src={googleSearchColorIconUrl} alt="" />
+                    </span>
+                  </button>
+                  <button
+                    className="address-engine-button is-ask"
+                    type="button"
+                    aria-label="使用 Brizo Ask"
+                    data-tooltip="Ask Brizo"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => submitAddressQuickAction("ask")}
+                  >
+                    <SparklesIcon size={13} strokeWidth={1.9} aria-hidden="true" />
+                  </button>
+                </div>
+              )}
+              {addressInputIntent.kind === "website" && addressSuggestions.length > 0 && (
                 <button
                   className="address-go-button"
                   type="submit"
                   aria-label="确认输入"
+                  data-tooltip="打开网址"
                   onMouseDown={(event) => event.preventDefault()}
                 >
                   <ArrowRight size={12} weight="bold" />
                 </button>
               )}
               {addressSuggestions.length > 0 && (
-                <div className="address-suggestions" role="listbox" aria-label="网站联想">
-                  {addressSuggestions.map((suggestion) => (
+                <div className="address-suggestions" id="brizo-address-suggestions" role="listbox" aria-label="网站与历史联想">
+                  {addressSuggestions.map((suggestion, index) => (
                     <button
                       key={`${suggestion.type}-${suggestion.value}`}
+                      id={`brizo-address-option-${index}`}
+                      aria-selected={addressSuggestionIndex === index}
                       type="button"
                       role="option"
                       onMouseDown={(event) => event.preventDefault()}
@@ -7951,9 +8768,9 @@ export function App() {
                       {suggestion.type === "url"
                         ? <GlobeHemisphereWest size={16} />
                         : <MagnifyingGlass size={16} />}
-                      <span>{suggestion.type === "url"
+                      {suggestion.fromMemory ? <span className="address-memory-copy"><strong>{suggestion.title}</strong><small>访问过 · {suggestion.value.replace(/^https?:\/\//i, "")}</small></span> : <span>{suggestion.type === "url"
                         ? suggestion.value.replace(/^https?:\/\//i, "")
-                        : suggestion.value}</span>
+                        : suggestion.value}</span>}
                     </button>
                   ))}
                 </div>
@@ -7961,6 +8778,18 @@ export function App() {
             </form>
 
             <div className="browser-actions">
+              {currentAgent && ["agent", "user"].includes(currentAgent.status) && <>
+                <IconButton
+                  label={currentAgent.status === "agent" ? "接管网页" : "交还 AI"}
+                  disabled={currentAgent.status === "user" && currentAgent.busy}
+                  onClick={() => browserApi.controlAgent(currentAgent.id, currentAgent.status === "agent" ? "takeover" : "resume").then(result => result.error && showToast(result.error))}
+                >
+                  {currentAgent.status === "agent" ? <Pause size={18} weight="regular" /> : <Play size={18} weight="regular" />}
+                </IconButton>
+                <IconButton label="停止连接" onClick={() => browserApi.controlAgent(currentAgent.id, "stop").then(result => result.error && showToast(result.error))}>
+                  <Square size={16} weight="regular" />
+                </IconButton>
+              </>}
               {appPreferences.pilotAssist !== false && !briefOpen && !newTabOpen && !internalLibraryPageOpen && !settingsPageOpen && !navigationState.isPdf && (
                 <IconButton
                   label="用 Brizo Pilot 阅读当前页"
@@ -7971,7 +8800,10 @@ export function App() {
                   <SparklesIcon className="remocn-toolbar-icon" size={19} strokeWidth={1.8} />
                 </IconButton>
               )}
-              <div className={`bookmark-control${bookmarkEditorOpen ? " is-open" : ""}`}>
+              <div
+                className={`bookmark-control${bookmarkEditorOpen ? " is-open" : ""}`}
+                ref={bookmarkControlRef}
+              >
                 <IconButton
                   label={currentBookmark ? "编辑书签" : "添加书签"}
                   className={`bookmark-action-button${currentBookmark ? " is-active" : ""}`}
@@ -7996,16 +8828,39 @@ export function App() {
                 </IconButton>
                 {bookmarkEditorOpen && (
                   <>
-                    <button
-                      className="bookmark-editor-backdrop"
-                      type="button"
-                      aria-label="关闭书签菜单"
-                      onClick={() => {
-                        setBookmarkFolderMenuOpen(false);
-                        setBookmarkEditorOpen(false);
-                      }}
-                    />
-                    <section className="bookmark-editor" role="menu" aria-label="编辑书签">
+                    {browserSurfaceRef.current && createPortal(
+                      <button
+                        className="bookmark-editor-backdrop global-menu-backdrop"
+                        type="button"
+                        aria-label="关闭书签菜单"
+                        onPointerDown={() => {
+                          setBookmarkFolderMenuOpen(false);
+                          setBookmarkEditorOpen(false);
+                        }}
+                      />,
+                      browserSurfaceRef.current,
+                    )}
+                    <section
+                      className="bookmark-editor bookmark-toolbar-editor"
+                      ref={bookmarkEditorRef}
+                      role="dialog"
+                      aria-modal="true"
+                      aria-label="编辑收藏夹"
+                    >
+                      <header className="bookmark-editor-header">
+                        <h2>编辑收藏夹</h2>
+                        <button
+                          className="bookmark-editor-close"
+                          type="button"
+                          aria-label="关闭收藏夹编辑器"
+                          onClick={() => {
+                            setBookmarkFolderMenuOpen(false);
+                            setBookmarkEditorOpen(false);
+                          }}
+                        >
+                          <X size={18} weight="regular" aria-hidden="true" />
+                        </button>
+                      </header>
                       <div className="bookmark-editor-fields">
                         <label htmlFor="bookmark-editor-name">名称</label>
                         <input
@@ -8027,7 +8882,10 @@ export function App() {
                               setBookmarkFolderMenuOpen((open) => !open);
                             }}
                           >
-                            <span>{bookmarkDraft.folder || "书签栏"}</span>
+                            <span className="bookmark-editor-folder-value">
+                              <BookmarkFolderIcon size={16} aria-hidden="true" />
+                              <span>{bookmarkDraft.folder || "书签栏"}</span>
+                            </span>
                             <CaretDown size={15} weight="bold" aria-hidden="true" />
                           </button>
                           {bookmarkFolderMenuOpen && (
@@ -8070,16 +8928,28 @@ export function App() {
                         </div>
                       </div>
                       <footer className="bookmark-editor-actions">
-                        <button className="bookmark-editor-remove" type="button" onClick={removeCurrentBookmark}>
-                          移除
+                        <button
+                          className="bookmark-editor-manage"
+                          type="button"
+                          onClick={() => {
+                            setBookmarkFolderMenuOpen(false);
+                            setBookmarkEditorOpen(false);
+                            openBookmarkOrganizerPage();
+                          }}
+                        >
+                          管理收藏夹
                         </button>
-                        <button className="bookmark-editor-done" type="button" onClick={() => {
-                          setBookmarkFolderMenuOpen(false);
-                          setBookmarkEditorOpen(false);
-                        }}>
-                          <span>完成</span>
-                          <ArrowBendDownLeft size={18} weight="bold" aria-hidden="true" />
-                        </button>
+                        <div className="bookmark-editor-actions-primary">
+                          <button className="bookmark-editor-remove" type="button" onClick={removeCurrentBookmark}>
+                            删除
+                          </button>
+                          <button className="bookmark-editor-done" type="button" onClick={() => {
+                            setBookmarkFolderMenuOpen(false);
+                            setBookmarkEditorOpen(false);
+                          }}>
+                            <span>完成</span>
+                          </button>
+                        </div>
                       </footer>
                     </section>
                   </>
@@ -8087,6 +8957,7 @@ export function App() {
               </div>
               <IconButton
                 label={pdfExporting ? "Creating clean article PDF" : "Export clean article PDF"}
+                tooltip={pdfExporting ? "正在生成 PDF" : navigationState.isPdf ? "下载 PDF" : "导出文章 PDF"}
                 className={pdfExporting ? "pdf-export-button is-exporting" : "pdf-export-button"}
                 disabled={
                   briefOpen ||
@@ -8104,9 +8975,10 @@ export function App() {
               >
                 <FileTextIcon className="remocn-toolbar-icon remocn-file-text-icon" size={20} strokeWidth={1.8} />
               </IconButton>
-              <div className="downloads-menu">
+              <div className="downloads-menu" ref={downloadsMenuRef}>
                 <IconButton
                   label="Downloads"
+                  tooltip="最近下载"
                   className={downloadsOpen ? "is-active" : ""}
                   onClick={() => {
                     setSettingsMenuOpen(false);
@@ -8123,27 +8995,35 @@ export function App() {
                     }}
                   />
                 </IconButton>
+                {downloadsOpen && (
+                  <>
+                    {browserSurfaceRef.current && createPortal(
+                      <button
+                        className="downloads-menu-backdrop global-menu-backdrop"
+                        type="button"
+                        aria-label="关闭下载窗口"
+                        onPointerDown={() => setDownloadsOpen(false)}
+                      />,
+                      browserSurfaceRef.current,
+                    )}
+                    <section
+                      className="downloads-popover"
+                      ref={downloadsPopoverRef}
+                      role="dialog"
+                      aria-label="最近下载"
+                    >
+                      <DownloadPanel
+                        downloads={recentDownloads}
+                        onAction={handleDownloadAction}
+                        onOpenDirectory={openDownloadsDirectory}
+                        onOpenDownloads={() => openDownloadsPage()}
+                      />
+                    </section>
+                  </>
+                )}
               </div>
             </div>
           </div>
-
-          {downloadsOpen && (
-            <>
-              <button
-                className="downloads-menu-backdrop"
-                type="button"
-                aria-label="Close downloads"
-                onClick={() => setDownloadsOpen(false)}
-              />
-              <section className="downloads-popover" role="menu" aria-label="Downloads">
-                <DownloadPanel
-                  downloadGroups={downloadGroups}
-                  onAction={handleDownloadAction}
-                  onOpenDirectory={openDownloadsDirectory}
-                />
-              </section>
-            </>
-          )}
 
           <div className="browser-menu" ref={browserMenuRef}>
             {sidebarHistoryOpen && createPortal(
@@ -8438,6 +9318,11 @@ export function App() {
                     <div className="preferences-settings">
                       <section className="preference-section">
                         <h3><Sparkle size={14} />智能浏览</h3>
+                        <label className="preference-row">
+                          <span><strong>收藏夹按浏览权重排序</strong></span>
+                          <input type="checkbox" checked={appPreferences.smartBookmarkSorting !== false}
+                            onChange={(event) => setAppPreferences(current => ({ ...current, smartBookmarkSorting: event.target.checked }))} />
+                        </label>
                         <div className="preference-row">
                           <span><strong>自动选择 Cookie</strong></span>
                           <RemocnSelect
@@ -8611,6 +9496,7 @@ export function App() {
                 tabs={tabs}
                 onOpenSource={openNewTabSource}
                 onRestoreHistory={restoreSearchHistoryTab}
+                onRestorePreviousSession={previousSessionAvailable ? restorePreviousSession : undefined}
                 onSearchComplete={saveCompletedSearch}
                 onSubmit={submitNewTabPrompt}
                 onUseProgress={handleUseProgress}
@@ -8838,6 +9724,11 @@ export function App() {
                         <MagnifyingGlass size={17} weight={historyPageSection === "search" ? "bold" : "regular"} />
                         <span>搜索记录</span>
                         <small>{searchHistory.length}</small>
+                      </button>
+                    </div>
+                    <div className="brizo-settings-nav-item">
+                      <button type="button" onClick={() => openSettingsPage("memory")}>
+                        <DownloadSimple size={17} /><span>导入记录与画像</span>
                       </button>
                     </div>
                   </>
@@ -9091,6 +9982,7 @@ export function App() {
                   },
                   openBookmarkImport: () => setSettingsPanel("bookmark-import"),
                   openBookmarkOrganizer: openBookmarkOrganizerPage,
+                  openMemoryUrl: (url) => openHistoryItemInTab({ url, title: url }),
                   openDownloads: () => openDownloadsPage(),
                   openHistory: () => openHistoryPage(),
                   openIncognito: async () => {
@@ -9539,19 +10431,91 @@ export function App() {
 
       {toast && <div className="toast" role="status">{toast}</div>}
 
+      {viewportTooltip && createPortal(
+        <div
+          className={`viewport-tooltip soft-blur-in-skip is-${viewportTooltip.placement}${viewportTooltip.positioned ? " is-positioned" : ""}`}
+          ref={viewportTooltipRef}
+          role="tooltip"
+          style={{
+            left: `${viewportTooltip.left}px`,
+            top: `${viewportTooltip.top}px`,
+          }}
+        >
+          {viewportTooltip.text}
+        </div>,
+        document.body,
+      )}
+
       {collapsedTabHover && createPortal(
         <div
           className="collapsed-tab-hovercard"
           id={COLLAPSED_TAB_HOVERCARD_ID}
-          role="tooltip"
+          role="dialog"
+          aria-label={`${collapsedTabHover.title} 标签页操作`}
           style={{
             left: `${collapsedTabHover.left}px`,
             top: `${collapsedTabHover.top}px`,
             width: `${collapsedTabHover.width}px`,
           }}
+          onMouseEnter={clearCollapsedTabHoverTimer}
+          onMouseLeave={scheduleCollapsedTabHoverDismiss}
+          onFocus={clearCollapsedTabHoverTimer}
+          onBlur={scheduleCollapsedTabHoverDismiss}
+          onPointerDown={(event) => event.stopPropagation()}
         >
-          <strong>{collapsedTabHover.title}</strong>
-          {collapsedTabHover.address && <span dir="ltr">{collapsedTabHover.address}</span>}
+          <div className="collapsed-tab-hovercard-copy">
+            <strong>{collapsedTabHover.title}</strong>
+            {collapsedTabHover.address && <span dir="ltr">{collapsedTabHover.address}</span>}
+          </div>
+          <div className="collapsed-tab-hovercard-actions" role="toolbar" aria-label="标签页操作">
+            <button
+              type="button"
+              className={collapsedTabHover.isPinned ? "is-active" : undefined}
+              aria-label={collapsedTabHover.isPinned ? "取消置顶" : "置顶"}
+              data-tooltip={collapsedTabHover.isPinned ? "取消置顶" : "置顶"}
+              disabled={collapsedTabHover.isUseAutomationTab}
+              onClick={() => {
+                const tabId = collapsedTabHover.tabId;
+                dismissCollapsedTabHover();
+                toggleTabPinned(tabId);
+              }}
+            >
+              <PushPin size={17} weight={collapsedTabHover.isPinned ? "fill" : "regular"} />
+            </button>
+            <button
+              type="button"
+              aria-label="在新窗口显示"
+              data-tooltip="在新窗口显示"
+              disabled={!collapsedTabHover.canOpenWindow}
+              onClick={openHoveredTabInWindow}
+            >
+              <ArrowSquareOut size={17} weight="regular" />
+            </button>
+            <button
+              type="button"
+              className={collapsedTabHoverIsBookmarked ? "is-active" : undefined}
+              aria-label={collapsedTabHoverIsBookmarked ? "移出收藏" : "加入收藏"}
+              data-tooltip={collapsedTabHoverIsBookmarked ? "移出收藏" : "加入收藏"}
+              disabled={!collapsedTabHover.canOpenWindow}
+              onClick={toggleHoveredTabBookmark}
+            >
+              <BookmarkSimple size={17} weight={collapsedTabHoverIsBookmarked ? "fill" : "regular"} />
+            </button>
+            <button
+              type="button"
+              className="is-destructive"
+              aria-label="删除标签页"
+              data-tooltip="删除标签页"
+              disabled={tabs.length === 1}
+              onClick={() => {
+                const tabId = collapsedTabHover.tabId;
+                dismissCollapsedTabHover();
+                closeTab(tabId);
+              }}
+            >
+              <Trash size={17} weight="regular" />
+            </button>
+          </div>
         </div>,
         document.body,
       )}

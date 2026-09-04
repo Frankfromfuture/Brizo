@@ -22,7 +22,7 @@ export const REMOTE_IMAGE_MAX_URL_LENGTH = 4_096;
 // Chromium cookies, referrers, authentication state, and a second unvalidated
 // DNS lookup.
 
-const ACCEPT_HEADER = "image/avif,image/webp,image/png,image/jpeg,image/gif;q=0.8";
+const ACCEPT_HEADER = "image/avif,image/webp,image/png,image/jpeg,image/gif,image/x-icon;q=0.8";
 const IMAGE_FETCH_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36";
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const CONTENT_TYPES = new Map([
@@ -33,6 +33,8 @@ const CONTENT_TYPES = new Map([
   ["image/pjpeg", "image/jpeg"],
   ["image/png", "image/png"],
   ["image/webp", "image/webp"],
+  ["image/x-icon", "image/x-icon"],
+  ["image/vnd.microsoft.icon", "image/x-icon"],
 ]);
 
 const ERROR_MESSAGES = {
@@ -87,6 +89,14 @@ function normalizeContentType(value) {
 }
 
 function detectedImageType(buffer) {
+  if (buffer.length >= 6
+    && buffer[0] === 0x00
+    && buffer[1] === 0x00
+    && buffer[2] === 0x01
+    && buffer[3] === 0x00
+    && buffer.readUInt16LE(4) > 0) {
+    return "image/x-icon";
+  }
   if (buffer.length >= 8
     && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
     return "image/png";

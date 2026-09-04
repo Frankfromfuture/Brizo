@@ -1,12 +1,20 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("beanBrowser", {
+  getAgentStates: () => ipcRenderer.invoke("bean-browser:agent-states"),
+  controlAgent: (id, action, payload) => ipcRenderer.invoke("bean-browser:agent-control", id, action, payload),
+  onAgentState: callback => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on("bean-browser:agent-state", listener);
+    return () => ipcRenderer.removeListener("bean-browser:agent-state", listener);
+  },
   activateBrizoUseTabView: (tabId) =>
     ipcRenderer.invoke("bean-browser:activate-brizo-use-tab-view", tabId),
   back: () => ipcRenderer.invoke("bean-browser:back"),
   runBrizoUseCommand: (payload) => ipcRenderer.invoke("bean-browser:run-brizo-use-command", payload),
   pauseBrizoUseCommand: (sessionId) => ipcRenderer.invoke("bean-browser:pause-brizo-use-command", sessionId),
   resumeBrizoUseCommand: (sessionId) => ipcRenderer.invoke("bean-browser:resume-brizo-use-command", sessionId),
+  setUseLoginPromptLayout: (payload) => ipcRenderer.send("bean-browser:use-login-prompt-layout", payload),
   setBrizoUseSandboxLayout: (payload) => ipcRenderer.send("bean-browser:set-brizo-use-sandbox-layout", payload),
   getBriefEdition: (payload) => ipcRenderer.invoke("bean-browser:brief-get-edition", payload),
   getBriefReport: (payload) => ipcRenderer.invoke("bean-browser:brief-get-report", payload),
@@ -20,6 +28,27 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   chooseDownloadDirectory: () => ipcRenderer.invoke("bean-browser:choose-download-directory"),
   chooseSearchAttachments: () => ipcRenderer.invoke("bean-browser:choose-search-attachments"),
   forward: () => ipcRenderer.invoke("bean-browser:forward"),
+  getBrowserMemoryProfile: () => ipcRenderer.invoke("bean-browser:memory-profile"),
+  getBookmarkVisitWeights: (urls) => ipcRenderer.invoke("bean-browser:bookmark-visit-weights", { urls }),
+  listHistorySources: () => ipcRenderer.invoke("bean-browser:history-sources"),
+  importBrowserHistory: (sourceIds) => ipcRenderer.invoke("bean-browser:history-import", sourceIds),
+  suggestHistory: (query) => ipcRenderer.invoke("bean-browser:history-suggest", { query }),
+  searchImportedHistory: (payload) => ipcRenderer.invoke("bean-browser:history-search", payload),
+  setBrowserMemoryPreferences: (changes) => ipcRenderer.invoke("bean-browser:memory-settings", { changes }),
+  excludeMemorySite: (host, excluded) => ipcRenderer.invoke("bean-browser:memory-exclude", { host, excluded }),
+  removeImportedHistory: (url) => ipcRenderer.invoke("bean-browser:history-remove", { url }),
+  clearImportedHistory: () => ipcRenderer.invoke("bean-browser:history-clear"),
+  recordBrowserMemory: (payload) => ipcRenderer.invoke("bean-browser:memory-record", payload),
+  onBrowserMemoryProgress: (callback) => {
+    const listener = (_event, value) => callback(value);
+    ipcRenderer.on("bean-browser:memory-progress", listener);
+    return () => ipcRenderer.removeListener("bean-browser:memory-progress", listener);
+  },
+  onBrowserMemoryChanged: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("bean-browser:memory-changed", listener);
+    return () => ipcRenderer.removeListener("bean-browser:memory-changed", listener);
+  },
   getAppInfo: () => ipcRenderer.invoke("bean-browser:get-app-info"),
   getPageZoom: () => ipcRenderer.invoke("bean-browser:get-page-zoom"),
   getSiteHygiene: () => ipcRenderer.invoke("bean-browser:get-site-hygiene"),
@@ -29,6 +58,7 @@ contextBridge.exposeInMainWorld("beanBrowser", {
   importBookmarksFromHtml: () =>
     ipcRenderer.invoke("bean-browser:import-bookmarks-html"),
   listDownloads: () => ipcRenderer.invoke("bean-browser:list-downloads"),
+  openLinkWindow: (input) => ipcRenderer.invoke("bean-browser:open-link-window", input),
   openDownloadsDirectory: () => ipcRenderer.invoke("bean-browser:open-downloads-directory"),
   setDownloadPaused: (id, paused) =>
     ipcRenderer.invoke("bean-browser:set-download-paused", id, paused),

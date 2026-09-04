@@ -1,0 +1,4 @@
+interface:
+  display_name: "brizo"
+  short_description: "从当前 Agent 操作 Brizo 的独立浏览器沙箱，支持网页观察、输入、标签组与人工接管"
+  default_prompt: "使用 $brizo 在独立沙箱里完成我的浏览器任务。"

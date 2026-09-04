@@ -181,12 +181,15 @@ button {
   transform: scale(0.85);
   pointer-events: none;
   position: absolute;
+  top: -4px;
   left: 0;
   transition: opacity 140ms cubic-bezier(0.22, 1, 0.36, 1),
               transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .brizo-wordmark {
+  position: relative;
+  top: 3px;
   width: 70px;
   height: auto;
   flex: 0 0 auto;
@@ -650,6 +653,40 @@ button {
   background: transparent;
 }
 
+.site-icon.is-use-task {
+  border-radius: 0;
+  overflow: visible;
+  color: #000;
+}
+
+.sidebar-tab-row.is-active.uses-light-foreground .site-icon.is-use-task {
+  color: #fff;
+}
+
+.use-task-icon {
+  display: inline-block;
+  flex: 0 0 auto;
+  overflow: visible;
+  line-height: 0;
+  pointer-events: none;
+}
+
+.use-task-icon > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.new-tab-mode-icon.use-task-icon {
+  color: #fff;
+}
+
+.new-tab-submit-use {
+  position: relative;
+  z-index: 3;
+}
+
 .site-icon img {
   display: block;
   width: 100%;
@@ -666,12 +703,23 @@ button {
 .site-icon.is-new-tab img {
   width: 80%;
   height: 80%;
-  opacity: 0.72;
+  opacity: 1;
 }
 
 .site-icon > svg {
   width: 62%;
   height: 62%;
+}
+
+.site-icon > svg[data-brizo-tab-icon] {
+  width: 16px;
+  height: 16px;
+}
+
+.site-icon.is-automating > svg,
+.site-icon.is-default-compass > svg {
+  width: 100%;
+  height: 100%;
 }
 
 kbd {
@@ -897,20 +945,20 @@ kbd {
 
 .bookmark-control > .bookmark-action-button.is-active {
   color: #a58c5e;
-  background: rgba(165, 140, 94, 0.1);
+  background: transparent;
 }
 
 .bookmark-control > .bookmark-action-button.is-active:hover,
 .bookmark-control > .bookmark-action-button.is-active:focus-visible {
   color: #a58c5e;
-  background: rgba(165, 140, 94, 0.16);
+  background: transparent;
 }
 
 .browser-toolbar.uses-light-foreground .bookmark-control > .bookmark-action-button.is-active,
 .browser-toolbar.uses-light-foreground .bookmark-control > .bookmark-action-button.is-active:hover,
 .browser-toolbar.uses-light-foreground .bookmark-control > .bookmark-action-button.is-active:focus-visible {
   color: #cbb477;
-  background: rgba(255, 255, 255, 0.16);
+  background: transparent;
 }
 
 .bookmark-action-icon {
@@ -1096,6 +1144,127 @@ kbd {
   font-size: 17px;
   font-weight: 600;
   line-height: 1.3;
+}
+
+.bookmark-toolbar-editor {
+  width: min(320px, calc(100vw - 16px));
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 14px;
+  background: var(--brizo-menu-surface);
+  box-shadow: 0 8px 24px rgba(45, 50, 46, 0.12), 0 1px 4px rgba(45, 50, 46, 0.08);
+  color: var(--brizo-menu-foreground);
+  animation: collapsed-tab-hovercard-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.bookmark-editor-close {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #666d67;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.bookmark-editor-close:hover,
+.bookmark-editor-close:focus-visible {
+  background: var(--brizo-menu-hover);
+  color: #272d29;
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.bookmark-toolbar-editor .bookmark-editor-fields {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 7px;
+}
+
+.bookmark-toolbar-editor .bookmark-editor-fields > label {
+  margin-top: 4px;
+  color: #454b46;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.bookmark-toolbar-editor .bookmark-editor-fields > input,
+.bookmark-toolbar-editor .bookmark-editor-folder-trigger {
+  height: 42px;
+  border: 1px solid rgba(45, 50, 46, 0.12);
+  border-radius: 10px;
+  background: rgba(45, 50, 46, 0.035);
+}
+
+.bookmark-toolbar-editor .bookmark-editor-fields > input {
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.bookmark-toolbar-editor .bookmark-editor-fields > input:focus,
+.bookmark-toolbar-editor .bookmark-editor-folder-trigger:focus-visible,
+.bookmark-toolbar-editor .bookmark-editor-folder-picker.is-open .bookmark-editor-folder-trigger {
+  border-color: rgba(165, 140, 94, 0.42);
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 0 0 2px rgba(165, 140, 94, 0.16);
+}
+
+.bookmark-editor-folder-value {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.bookmark-editor-folder-value > svg {
+  flex: 0 0 auto;
+  color: #6e746f;
+}
+
+.bookmark-editor-folder-value > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bookmark-toolbar-editor .bookmark-folder-menu {
+  right: 0;
+  left: 0;
+  width: 100%;
+  min-width: 100%;
+  max-width: none;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 14px;
+  background: var(--brizo-menu-surface);
+  box-shadow: 0 8px 24px rgba(45, 50, 46, 0.12), 0 1px 4px rgba(45, 50, 46, 0.08);
+  box-sizing: border-box;
+}
+
+.bookmark-toolbar-editor .bookmark-folder-menu-header {
+  min-height: 30px;
+  padding: 0 8px;
+  border-bottom-color: rgba(45, 50, 46, 0.07);
+}
+
+.bookmark-toolbar-editor .bookmark-folder-menu-list {
+  padding-top: 4px;
+}
+
+.bookmark-toolbar-editor .bookmark-folder-menu-list > button {
+  min-height: 30px;
+  padding: 0 8px 0 calc(8px + var(--bookmark-folder-depth, 0) * 18px);
+  border-radius: 8px;
+  font-size: 11.5px;
+  transition: background 120ms ease, color 120ms ease;
 }
 
 .bookmark-editor-site-icon,
@@ -1328,6 +1497,17 @@ kbd {
   justify-content: space-between;
 }
 
+.bookmark-toolbar-editor .bookmark-editor-actions {
+  margin-top: 16px;
+  gap: 12px;
+}
+
+.bookmark-editor-actions-primary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .bookmark-editor-actions button {
   height: 34px;
   padding: 0 13px;
@@ -1352,6 +1532,17 @@ kbd {
 .bookmark-editor-remove {
   background: rgba(225, 233, 226, 0.92);
   color: #171c18;
+}
+
+.bookmark-editor-manage {
+  padding-inline: 10px !important;
+  background: transparent;
+  color: #555c56;
+}
+
+.bookmark-editor-manage:hover {
+  background: var(--brizo-menu-hover);
+  color: #252b27;
 }
 
 .bookmark-editor-remove:hover {
@@ -1389,6 +1580,11 @@ kbd {
     left: auto;
     right: 59px;
     transform: none;
+  }
+
+  .bookmark-toolbar-editor {
+    width: min(320px, calc(100vw - 20px));
+    padding: 14px;
   }
 
   .bookmark-editor-fields {
@@ -1513,6 +1709,82 @@ kbd {
 .bookmark-folder-menu-list > button:focus-visible,
 .bookmark-folder-menu-list > button.is-selected {
   background: var(--brizo-menu-hover);
+}
+
+/* Toolbar bookmark editor follows the roomier reference anatomy, overriding
+   the compact context-editor defaults above. */
+.bookmark-toolbar-editor .bookmark-editor-header {
+  padding: 0;
+  border-bottom: 0;
+  gap: 12px;
+}
+
+.bookmark-toolbar-editor .bookmark-editor-header h2 {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.bookmark-toolbar-editor .bookmark-editor-fields {
+  margin-top: 14px;
+  gap: 7px;
+  padding: 0;
+}
+
+.bookmark-toolbar-editor .bookmark-editor-fields > input,
+.bookmark-toolbar-editor .bookmark-editor-folder-trigger {
+  height: 38px;
+  font-size: 12.5px;
+  font-style: normal;
+}
+
+.bookmark-toolbar-editor .bookmark-editor-actions {
+  margin-top: 16px;
+  gap: 12px;
+  padding: 0;
+}
+
+.bookmark-toolbar-editor .bookmark-editor-actions button {
+  height: 34px;
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.bookmark-toolbar-editor .bookmark-editor-actions button:focus-visible {
+  outline: 2px solid rgba(165, 140, 94, 0.45);
+  outline-offset: 2px;
+}
+
+.bookmark-toolbar-editor .bookmark-editor-manage,
+.bookmark-toolbar-editor .bookmark-editor-remove {
+  border: 1px solid rgba(255, 255, 255, 0.84);
+  background: rgba(255, 255, 255, 0.66);
+  box-shadow: 0 2px 7px rgba(45, 50, 46, 0.08), 0 1px 2px rgba(45, 50, 46, 0.05);
+  color: #444a45;
+}
+
+.bookmark-toolbar-editor .bookmark-editor-manage:hover,
+.bookmark-toolbar-editor .bookmark-editor-remove:hover {
+  background: var(--brizo-menu-hover);
+}
+
+.bookmark-toolbar-editor .bookmark-editor-done {
+  min-width: 72px;
+  background: #272a27;
+  color: #fff;
+}
+
+.bookmark-toolbar-editor .bookmark-editor-done:hover {
+  background: #151715;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bookmark-toolbar-editor,
+  .bookmark-editor-close {
+    animation: none;
+    transition: none;
+  }
 }
 
 .downloads-menu {
@@ -1737,6 +2009,10 @@ kbd {
   inset: 0;
   border: 0;
   background: transparent;
+}
+
+.global-menu-backdrop {
+  z-index: 31;
 }
 
 .downloads-popover {
@@ -3182,7 +3458,7 @@ kbd {
 
 .address-bar {
   position: relative;
-  height: 38px;
+  height: 34.2px;
   min-width: 0;
   width: min(37.5vw, 400px);
   flex: 0 1 400px;
@@ -3191,7 +3467,7 @@ kbd {
   gap: 9px;
   padding: 0 13px;
   border: 1px solid #d9ddd8;
-  border-radius: 10px;
+  border-radius: 12px;
   background: #f3f5f2;
   transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
 }
@@ -3207,7 +3483,7 @@ kbd {
   position: absolute;
   z-index: 2;
   inset: -2px;
-  border-radius: 11px;
+  border-radius: 13px;
   padding: 2px;
   background: conic-gradient(from 0deg, #a58c5e 0deg, #c9b584 var(--address-load-angle), transparent var(--address-load-angle));
   opacity: 0;
@@ -3259,6 +3535,87 @@ kbd {
   color: #fff;
   outline: 0;
   transform: translateX(1px);
+}
+
+.address-quick-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.address-engine-button {
+  width: 21px;
+  height: 21px;
+  padding: 0;
+  flex: 0 0 21px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(45, 50, 46, 0.13);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.82);
+  color: #444a46;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 120ms ease;
+}
+
+.address-engine-button.is-ask {
+  border-color: #444a46;
+  background: #444a46;
+  color: #fff;
+}
+
+.address-engine-icon-stack {
+  position: relative;
+  display: block;
+  width: 11px;
+  height: 11px;
+}
+
+.address-engine-icon-stack > img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 11px;
+  height: 11px;
+  object-fit: contain;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.address-engine-icon-stack > .is-muted {
+  opacity: 1;
+}
+
+.address-engine-icon-stack > .is-color {
+  opacity: 0;
+}
+
+.address-engine-button:is(:hover, :focus-visible) {
+  border-color: rgba(165, 140, 94, 0.46);
+  background: #fff;
+  outline: 0;
+  transform: translateY(-1px);
+}
+
+.address-engine-button.is-ask:is(:hover, :focus-visible) {
+  border-color: #1f2922;
+  background: #1f2922;
+  color: #fff;
+}
+
+.address-engine-button:is(:hover, :focus-visible) .address-engine-icon-stack > .is-muted {
+  opacity: 0;
+}
+
+.address-engine-button:is(:hover, :focus-visible) .address-engine-icon-stack > .is-color {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .address-engine-icon-stack > img {
+    transition: none;
+  }
 }
 
 .address-suggestions {
@@ -6444,6 +6801,15 @@ kbd {
   background: #f1f1f1;
 }
 
+.browser-surface:has(> .new-tab-session.is-active .new-tab-page.has-results) {
+  background: #fff;
+}
+
+.browser-surface:has(> .new-tab-session.is-active .new-tab-page.has-results) > .browser-toolbar,
+.browser-surface:has(> .new-tab-session.is-active .new-tab-page.has-results) > .horizontal-bookmarks-bar {
+  --page-background-color: #fff !important;
+}
+
 .new-tab-page {
   position: relative;
   width: 100%;
@@ -6598,6 +6964,39 @@ kbd {
   font-size: 10px;
 }
 
+/* Quiet, explicit opt-in to the previous session above the existing footer. */
+.new-tab-restore-session {
+  position: absolute;
+  z-index: 2;
+  bottom: 52px;
+  left: 50%;
+  max-width: calc(100% - 48px);
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #777b77;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  translate: -50% 0;
+  cursor: pointer;
+}
+
+.new-tab-restore-session:hover,
+.new-tab-restore-session:focus-visible {
+  color: #454a45;
+  background: rgba(45, 50, 46, 0.05);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.new-tab-restore-session:focus-visible {
+  outline: 1px solid #a39374;
+  outline-offset: 2px;
+}
+
 .new-tab-mythic-tagline {
   position: absolute;
   z-index: 2;
@@ -6665,6 +7064,11 @@ kbd {
 
 .new-tab-beam {
   width: 100%;
+  overflow: visible !important;
+}
+
+.new-tab-page:not(.has-results) .new-tab-beam {
+  width: 80%;
 }
 
 .new-tab-page.has-results .new-tab-compose {
@@ -6703,6 +7107,10 @@ kbd {
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);
+}
+
+.new-tab-page.has-results {
+  background: #fff;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -6779,6 +7187,18 @@ kbd {
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+#root .brizo-use-usage-footer {
+  max-width: 760px;
+  margin: 14px 0 0;
+  color: #616161;
+  font-size: 11px;
+  font-weight: 400;
+  font-style: italic !important;
+  font-synthesis: style;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .new-tab-sources h3 {
@@ -7581,12 +8001,12 @@ kbd {
 }
 
 .new-tab-sources {
-  margin-top: 22px;
+  margin-top: 18px;
 }
 
 .new-tab-sources-heading {
-  min-height: 22px;
-  margin-bottom: 10px;
+  min-height: 18px;
+  margin-bottom: 6px;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -7597,26 +8017,21 @@ kbd {
   margin: 0;
 }
 
-.new-tab-sources-heading > span {
-  color: #979d98;
-  font-size: 9px;
-}
-
 .new-tab-source-list {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 9px;
+  gap: 7px;
 }
 
 .new-tab-source-list button {
   position: relative;
   min-width: 0;
-  min-height: 126px;
-  padding: 12px 13px 28px;
+  min-height: 64px;
+  padding: 9px 10px;
   display: flex;
   flex-direction: column;
   border: 1px solid #e2e5e1;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #fff;
   color: #343a35;
   cursor: pointer;
@@ -7630,19 +8045,6 @@ kbd {
   background: #fafbf9;
   outline: 0;
   transform: translateY(-1px);
-}
-
-.new-tab-source-index {
-  width: 18px;
-  height: 18px;
-  margin-left: auto;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: #edf1ec;
-  color: #536157;
-  font-size: 8px;
-  font-weight: 600;
 }
 
 .new-tab-source-card-meta {
@@ -7666,8 +8068,8 @@ kbd {
 }
 
 .new-tab-source-favicon {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   font-size: 8px;
 }
 
@@ -7676,20 +8078,24 @@ kbd {
   width: 100%;
   height: 100%;
   display: block;
-  object-fit: cover;
+  object-fit: contain;
+}
+
+.new-tab-source-favicon.has-image,
+.new-tab-source-stack-icon.has-image {
+  background: transparent;
 }
 
 .new-tab-source-card-meta small {
   min-width: 0;
   overflow: hidden;
   color: #858c86;
-  font-size: 9px;
+  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.new-tab-source-list button > strong,
-.new-tab-source-list button > em {
+.new-tab-source-list button > strong {
   display: block;
   overflow: hidden;
   display: -webkit-box;
@@ -7697,33 +8103,17 @@ kbd {
 }
 
 .new-tab-source-list button > strong {
-  margin-top: 10px;
-  color: #303631;
-  font-size: 12px;
-  font-weight: 550;
-  line-height: 1.4;
-  -webkit-line-clamp: 2;
-}
-
-.new-tab-source-list button > em {
   margin-top: 6px;
-  color: #69716b;
-  font-size: 10px;
-  font-style: normal;
-  line-height: 1.4;
+  color: #303631;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
   -webkit-line-clamp: 2;
-}
-
-.new-tab-source-list button > svg {
-  position: absolute;
-  right: 12px;
-  bottom: 10px;
-  color: #8c938d;
 }
 
 .new-tab-source-summary {
-  min-height: 30px;
-  margin-top: 8px;
+  min-height: 26px;
+  margin-top: 6px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -7738,8 +8128,8 @@ kbd {
 }
 
 .new-tab-source-stack-icon {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   margin-left: -4px;
   border: 2px solid #fcfafa;
   font-size: 7px;
@@ -7985,7 +8375,7 @@ kbd {
   display: flex;
   flex-direction: column;
   border: 1px solid #d5d9d5;
-  border-radius: 20px;
+  border-radius: 24px;
   background: #fff;
   box-shadow:
     0 10px 28px rgba(34, 40, 35, 0.055),
@@ -8135,7 +8525,7 @@ kbd {
     0 1px 4px rgba(0, 0, 0, 0.2),
     inset 0 0 0 1px rgba(0, 0, 0, 0.035);
   transform: translateX(0);
-  transition: transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
   pointer-events: none;
 }
 
@@ -8153,7 +8543,7 @@ kbd {
   flex: 0 0 44px;
   min-width: 0;
   text-align: center;
-  transition: flex-basis 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: flex-basis 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .new-tab-mode-option.is-selected {
@@ -8183,7 +8573,7 @@ kbd {
   font-style: normal;
   font-weight: 550;
   line-height: 1;
-  transition: color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+  transition: color 220ms ease, background-color 220ms ease, box-shadow 220ms ease;
 }
 
 .new-tab-mode-option:not(.is-selected):hover .new-tab-mode-name {
@@ -8209,7 +8599,7 @@ kbd {
 .new-tab-mode-content {
   display: grid;
   place-items: center;
-  animation: brizo-mode-content-in 180ms ease both;
+  animation: brizo-mode-content-in 220ms ease both;
 }
 
 .new-tab-mode-icon {
@@ -8232,9 +8622,9 @@ kbd {
   transform: translateX(-5px);
   pointer-events: none;
   transition:
-    width 220ms cubic-bezier(0.22, 0.8, 0.24, 1),
-    opacity 140ms ease,
-    transform 220ms cubic-bezier(0.22, 0.8, 0.24, 1);
+    width 240ms cubic-bezier(0.22, 0.8, 0.24, 1),
+    opacity 220ms ease,
+    transform 240ms cubic-bezier(0.22, 0.8, 0.24, 1);
 }
 
 .new-tab-ask-tools.is-visible {
@@ -8287,15 +8677,43 @@ kbd {
   border: 1px solid #e0e3e0;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.9);
-  font-family: var(--brizo-ui-font);
-  font-size: 13px;
-  font-style: normal;
-  font-weight: 600;
+  color: #444a46;
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 120ms ease;
 }
 
-.new-tab-engine-button.is-bing { color: #167373; }
-.new-tab-engine-button.is-google { color: #4285f4; }
+.new-tab-engine-icon-stack {
+  position: relative;
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.new-tab-engine-icon-stack > img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+  pointer-events: none;
+  transition: opacity 140ms ease;
+}
+
+.new-tab-engine-icon-stack > .is-muted {
+  opacity: 1;
+}
+
+.new-tab-engine-icon-stack > .is-color {
+  opacity: 0;
+}
+
+.new-tab-engine-button:not(:disabled):is(:hover, :focus-visible) .new-tab-engine-icon-stack > .is-muted {
+  opacity: 0;
+}
+
+.new-tab-engine-button:not(:disabled):is(:hover, :focus-visible) .new-tab-engine-icon-stack > .is-color {
+  opacity: 1;
+}
 
 .new-tab-engine-button:hover,
 .new-tab-engine-button:focus-visible {
@@ -8309,6 +8727,12 @@ kbd {
   cursor: default;
   opacity: 0.42;
   transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .new-tab-engine-icon-stack > img {
+    transition: none;
+  }
 }
 
 .new-tab-tool-button {
@@ -8690,7 +9114,7 @@ kbd {
 
 .new-tab-tab-menu {
   position: absolute;
-  z-index: 12;
+  z-index: 80;
   padding: 7px;
   border: 1px solid #d9ddda;
   border-radius: 9px;
@@ -8698,10 +9122,18 @@ kbd {
   box-shadow: 0 12px 28px rgba(29, 35, 30, 0.13);
 }
 
+
+
 .new-tab-tab-menu {
   top: calc(100% + 8px);
-  left: 0;
+  right: 0;
   width: 232px;
+}
+
+.new-tab-tab-menu-list {
+  max-height: 216px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .new-tab-tab-menu button {
@@ -8730,6 +9162,16 @@ kbd {
   background: #f2f4f1;
 }
 
+.new-tab-tab-menu button[aria-selected="true"] {
+  background: var(--brizo-menu-hover);
+  color: #303832;
+}
+
+.new-tab-tab-menu button:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
 .new-tab-tab-menu button > span:nth-child(2) {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8741,6 +9183,49 @@ kbd {
   padding: 10px 9px;
   color: #8b928c;
   font-size: 11px;
+}
+
+.new-tab-tab-menu-footer {
+  min-height: 34px;
+  margin-top: 5px;
+  padding: 5px 2px 0 7px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-top: 1px solid var(--brizo-menu-divider);
+  color: #858c86;
+  font-size: 10px;
+}
+
+.new-tab-tab-menu-footer > span {
+  margin-right: auto;
+  white-space: nowrap;
+}
+
+#root .new-tab-tab-menu-footer > button {
+  width: auto;
+  min-width: 44px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0 8px;
+  display: inline-flex;
+  grid-template-columns: none;
+  justify-content: center;
+  gap: 0;
+  border-radius: 7px;
+  font-size: 10px;
+  text-align: center;
+}
+
+#root .new-tab-tab-menu-footer > .new-tab-tab-menu-done {
+  background: #2d332f;
+  color: #fff;
+}
+
+#root .new-tab-tab-menu-footer > .new-tab-tab-menu-done:hover,
+#root .new-tab-tab-menu-footer > .new-tab-tab-menu-done:focus-visible {
+  background: #202521;
+  color: #fff;
 }
 
 .web-content-placeholder {
@@ -9112,14 +9597,6 @@ h1 {
 }
 
 @media (max-width: 760px) {
-  .app-shell {
-    grid-template-columns: 0 minmax(0, 1fr);
-  }
-
-  .spaces-panel {
-    visibility: hidden;
-  }
-
   .new-tab-compose {
     width: calc(100% - 32px);
     transform: translate(-50%, calc(-50% - 2vh));
@@ -10565,7 +11042,7 @@ h1 {
 .sidebar-tab-group-title {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 550;
   color: #3b423d !important;
   overflow: hidden;
@@ -10717,10 +11194,22 @@ h1 {
   outline: none;
 }
 
+.sidebar-tab-select > .site-icon {
+  transform-origin: center;
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.pinned-tab-btn:hover > .site-icon,
+.pinned-tab-btn:focus-visible > .site-icon,
+.sidebar-tab-row:hover .sidebar-tab-select > .site-icon,
+.sidebar-tab-select:focus-visible > .site-icon {
+  transform: scale(1.1);
+}
+
 .sidebar-tab-title {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 450;
   color: #434a45;
   overflow: hidden;
@@ -10761,6 +11250,11 @@ h1 {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .pinned-tab-btn > .site-icon,
+  .sidebar-tab-select > .site-icon {
+    transition: none;
+  }
+
   .sidebar-tab-row.is-marquee .sidebar-tab-title > span {
     animation: none;
   }
@@ -10942,98 +11436,296 @@ h1 {
   opacity: 0.75;
 }
 
-/* Sidebar Dock Hover Tooltips */
-.sidebar-dock-btn[data-tooltip]::before {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: calc(100% + 7px);
-  left: 50%;
-  transform: translateX(-50%) translateY(3px);
+/* Viewport-aware short control tooltips */
+.viewport-tooltip {
+  position: fixed;
+  z-index: 1050;
+  box-sizing: border-box;
+  max-width: calc(100vw - 16px);
   padding: 4px 8px 3.5px;
   border-radius: 6px;
   background: rgba(30, 35, 32, 0.94);
   color: #ffffff;
+  font-family: inherit;
   font-size: 11px;
+  font-style: normal;
   font-weight: 450;
   line-height: 1.15;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 130ms cubic-bezier(0.2, 0.8, 0.2, 1), transform 130ms cubic-bezier(0.2, 0.8, 0.2, 1), visibility 130ms ease;
-  z-index: 1050;
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.18);
-  font-family: inherit;
-  letter-spacing: 0.01em;
+  transition: opacity 90ms ease-out, visibility 90ms ease-out;
 }
 
-.sidebar-dock-btn[data-tooltip-pos="left"]::before {
-  left: 0;
-  transform: translateX(0) translateY(3px);
-}
-
-.sidebar-dock-btn[data-tooltip-pos="right"]::before {
-  left: auto;
-  right: 0;
-  transform: translateX(0) translateY(3px);
-}
-
-.sidebar-dock-btn[data-tooltip]:hover::before,
-.sidebar-dock-btn[data-tooltip]:focus-visible::before {
+.viewport-tooltip.is-positioned {
   opacity: 1;
   visibility: visible;
-  transform: translateX(-50%) translateY(0);
 }
 
-.sidebar-dock-btn[data-tooltip-pos="left"]:hover::before,
-.sidebar-dock-btn[data-tooltip-pos="left"]:focus-visible::before {
-  transform: translateX(0) translateY(0);
+.collapsed-tab-hovercard,
+.use-login-prompt,
+.bookmark-toolbar-editor,
+.downloads-popover {
+  box-sizing: border-box;
+  padding: 14px 14px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 14px;
+  background: var(--brizo-menu-surface);
+  box-shadow: 0 8px 24px rgba(45, 50, 46, 0.12), 0 1px 4px rgba(45, 50, 46, 0.08);
 }
 
-.sidebar-dock-btn[data-tooltip-pos="right"]:hover::before,
-.sidebar-dock-btn[data-tooltip-pos="right"]:focus-visible::before {
-  transform: translateX(0) translateY(0);
+.bookmark-toolbar-editor {
+  right: auto;
+  left: 50%;
+  translate: calc(-50% + var(--bookmark-editor-shift-x, 0px)) 0;
+}
+
+#root .downloads-popover {
+  top: calc(100% + 8px);
+  right: auto;
+  left: 50%;
+  width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 72px);
+  translate: calc(-50% + var(--downloads-popover-shift-x, 0px)) 0;
+  animation: collapsed-tab-hovercard-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+#root .downloads-popover-header {
+  height: 28px;
+  min-height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  gap: 12px;
+}
+
+#root .downloads-popover-header h2 {
+  margin: 0;
+  color: var(--brizo-menu-foreground);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.downloads-popover-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.downloads-header-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #666d67;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease;
+}
+
+.downloads-header-button:hover,
+.downloads-header-button:focus-visible {
+  background: var(--brizo-menu-hover);
+  color: #272d29;
+  outline: none;
+  transform: translateY(-1px);
+}
+
+#root .downloads-popover .downloads-list {
+  max-height: calc(100vh - 126px);
+  margin-top: 14px;
+  padding: 0;
+  display: grid;
+  gap: 7px;
+  overflow-y: auto;
+}
+
+#root .downloads-popover .download-row {
+  height: 38px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+}
+
+#root .downloads-popover .download-row:hover,
+#root .downloads-popover .download-row:focus-within {
+  background: var(--brizo-menu-hover);
+}
+
+#root .downloads-popover .download-row-icon img {
+  width: 20px;
+  height: 20px;
+  display: block;
+}
+
+#root .downloads-popover .download-row-icon img.is-thumbnail {
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+#root .downloads-popover .download-row-icon img.is-file-icon {
+  object-fit: contain;
+}
+
+#root .downloads-popover .downloads-empty {
+  min-height: 38px;
+  margin: 0;
+  display: grid;
+  place-items: center;
 }
 
 .collapsed-tab-hovercard {
   position: fixed;
   z-index: 980;
-  min-height: 42px;
-  padding: 9px 11px 10px;
-  display: grid;
-  align-content: center;
-  gap: 4px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  border: var(--brizo-menu-border);
-  border-radius: var(--brizo-menu-radius);
-  background: var(--brizo-menu-surface);
-  box-shadow: var(--brizo-menu-shadow);
   color: var(--brizo-menu-foreground);
   font-family: var(--brizo-menu-font-family);
   font-style: normal;
   line-height: 1.2;
-  pointer-events: none;
+  pointer-events: auto;
   user-select: none;
+  animation: collapsed-tab-hovercard-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.collapsed-tab-hovercard > strong,
-.collapsed-tab-hovercard > span {
+.collapsed-tab-hovercard-copy {
+  min-width: 0;
+}
+
+html:has(body.use-login-prompt-surface),
+body.use-login-prompt-surface,
+.use-login-prompt-surface #root {
+  background: transparent !important;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.use-login-prompt {
+  width: 180px;
+  margin: 16px;
+  color: var(--brizo-menu-foreground);
+  font-family: var(--brizo-menu-font-family);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.6;
+  animation: collapsed-tab-hovercard-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.use-login-prompt header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.use-login-prompt header > span { font-size: 12.5px; }
+.use-login-prompt button { border: 0; border-radius: 7px; padding: 3px 6px; color: #616161; background: transparent; font: inherit; cursor: pointer; }
+.use-login-prompt .use-login-prompt-close { display: grid; place-items: center; width: 20px; height: 20px; padding: 0; }
+.use-login-prompt button:hover, .use-login-prompt button:focus-visible { background: rgba(0, 0, 0, .04); }
+.use-login-prompt-domain { color: #747b75; overflow-wrap: anywhere; margin-top: 3px; }
+.use-login-prompt p { margin: 10px 0 12px; }
+.use-login-prompt .use-login-prompt-resume { width: 100%; height: 28px; background: #eeeae3; color: #45433f; }
+@media (prefers-reduced-motion: reduce) { .use-login-prompt { animation: none; } }
+
+.collapsed-tab-hovercard-copy > strong,
+.collapsed-tab-hovercard-copy > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.collapsed-tab-hovercard > strong {
-  font-size: 12px;
-  font-weight: 500;
+.collapsed-tab-hovercard-copy > strong {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.28;
 }
 
-.collapsed-tab-hovercard > span {
+.collapsed-tab-hovercard-copy > span {
+  display: block;
+  margin-top: 3px;
   color: #747b75;
   font-size: 11px;
   font-weight: 400;
+  line-height: 1.25;
   text-align: left;
+  white-space: nowrap;
+}
+
+.collapsed-tab-hovercard-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  align-items: center;
+  gap: 4px;
+  padding-top: 12px;
+}
+
+.collapsed-tab-hovercard-actions button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  justify-self: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #777d78;
+  cursor: pointer;
+  transition: color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.collapsed-tab-hovercard-actions button:hover,
+.collapsed-tab-hovercard-actions button:focus-visible {
+  background: var(--brizo-menu-hover);
+  color: #2f3531;
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.collapsed-tab-hovercard-actions button.is-active {
+  color: #5f655f;
+}
+
+.collapsed-tab-hovercard-actions button.is-destructive:hover,
+.collapsed-tab-hovercard-actions button.is-destructive:focus-visible {
+  color: #a1453c;
+}
+
+.collapsed-tab-hovercard-actions button:disabled {
+  color: rgba(47, 53, 49, 0.25);
+  cursor: default;
+  transform: none;
+}
+
+@keyframes collapsed-tab-hovercard-in {
+  from {
+    opacity: 0;
+    filter: blur(8px);
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viewport-tooltip,
+  .collapsed-tab-hovercard,
+  .collapsed-tab-hovercard-actions button {
+    animation: none;
+    transition: none;
+  }
 }
 
 /* Sidebar History Popover */
@@ -11886,6 +12578,7 @@ h1 {
 }
 
 .app-shell.is-sidebar-collapsed:not(.is-sidebar-hover-expanded) .brand.is-collapsed .brizo-mark {
+  top: -12px;
   width: 40px;
   height: 40px;
   object-fit: contain;
@@ -11893,12 +12586,13 @@ h1 {
   transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), width 180ms cubic-bezier(0.22, 1, 0.36, 1), height 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Pinned Tabs: Floating 36px capsules at x=10px, layered on top */
+/* Keep the expanded grid's total height while stacking every pinned tab in the collapsed rail. */
 .app-shell.is-sidebar-collapsed:not(.is-sidebar-hover-expanded) .pinned-tabs-grid {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
   width: 100%;
+  height: var(--pinned-grid-expanded-height);
   padding: 4px 0 10px 10px;
   box-sizing: border-box;
   align-items: flex-start;
@@ -11909,10 +12603,10 @@ h1 {
 
 .app-shell.is-sidebar-collapsed:not(.is-sidebar-hover-expanded) .pinned-tab-btn {
   width: 36px;
-  height: 36px;
-  min-height: 36px;
-  max-height: 36px;
-  flex: 0 0 36px;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 0;
   border-radius: 8px;
   margin: 0;
   position: relative;

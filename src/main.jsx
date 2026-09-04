@@ -1,6 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.jsx";
+import { UseLoginPrompt } from "./UseLoginPrompt.jsx";
 import "./styles.css";
 
 class BrizoErrorBoundary extends React.Component {
@@ -82,7 +83,7 @@ class BrizoErrorBoundary extends React.Component {
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <BrizoErrorBoundary>
-      <App />
+      {window.useLoginPrompt ? <UseLoginPrompt /> : <App />}
     </BrizoErrorBoundary>
   </React.StrictMode>,
 );

@@ -12,6 +12,7 @@
     "desktop": "npm run build && electron electron/main.mjs",
     "desktop:dev": "node scripts/run-desktop-dev.mjs",
     "desktop:run": "electron electron/main.mjs",
+    "agent:install": "node scripts/install-brizo-agent.mjs",
     "desktop:startup-benchmark": "electron electron/main.mjs --startup-benchmark",
     "desktop:browser-smoke": "npm run build && electron electron/main.mjs --browser-smoke",
     "desktop:ctrip-smoke": "electron tests/ctrip-flight-live-smoke.cjs",
@@ -48,7 +49,7 @@
   "devDependencies": {
     "@phosphor-icons/react": "^2.1.10",
     "@vitejs/plugin-react": "5.0.4",
-    "electron": "^43.2.0",
+    "electron": "43.4.1",
     "electron-builder": "^26.15.3",
     "react": "19.2.0",
     "react-dom": "19.2.0",

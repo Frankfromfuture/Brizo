@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import tempfile
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -52,18 +52,10 @@ def rasterize_svg(output: Path, size: int = 1400) -> None:
     cairosvg.svg2png(url=str(SOURCE), write_to=str(output), output_width=size)
 
 
-def make_macos_style_icon(source: Image.Image) -> Image.Image:
+def make_logo_icon(source: Image.Image) -> Image.Image:
     render_size = 2048
-    tile_inset = 160
-    tile_radius = 380
-    logo_limit = 1298
+    logo_limit = 1728
     canvas = Image.new("RGBA", (render_size, render_size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle(
-        (tile_inset, tile_inset, render_size - tile_inset, render_size - tile_inset),
-        radius=tile_radius,
-        fill=(255, 255, 255, 255),
-    )
 
     logo = source.convert("RGBA")
     bounds = logo.getbbox()
@@ -99,7 +91,7 @@ def main() -> None:
         raster_path = Path(temporary_directory) / "logo.png"
         rasterize_svg(raster_path)
         with Image.open(raster_path).convert("RGBA") as source:
-            square = make_macos_style_icon(source)
+            square = make_logo_icon(source)
         resized(square, 1024).save(BUILD / "icon.png", optimize=True)
 
         iconset_sizes = {
@@ -131,7 +123,7 @@ def main() -> None:
     else:
         print("iconutil is unavailable; skipped build/icon.icns")
 
-    print("Prepared Brizo app icons from logo pic.svg on a white macOS-style tile")
+    print("Prepared Brizo app icons from logo pic.svg on a transparent background")
 
 
 if __name__ == "__main__":

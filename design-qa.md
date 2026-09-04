@@ -1,3 +1,101 @@
+## 2026-08-26 — Bookmark editor / tab hover-card frame parity correction
+
+**Comparison Target**
+
+- Source visual truth: the existing rendered tab hover card in `/Users/frankfan/Desktop/Project/Brizo/tmp/design-qa/tab-hover-card-spacing-2026-08-26.jpeg` (1152 × 768 px).
+- Focused source evidence: `/Users/frankfan/Desktop/Project/Brizo/tmp/design-qa/tab-hover-card-frame-focused-2026-08-26.jpeg` (180 × 120 px).
+- Browser-rendered implementation: `/Users/frankfan/Desktop/Project/Brizo/design-qa-bookmark-editor-exact-hover-frame.jpg` (331 × 677 px).
+- Focused implementation evidence: `/Users/frankfan/Desktop/Project/Brizo/design-qa-bookmark-editor-exact-hover-frame-focused.jpg` (321 × 275 px).
+- State: an ordinary external page is selected and the address-toolbar bookmark editor is open. The comparison is scoped to the floating surface's outer frame because the two components intentionally contain different controls and have different dimensions.
+- Density normalization: all captures are one output pixel per CSS pixel. The focused crops preserve native pixels; outer-frame equality is additionally verified from browser-computed CSS rather than inferred from differently sized content crops.
+
+**Findings**
+
+- No actionable P0, P1, or P2 difference remains in the requested outer frame.
+- Spacing and layout rhythm: both components now consume the same shared CSS rule and compute to `padding: 14px 14px 12px`, `border-radius: 14px`, and `box-sizing: border-box`. This restores the same top/side/bottom breathing space at the floating-surface boundary.
+- Colors and visual tokens: both compute to the neutral `rgb(248, 248, 248)` surface and the same `1px solid rgba(255,255,255,.9)` white hairline.
+- Elevation: both consume the same two-layer shadow: `0 8px 24px rgba(45,50,46,.12), 0 1px 4px rgba(45,50,46,.08)`.
+- Fonts and typography: unchanged from the selected editor anatomy; no typography change was requested in this correction.
+- Image quality and asset fidelity: the correction affects only CSS outer-frame material. Existing Phosphor controls remain crisp vector assets; no new raster or approximate asset was introduced.
+- Copy and content: unchanged; `编辑收藏夹`, `管理收藏夹`, `删除`, and `完成` remain intact.
+
+**Comparison History**
+
+- Pass 1 / user-reported P2: the authored `.bookmark-toolbar-editor` block contained hover-card-like values, but a later equal-specificity generic `.bookmark-editor` rule won the cascade. Browser-computed output was therefore `5px` padding, `10px` radius, `1px solid rgba(0,0,0,.16)` border, and the generic menu shadow. The prior visual QA incorrectly judged the authored declaration instead of the computed result.
+- Fix: the hover card and toolbar bookmark editor now share one later `.collapsed-tab-hovercard, .bookmark-toolbar-editor` outer-frame rule. This rule is the single source of truth and wins over the generic editor material.
+- Pass 2: the browser-computed editor values exactly match the hover-card rule for padding, border, radius, background, and both shadow layers. The focused visual comparison confirms the same pale hairline, 14 px corner profile, and light outward elevation. No P0–P2 correction remains.
+
+**Interaction And Runtime Checks**
+
+- Address-toolbar bookmark button → editor open: passed.
+- Existing editor inputs and actions remain unchanged and visible.
+- Browser console errors after hot reload and opening the corrected editor: none.
+- `npm run build`: passed and regenerated the production `dist` output.
+- Packaged desktop preview: restarted with `npm run desktop:run` against the corrected production build; no startup error was emitted.
+
+**Implementation Checklist**
+
+- [x] Remove the generic menu material's cascade override from the rendered result.
+- [x] Share one exact outer-frame rule between the tab hover card and bookmark editor.
+- [x] Verify browser-computed padding, border, radius, background, and shadow.
+- [x] Compare focused visual evidence and retain existing editor behavior.
+
+final result: passed
+
+---
+
+## 2026-08-26 — Toolbar bookmark editor redesign
+
+**Comparison Target**
+
+- Source visual truth: `/var/folders/cj/fpsmzyhn5hd3dgl4lyjvw6c40000gn/T/codex-clipboard-f487d176-7368-4c2d-b581-dfffb7f5e11c.png`
+- Browser-rendered implementation: `/Users/frankfan/Desktop/Project/Brizo/design-qa-bookmark-editor-v2.jpg`
+- Focused implementation evidence: `/Users/frankfan/Desktop/Project/Brizo/design-qa-bookmark-editor-focused.jpg`
+- Open folder-tree evidence: `/Users/frankfan/Desktop/Project/Brizo/design-qa-bookmark-folders.jpg`
+- State: ordinary external webpage selected; toolbar star editor open with the name field selected. A second capture shows the folder list open across three nested levels.
+- Browser viewport and implementation pixels: 1247 × 720 CSS px and 1247 × 720 output px at one output pixel per CSS pixel. The rendered dialog measures 320 × 240.25 CSS px.
+- Source pixels: 700 × 612. Its macOS browser chrome and 642 px-wide dialog indicate an approximately 2× source capture, giving an approximately 321 px-wide CSS dialog. The focused comparison therefore normalizes by visible component scale rather than resizing the full surrounding browser frame.
+
+**Findings**
+
+- No actionable P0, P1, or P2 differences remain.
+- Fonts and typography: the dialog uses the project-bundled HarmonyOS Sans SC face with upright 17 px/600 title text, 12.5 px labels and field copy, and restrained 12 px actions. The hierarchy and selected-name state follow the source without reintroducing italic UI text.
+- Spacing and layout rhythm: the dialog matches the source's compact 320 px footprint and vertically stacked field anatomy. Its outer 14 px radius, white hairline, 14 px content inset, control spacing, and soft two-layer shadow exactly reuse the tab hover-card geometry requested by the user.
+- Colors and visual tokens: the neutral near-white floating surface, gray controls, subtle gold-gray focus ring, pale hover states, and dark primary completion button use existing Brizo menu tokens. The source's darker webpage background is intentionally not copied into the unrelated Brizo page canvas.
+- Image quality and asset fidelity: the reference contains only standard UI icons. The close, folder, caret, selected-folder, and check controls use the established Phosphor/project icon components. No emoji, placeholder, handcrafted SVG, CSS-drawn icon, or generated raster asset was introduced.
+- Copy and content: `编辑收藏夹`, `名称`, `文件夹`, `删除`, and `完成` follow the selected reference. The source's `更多` action is intentionally replaced with the requested explicit `管理收藏夹` action.
+- Folder hierarchy: first-, second-, and third-level folder rows advance by 18 px per level; the open-state capture shows `Research → Protein structure → Tools / Papers` as a clearly staggered hierarchy while preserving deeper levels.
+
+**Interaction And Runtime Checks**
+
+- Toolbar star → bookmark editor: passed; the current page is added and its name field receives selected focus.
+- Folder trigger → hierarchical listbox: passed; the current folder is selected, nested rows are visibly indented, and choosing a row retains the existing folder-update path.
+- `管理收藏夹` → existing reusable `brizo://bookmarks` tab: passed.
+- Close, Delete, and Done remain connected to the existing close/remove/retain behavior; destructive deletion was not invoked during visual QA.
+- Browser-rendered console errors after opening the editor, opening/closing the folder list, and navigating to the organizer: none.
+- `npm run build`: passed and regenerated `dist/client`, `dist/server`, and `dist/.openai/hosting.json`.
+- Packaged desktop launch: `npm run desktop:run` loaded the latest production output without runtime errors.
+- No smoke or automated suite was run, per project instructions.
+
+**Comparison History**
+
+- Pass 1: the first render exposed a P2 hierarchy mismatch: the compact shared-menu header reduced the title and introduced a divider absent from the source. The toolbar editor now overrides that compact context style with a 17 px title, no divider, and source-like vertical field anatomy.
+- Pass 2: focused source/implementation inspection confirmed the 320 px scale, rounded surface, field rhythm, raised secondary controls, dark completion control, and explicit close affordance. The open folder-tree capture confirmed the requested three-level stagger. No P0–P2 correction remains.
+
+**Implementation Checklist**
+
+- [x] Match the hover card's outer radius, border, inset, surface, and shadow.
+- [x] Rebuild the toolbar bookmark editor with header, vertical fields, and reference button layout.
+- [x] Replace `更多` with a working `管理收藏夹` action.
+- [x] Show clear first-, second-, and third-level folder indentation.
+- [x] Preserve existing bookmark creation, editing, folder selection, deletion, and completion behavior.
+- [x] Verify the rendered states and production build.
+
+final result: passed
+
+---
+
+
 ## 2026-08-25 — 收藏夹与独立历史记录的设置页设计语言
 
 **Comparison Target**
@@ -42,6 +140,45 @@
 - [x] Add one reusable standalone History internal page with real browser/search data.
 - [x] Apply the shared gray-gold selected, CTA, hover, focus, and card language.
 - [x] Verify both desktop pages in the open local browser preview.
+
+final result: passed
+
+---
+
+## 2026-08-26 — Interactive page-tab hover card
+
+**Comparison Target**
+
+- Source visual truth: `/var/folders/cj/fpsmzyhn5hd3dgl4lyjvw6c40000gn/T/codex-clipboard-74af5459-8d43-4cf1-826e-3bc73b18ed1d.png`
+- Desktop implementation evidence: `/Users/frankfan/Desktop/Project/Brizo/tmp/design-qa/tab-hover-card-spacing-2026-08-26.jpeg`
+- State: expanded page-tab sidebar with an ordinary external-page tab hover card open to the sidebar's right.
+- Desktop viewport: 1152 × 768 CSS px; card width is exactly 180 CSS px.
+
+**Findings**
+
+- No actionable P0, P1, or P2 visual differences remain.
+- Anatomy matches the reference: softly elevated neutral card, rounded outer edge, bold clamped title, muted registrable domain, generous internal spacing, and an evenly distributed bottom icon row.
+- The requested action set replaces the reference's actions in the exact order: pin, show in new window, bookmark, delete.
+- The title clamps to two lines with an ellipsis; the domain is reduced to the registrable domain and omitted for tabs without a real HTTP(S) address.
+- The card's left edge resolves exactly 10 px to the right of the sidebar/browser-surface visual boundary rather than to an individual tab's text width and remains clamped to the visible window.
+- The domain-to-control gap and control-to-lower-edge gap both resolve from the same 12 px spacing token; no flexible spacer remains between them.
+
+**Interaction And Runtime Checks**
+
+- Ordinary external-page tab hover: passed in the packaged Electron desktop runtime.
+- Keyboard semantics: the card is exposed as a labelled dialog with a labelled four-action toolbar.
+- Card controls: pin/unpin, new Brizo webpage window, add/remove bookmark, and delete are wired to real product actions; invalid URL actions and the last-tab delete state are disabled.
+- Production build: `npm run build` passed and refreshed `dist`.
+- Desktop launch: `npm run desktop:run` loaded `dist/client/index.html` and exposed the hover card above the isolated webpage surface.
+
+**Implementation Checklist**
+
+- [x] Use a fixed 180 px card exactly 10 px to the right of both expanded and collapsed page-tab sidebar boundaries.
+- [x] Render the bold truncated title and registrable domain.
+- [x] Match the domain-to-controls and controls-to-lower-edge spacing at 12 px.
+- [x] Keep pointer and keyboard movement into the interactive card stable.
+- [x] Add a trusted renderer-to-main bridge for the real new-window action.
+- [x] Record the durable interaction decision in `AGENTS.md`.
 
 final result: passed
 
@@ -417,3 +554,15 @@ final result: passed
 - P3: a future full-screen command could be added beside zoom if Brizo exposes a dedicated product action; it was not included as decorative reference chrome.
 
 final result: passed
+
+## 2026-09-04 浏览记忆
+
+新增本地历史导入、使用偏好画像与历史网址/标题联想，沿用设置页的卡片、字体和颜色。支持 Chrome、Edge 及列出的 Chromium/Firefox 配置；以后台 SQLite 一致性快照读取，保留逐次访问记录，重复导入按来源去重。Ask/Use 使用相关域名，明确指定网站时跳过偏好选站。
+
+一次生产构建通过；桌面真实导入 Chrome 与 Edge 得到 2,841 条访问记录、2,605 个不同网页。导入中发现 Chromium 1601 纪元微秒值超过 JS 安全整数，改用 SQLite int64 读取后完成导入。地址栏站点名与含空格的标题关键词均显示历史结果，标题关键词仍保留三种搜索入口。网页预览正确提示桌面功能不可用。未运行自动化测试或外部模型完整任务；Firefox、Windows、Linux 的导入路径尚未实机验证。
+
+## 2026-09-04 收藏夹浏览权重叠加
+
+收藏夹排序改为导入浏览器访问次数与 Brizo 访问次数相加；Brizo 普通历史、浏览记忆和收藏夹点击计数重叠时取较大值，避免重复累加。网站首页汇总该站访问，独立子域首页仅汇总对应子域，深层页面使用该页访问。收藏夹栏、级联菜单和管理页共用权重；手动顺序保持原始数据，关闭时直接恢复。开关位于设置 → 智能浏览，默认开启。
+
+一次 npm run build 通过。浏览器预览已确认开关关闭与重新开启，页面无渲染错误；桌面重载及真实收藏夹顺序检查暂被 macOS 锁屏阻止，已请用户解锁。未运行自动化测试。

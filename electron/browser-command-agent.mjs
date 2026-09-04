@@ -17,17 +17,23 @@ const INTERACTIVE_SELECTOR = [
   "[role='button']",
   "[role='link']",
   "[role='checkbox']",
+  "[role='radio']",
+  "[role='tab']",
+  "[role='option']",
   "[role='menuitem']",
+  "[onclick]",
+  "[tabindex]:not([tabindex='-1'])",
   "[contenteditable='true']",
   "[class*='search-icon' i]",
   "[class*='search-btn' i]",
   "[class*='search-button' i]",
   "[data-testid*='search' i]",
   "[data-e2e*='search' i]",
+  "[data-testid^='date-day-']",
 ].join(",");
 
 const LOGIN_MODAL_PATTERN = /登录|登陆|注册|扫码.{0,4}(?:登录|登陆)|账号.{0,4}(?:登录|登陆)|手机.{0,4}(?:登录|登陆)|密码.{0,4}(?:登录|登陆)|sign\s*in|log\s*in|login|register|create\s+(?:an?\s+)?account/i;
-const LOGIN_DISMISS_PATTERN = /^(?:×|✕|✖|关闭(?:登录|登陆|注册)?(?:弹窗|窗口|对话框)?|取消|稍后|以后再说|暂不|暂不登录|暂不登陆|跳过|close(?:\s+(?:login|dialog|window))?|dismiss|cancel|skip|not\s+now|no\s+thanks)$/i;
+const LOGIN_DISMISS_PATTERN = /^(?:×|✕|✖|x|关闭(?:登录|登陆|注册)?(?:弹窗|窗口|对话框)?|取消|稍后|以后再说|暂不|暂不登录|暂不登陆|跳过|close(?:\s+(?:login|dialog|window))?|dismiss|cancel|skip|not\s+now|no\s+thanks)$/i;
 const SEARCH_CONTROL_PATTERN = /搜索|检索|查找|search|magnif/i;
 const SETTINGS_CONTROL_PATTERN = /设置|偏好|settings?|preferences?|config/i;
 const BROWSER_ACTIONS = new Set([
@@ -204,18 +210,99 @@ function scaledInputPoint(webContents, point) {
   };
 }
 
-async function settle(webContents, timeout = 8_000) {
-  const deadline = Date.now() + timeout;
-  await sleep(260);
-  while (!webContents.isDestroyed() && webContents.isLoading() && Date.now() < deadline) {
-    await sleep(120);
-  }
-  await sleep(180);
+const browserDocuments = new WeakMap();
+
+export function evaluateBrowserPage(webContents, code) {
+  // WebContents.executeJavaScript queues until window.load. Once the current
+  // main document is ready, use its frame directly so slow images cannot hold
+  // up observations, control reads, or verified page-local input.
+  if (webContents.mainFrame?.executeJavaScript) return webContents.mainFrame.executeJavaScript(code);
+  return webContents.executeJavaScript(code);
+}
+
+function trackBrowserDocument(webContents) {
+  if (browserDocuments.has(webContents)) return browserDocuments.get(webContents);
+  const state = { ready: true, previousReady: true, error: null, listeners: new Set() };
+  const notify = () => { for (const listener of state.listeners) listener(); };
+  webContents.on("did-start-navigation", (_event, _url, inPage, mainFrame) => {
+    if (!mainFrame || inPage) return;
+    if (!state.starting) state.previousReady = state.ready;
+    state.starting = false;
+    state.ready = false;
+    state.error = null;
+    notify();
+  });
+  webContents.on("dom-ready", () => { state.ready = true; state.error = null; notify(); });
+  webContents.on("did-fail-load", (_event, code, description, _url, mainFrame) => {
+    if (!mainFrame) return;
+    if (code === -3) {
+      if (state.previousReady && !webContents.isLoadingMainFrame()) state.ready = true;
+    } else state.error = new Error(`${description} (${code})`);
+    notify();
+  });
+  webContents.once("destroyed", () => { state.error = new Error("当前网页已关闭。"); notify(); });
+  browserDocuments.set(webContents, state);
+  return state;
+}
+
+function waitForBrowserDocument(webContents, { start, signal, timeout = 20_000 } = {}) {
+  const state = trackBrowserDocument(webContents);
+  return new Promise((resolve, reject) => {
+    let quietTimer;
+    let deadline;
+    let finished = false;
+    const finish = (error) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(quietTimer);
+      clearTimeout(deadline);
+      state.listeners.delete(check);
+      signal?.removeEventListener("abort", abort);
+      error ? reject(error) : resolve();
+    };
+    const abort = () => finish(signal.reason || new DOMException("Stopped", "AbortError"));
+    const check = () => {
+      if (finished) return;
+      clearTimeout(quietTimer);
+      if (state.error) return finish(state.error);
+      if (webContents.isDestroyed()) return finish(new Error("当前网页已关闭。"));
+      // Let immediate redirects and page event handlers settle, without waiting
+      // for images, analytics, or other resources to finish loading.
+      if (state.ready) quietTimer = setTimeout(() => finish(), 160);
+    };
+    state.listeners.add(check);
+    signal?.addEventListener("abort", abort, { once: true });
+    deadline = setTimeout(() => finish(new Error("网页主文档在 20 秒内未就绪。")), timeout);
+    if (signal?.aborted) return abort();
+    if (start) {
+      state.previousReady = state.ready;
+      state.starting = true;
+      state.ready = false;
+      state.error = null;
+      try {
+        // loadURL resolves only after window.load; observe its failures but let
+        // the current document's dom-ready event release the Use action.
+        Promise.resolve(start()).catch((error) => {
+          if (!isAbortedNavigationError(error)) finish(error);
+          else check();
+        });
+      } catch (error) { finish(error); }
+    } else check();
+  });
+}
+
+export function loadBrowserPageWhenReady(webContents, url, { signal } = {}) {
+  const safeUrl = assertBrowserNavigationUrl(url);
+  return waitForBrowserDocument(webContents, { start: () => webContents.loadURL(safeUrl), signal });
+}
+
+async function settle(webContents) {
+  await waitForBrowserDocument(webContents);
 }
 
 async function findLoginModalDismissTarget(webContents) {
   if (!webContents || webContents.isDestroyed()) return null;
-  const target = await webContents.executeJavaScript(`
+  const target = await evaluateBrowserPage(webContents, `
     (() => {
       const loginPattern = ${LOGIN_MODAL_PATTERN.toString()};
       const dismissPattern = ${LOGIN_DISMISS_PATTERN.toString()};
@@ -237,8 +324,8 @@ async function findLoginModalDismissTarget(webContents) {
       const modalCandidates = new Set(
         [...document.querySelectorAll('dialog,[role="dialog"],[aria-modal="true"]')].filter(visible)
       );
-      const loginSeeds = [...document.querySelectorAll('input[type="password"],input[autocomplete="current-password"],input[autocomplete="one-time-code"]')]
-        .filter(visible);
+      const loginSeeds = [...document.querySelectorAll('input[type="password"],input[autocomplete="current-password"],input[autocomplete="one-time-code"],iframe')]
+        .filter((element) => visible(element) && (element.tagName !== "IFRAME" || /login|signin|passport|登录/i.test(element.src + " " + element.title)));
       for (const seed of loginSeeds) {
         let ancestor = seed.parentElement;
         for (let depth = 0; ancestor && ancestor !== document.body && depth < 9; depth += 1, ancestor = ancestor.parentElement) {
@@ -259,9 +346,10 @@ async function findLoginModalDismissTarget(webContents) {
       const scored = [];
       for (const modal of modalCandidates) {
         const modalRect = modal.getBoundingClientRect();
-        const modalText = clean(modal.innerText || modal.getAttribute("aria-label"));
+        const modalText = clean((modal.innerText || modal.getAttribute("aria-label") || "") + " "
+          + [...modal.querySelectorAll("iframe")].map((frame) => frame.title + " " + frame.src).join(" "));
         if (!loginPattern.test(modalText)) continue;
-        const controls = [...modal.querySelectorAll(interactiveSelector + ',[class*="close" i]')].filter(visible);
+        const controls = [...modal.querySelectorAll(interactiveSelector + ',[class*="close" i],img')].filter(visible);
         for (const control of controls) {
           const rect = control.getBoundingClientRect();
           const label = clean(
@@ -275,6 +363,7 @@ async function findLoginModalDismissTarget(webContents) {
             && rect.top + rect.height / 2 <= modalRect.top + Math.min(modalRect.height * 0.34, 120);
           const compact = rect.width <= 68 && rect.height <= 68;
           const explicitDismiss = dismissPattern.test(label);
+          if (control.tagName === "IMG" && !explicitDismiss && getComputedStyle(control).cursor !== "pointer") continue;
           if (!explicitDismiss && !(topRight && compact && !label)) continue;
           const semanticModal = modal.tagName === "DIALOG"
             || modal.getAttribute("role") === "dialog"
@@ -302,16 +391,20 @@ async function findLoginModalDismissTarget(webContents) {
     : null;
 }
 
-async function dismissLoginModal(webContents, target) {
+async function dismissLoginModal(webContents, target, sendInputEvents) {
   if (!target || !webContents || webContents.isDestroyed()) return false;
   const point = scaledInputPoint(webContents, target);
-  webContents.sendInputEvent({ type: "mouseMove", x: point.x, y: point.y });
-  webContents.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, x: point.x, y: point.y });
-  webContents.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, x: point.x, y: point.y });
+  const events = [
+    { type: "mouseMove", x: point.x, y: point.y },
+    { type: "mouseDown", button: "left", clickCount: 1, x: point.x, y: point.y },
+    { type: "mouseUp", button: "left", clickCount: 1, x: point.x, y: point.y },
+  ];
+  if (sendInputEvents) await sendInputEvents(events);
+  else for (const event of events) webContents.sendInputEvent(event);
   await settle(webContents, 3_000);
   const stillVisible = await findLoginModalDismissTarget(webContents).catch(() => null);
   if (stillVisible) {
-    await webContents.executeJavaScript(`
+    await evaluateBrowserPage(webContents, `
       (() => {
         let node = document.elementFromPoint(${Number(target.x) || 0}, ${Number(target.y) || 0});
         while (node && node !== document.body) {
@@ -321,7 +414,9 @@ async function dismissLoginModal(webContents, target) {
             || role === "dialog"
             || node.getAttribute?.("aria-modal") === "true"
             || style.position === "fixed";
-          const text = String(node.innerText || "").replace(/\\s+/g, " ").slice(0, 6000);
+          const text = (String(node.innerText || "") + " "
+            + [...node.querySelectorAll("iframe")].map((frame) => frame.title + " " + frame.src).join(" "))
+            .replace(/\\s+/g, " ").slice(0, 6000);
           if (isModal && ${LOGIN_MODAL_PATTERN.toString()}.test(text)) {
             node.setAttribute("aria-hidden", "true");
             node.style.setProperty("display", "none", "important");
@@ -345,7 +440,7 @@ function isAbortedNavigationError(error) {
   return code === -3 || /ERR_ABORTED|\(-3\)\s+loading/i.test(message);
 }
 
-async function loadUrlFollowingRedirects(webContents, url) {
+async function loadUrlFollowingRedirects(webContents, url, signal) {
   const safeUrl = assertBrowserNavigationUrl(url);
   const previousUrl = webContents.getURL();
   let blockedRedirectError = null;
@@ -363,9 +458,8 @@ async function loadUrlFollowingRedirects(webContents, url) {
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        await webContents.loadURL(safeUrl);
+        await loadBrowserPageWhenReady(webContents, safeUrl, { signal });
         if (blockedRedirectError) throw blockedRedirectError;
-        await settle(webContents);
         if (blockedRedirectError) throw blockedRedirectError;
         const currentUrl = webContents.isDestroyed() ? "" : webContents.getURL();
         if (currentUrl) assertBrowserNavigationUrl(currentUrl);
@@ -390,9 +484,43 @@ async function loadUrlFollowingRedirects(webContents, url) {
   }
 }
 
+export async function detectBrowserLoginRequirement(webContents) {
+  if (!webContents || webContents.isDestroyed()) return null;
+  // Inspect form structure only; never read credential values or ask the model
+  // to decide whether it should enter them. Optional header/sidebar login stays inert.
+  return evaluateBrowserPage(webContents, `(() => {
+    const visible = (node) => {
+      const r = node.getBoundingClientRect(), s = getComputedStyle(node);
+      return s.display !== "none" && s.visibility !== "hidden" && Number(s.opacity || 1) > .02
+        && r.width > 1 && r.height > 1 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
+    };
+    const auth = /login|log[-_ ]?in|signin|sign[-_ ]?in|passport|登录|登陆/i;
+    const route = auth.test(location.hostname + location.pathname);
+    const text = String(document.body?.innerText || "").replace(/\\s+/g, " ");
+    const required = /(?:请先|必须|需要|仅限).{0,8}(?:登录|登陆)|(?:登录|登陆)后.{0,12}(?:查看|访问|继续|搜索|购买)|sign in to continue|login required/i.test(text);
+    const seeds = [...document.querySelectorAll('input[type="password"],input[autocomplete="username"],input[autocomplete="current-password"],input[autocomplete="one-time-code"],iframe')]
+      .filter((node) => visible(node) && (node.tagName !== "IFRAME" || auth.test(node.src + " " + node.title)));
+    for (const seed of seeds) {
+      let node = seed;
+      for (let depth = 0; node && node !== document.body && depth < 10; depth++, node = node.parentElement) {
+        const r = node.getBoundingClientRect();
+        const modal = node.matches('dialog,[role="dialog"],[aria-modal="true"]') || getComputedStyle(node).position === "fixed";
+        const central = r.left < innerWidth * .65 && r.right > innerWidth * .35 && r.top < innerHeight * .65 && r.bottom > innerHeight * .25;
+        if (modal && central && visible(node)) return { required: true };
+      }
+      if (route || required) return { required: true };
+      const form = seed.closest('form,main,[role="main"]');
+      const r = form?.getBoundingClientRect();
+      if (form && r.width > innerWidth * .25 && r.left < innerWidth * .65 && r.right > innerWidth * .35
+          && text.length < 1400 && auth.test(form.innerText)) return { required: true };
+    }
+    return null;
+  })()`);
+}
+
 export async function snapshotBrowserPage(webContents) {
   if (!webContents || webContents.isDestroyed()) throw new Error("当前网页已关闭。");
-  return await webContents.executeJavaScript(`
+  return await evaluateBrowserPage(webContents, `
     (() => {
       const selector = ${JSON.stringify(INTERACTIVE_SELECTOR)};
       const clean = (value, limit = 180) => String(value || "").replace(/\\s+/g, " ").trim().slice(0, limit);
@@ -481,7 +609,12 @@ export async function snapshotBrowserPage(webContents) {
         if (elements.length >= 140 || !visible(element, context)) return;
         const rect = topRect(element, context);
         const tag = String(element.tagName || "").toLowerCase();
-        const type = clean(element.getAttribute("type") || element.type, 30).toLowerCase();
+        const nativeType = clean(element.getAttribute("type") || element.type, 30).toLowerCase();
+        // A bare <button> defaults to type=submit even in a navigation menu.
+        // Only a real form owner gives that default submission semantics.
+        const type = tag === "button" && !element.form && nativeType === "submit"
+          ? "button"
+          : nativeType;
         const autocomplete = clean(element.getAttribute("autocomplete") || element.autocomplete, 80).toLowerCase();
         const fieldName = clean(element.getAttribute("name") || element.name, 120);
         const semanticHint = clean([
@@ -493,12 +626,16 @@ export async function snapshotBrowserPage(webContents) {
           element.getAttribute("data-type"),
         ].filter(Boolean).join(" "), 240);
         const labels = element.labels ? [...element.labels].map((label) => label.innerText).join(" ") : "";
-        const sensitive = type === "password"
+        const calendarDate = element.closest('[data-testid^="date-day-"]')
+          ?.getAttribute("data-testid")?.match(/^date-day-([0-9]{4}-[0-9]{2}-[0-9]{2})$/)?.[1] || "";
+        const credentialField = tag === "input" && (autocomplete === "username"
+          || Boolean(element.closest("form")?.querySelector('input[type="password"],input[autocomplete="current-password"]')));
+        const sensitive = credentialField || type === "password"
           || type === "file"
           || /(?:password|one-time-code|webauthn|^cc-)/i.test(autocomplete)
           || /(?:passw(?:or)?d|passwd|secret|token|otp|one.?time|cvv|cvc|card.?number)/i.test(fieldName + " " + (element.id || ""));
         const contentEditable = element.isContentEditable;
-        const rawValue = contentEditable
+        const rawValue = sensitive ? "" : contentEditable
           ? element.innerText || element.textContent || ""
           : "value" in element ? element.value ?? "" : "";
         const explicitText = clean(
@@ -532,10 +669,11 @@ export async function snapshotBrowserPage(webContents) {
           domRef,
           tag,
           role: clean(element.getAttribute("role"), 40),
-          name: explicitText || inferredText,
+          name: calendarDate ? calendarDate + " " + explicitText : explicitText || inferredText,
           fieldName,
           type,
           autocomplete,
+          credentialField: credentialField || type === "password" || /current-password|one-time-code/.test(autocomplete),
           href: tag === "a" ? clean(element.href, 500) : "",
           ...(sensitive ? {
             sensitive: true,
@@ -548,7 +686,8 @@ export async function snapshotBrowserPage(webContents) {
           }),
           purpose: inferredText,
           required: Boolean(element.required || element.getAttribute("aria-required") === "true"),
-          disabled: Boolean(element.disabled || element.getAttribute("aria-disabled") === "true"),
+          disabled: Boolean(element.disabled || element.getAttribute("aria-disabled") === "true"
+            || (calendarDate && element.classList.contains("date-disabled"))),
           readOnly: Boolean(element.readOnly || element.getAttribute("aria-readonly") === "true"),
           min: clean(element.getAttribute("min"), 80),
           max: clean(element.getAttribute("max"), 80),
@@ -557,7 +696,7 @@ export async function snapshotBrowserPage(webContents) {
           minLength: element.hasAttribute("minlength") ? Number(element.getAttribute("minlength")) : null,
           maxLength: element.hasAttribute("maxlength") ? Number(element.getAttribute("maxlength")) : null,
           multiple: Boolean(element.multiple),
-          submitsForm: /^(?:button|input)$/i.test(tag) && /^(?:submit|image)$/i.test(element.type || ""),
+          submitsForm: Boolean(element.form) && /^(?:button|input)$/i.test(tag) && /^(?:submit|image)$/i.test(element.type || ""),
           ...(checkedType ? { checked: Boolean(element.checked) } : {}),
           ...(ariaSelected !== null ? { selected: ariaSelected === "true" } : {}),
           ...(isSelect ? {
@@ -581,9 +720,55 @@ export async function snapshotBrowserPage(webContents) {
         if (!root || depth > 8 || seenRoots.has(root)) return;
         seenRoots.add(root);
         root.querySelectorAll?.("[data-brizo-agent-ref]").forEach((element) => element.removeAttribute("data-brizo-agent-ref"));
+        const overlays = [...(root.querySelectorAll?.('[role="dialog"],[aria-modal="true"],[role="listbox"],.calendar-modal') || [])]
+          .filter((element) => visible(element, context)).slice(0, 12);
+        for (const overlay of overlays) {
+          if (overlay.innerText) textChunks.unshift(overlay.innerText);
+        }
         if (root.nodeType === Node.DOCUMENT_NODE && root.body?.innerText) textChunks.push(root.body.innerText);
-        for (const element of root.querySelectorAll?.(selector) || []) appendElement(element, context, frameRef, frameDepth);
         const nodes = [...(root.querySelectorAll?.("*") || [])];
+        // Portalled calendars/listboxes often follow the entire document.
+        // Reserve the bounded snapshot for their currently visible controls
+        // before background links exhaust the 140-element budget.
+        const overlayNodes = new Set(nodes.filter((node) => overlays.some((overlay) => overlay.contains(node))));
+        const explicitControls = new Set(root.querySelectorAll?.(selector) || []);
+        // Some custom suggestions expose neither ARIA roles nor a pointer
+        // cursor. Keep compact matching text directly below the focused field
+        // available for an observed, ref-based click without treating Enter as safe.
+        const focused = root.activeElement;
+        const fieldValue = focused && /^(?:INPUT|TEXTAREA)$/.test(focused.tagName || "")
+          && !/^(?:password|file)$/.test(focused.type || "")
+          ? clean(focused.value, 80) : "";
+        const fieldRect = fieldValue && visible(focused, context) ? topRect(focused, context) : null;
+        const suggestions = new Set(fieldRect ? nodes.filter((node) => {
+          if (overlayNodes.has(node) || node === focused || !visible(node, context)) return false;
+          const label = clean(node.innerText || node.textContent, 100);
+          if (!label || label.length > 80 || !label.includes(fieldValue) || node.querySelector(selector)) return false;
+          const rect = topRect(node, context);
+          return rect.height <= 64 && rect.width <= 600
+            && rect.right > fieldRect.left && rect.left < fieldRect.right
+            && rect.top >= fieldRect.bottom - 4 && rect.top <= fieldRect.bottom + 360;
+        }) : []);
+        for (const element of [...overlayNodes, ...suggestions, ...nodes.filter((node) => !overlayNodes.has(node) && !suggestions.has(node))]) {
+          if (explicitControls.has(element)) {
+            appendElement(element, context, frameRef, frameDepth);
+            continue;
+          }
+          // Some travel forms implement radios, date cells and city options
+          // as plain text elements. Expose only compact, visible pointer
+          // targets, not arbitrary text or whole clickable page containers.
+          if (!/^(?:LABEL|DIV|SPAN|P|DT|DD|LI|TD)$/.test(element.tagName || "")
+            || !visible(element, context)) continue;
+          const view = element.ownerDocument.defaultView;
+          if (!suggestions.has(element) && view.getComputedStyle(element).cursor !== "pointer") continue;
+          const label = clean(element.innerText || element.textContent, 100);
+          if (!label || label.length > 80 || element.querySelector(selector)) continue;
+          if ([...element.children].some((child) =>
+            clean(child.innerText || child.textContent, 100) === label
+              && (suggestions.has(child) || view.getComputedStyle(child).cursor === "pointer")
+          )) continue;
+          appendElement(element, context, frameRef, frameDepth);
+        }
         for (const node of nodes) {
           if (node.shadowRoot) collectRoot(node.shadowRoot, context, frameRef, frameDepth, depth + 1);
         }
@@ -638,6 +823,55 @@ function actionTarget(snapshot, action) {
   return index >= 0 ? snapshot.elements[index] : null;
 }
 
+function actionMayReplaceDocument(action) {
+  const kind = String(action?.action || "").toLowerCase();
+  if (["navigate", "click", "back", "forward", "reload"].includes(kind)) return true;
+  return kind === "press" && /^(?:enter|return)$/i.test(String(action?.key || "Enter"));
+}
+
+async function snapshotBrowserPageAfterAction({
+  action,
+  onPageTransition,
+  waitForRunPermission,
+  webContents,
+}) {
+  if (!actionMayReplaceDocument(action)) return await snapshotBrowserPage(webContents);
+
+  const deadline = Date.now() + 5_000;
+  let lastError = null;
+  let transitionAnnounced = false;
+  while (!webContents.isDestroyed() && Date.now() < deadline) {
+    await waitForRunPermission?.();
+    try {
+      const firstSnapshot = await snapshotBrowserPage(webContents);
+      // A submit or click can destroy the old execution context just after it
+      // produced one last readable snapshot. Require a second readable document
+      // after a short quiet window before handing its element refs to the planner.
+      await sleep(220);
+      await waitForRunPermission?.();
+      const liveUrl = String(webContents.getURL?.() || "");
+      if (liveUrl && liveUrl !== String(firstSnapshot.url || "")) {
+        throw new Error("页面仍在切换，旧文档快照已经失效。");
+      }
+      const stableSnapshot = await snapshotBrowserPage(webContents);
+      if (String(stableSnapshot.url || "") !== String(firstSnapshot.url || "")) {
+        throw new Error("页面在连续读取之间发生了跳转。");
+      }
+      return stableSnapshot;
+    } catch (error) {
+      if (error?.name === "AbortError") throw error;
+      lastError = error;
+      if (!transitionAnnounced) {
+        transitionAnnounced = true;
+        onPageTransition?.();
+      }
+      if (Date.now() >= deadline || webContents.isDestroyed()) break;
+      await sleep(180);
+    }
+  }
+  throw lastError || new Error("页面切换后仍无法读取。");
+}
+
 function isSearchSnapshotTarget(target) {
   return Boolean(target) && (
     target.type === "search"
@@ -656,7 +890,10 @@ function isTextEntrySnapshotTarget(target) {
   );
 }
 
-export async function executeBrowserCommandAction({ action, command, snapshot, validateNavigation, webContents }) {
+export async function executeBrowserCommandAction({ action, command, sendInputEvents, signal, snapshot, validateNavigation, webContents }) {
+  const dispatchInput = sendInputEvents || ((events) => {
+    for (const event of events) webContents.sendInputEvent(event);
+  });
   const kind = String(action?.action || "").toLowerCase();
   const target = actionTarget(snapshot, action);
   if (["click", "fill", "select"].includes(kind) && !target) {
@@ -677,7 +914,7 @@ export async function executeBrowserCommandAction({ action, command, snapshot, v
     const url = assertBrowserNavigationUrl(action.url);
     if (allowedNavigationUrlOrEmpty(snapshot.url) === url) return { status: "continued", result: "already-satisfied" };
     await validateNavigation?.(url);
-    await loadUrlFollowingRedirects(webContents, url);
+    await loadUrlFollowingRedirects(webContents, url, signal);
     const finalUrl = assertBrowserNavigationUrl(webContents.getURL());
     if (finalUrl === allowedNavigationUrlOrEmpty(snapshot.url)) {
       throw new Error("导航结束后仍停留在原页面，目标页面未得到验证。");
@@ -709,13 +946,13 @@ export async function executeBrowserCommandAction({ action, command, snapshot, v
   }
   if (kind === "scroll") {
     const amount = Math.max(-1600, Math.min(1600, Number(action.amount) || 560));
-    await webContents.executeJavaScript(`window.scrollBy({top:${amount},behavior:"smooth"})`);
+    await evaluateBrowserPage(webContents, `window.scrollBy({top:${amount},behavior:"smooth"})`);
     await sleep(420);
     return { status: "continued" };
   }
   if (kind === "click") {
     if (target.disabled) throw new Error("目标控件当前不可用。");
-    const position = await webContents.executeJavaScript(`
+    const position = await evaluateBrowserPage(webContents, `
       (() => {
         const located = ${BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE}(${JSON.stringify(target.domRef || "")});
         const element = located?.element;
@@ -730,9 +967,11 @@ export async function executeBrowserCommandAction({ action, command, snapshot, v
     `);
     if (!position) throw new Error("页面元素引用已经失效，请重新观察页面。");
     const point = scaledInputPoint(webContents, position);
-    webContents.sendInputEvent({ type: "mouseMove", x: point.x, y: point.y });
-    webContents.sendInputEvent({ type: "mouseDown", button: "left", clickCount: 1, x: point.x, y: point.y });
-    webContents.sendInputEvent({ type: "mouseUp", button: "left", clickCount: 1, x: point.x, y: point.y });
+    await dispatchInput([
+      { type: "mouseMove", x: point.x, y: point.y },
+      { type: "mouseDown", button: "left", clickCount: 1, x: point.x, y: point.y },
+      { type: "mouseUp", button: "left", clickCount: 1, x: point.x, y: point.y },
+    ]);
     await settle(webContents);
     return { status: "continued" };
   }
@@ -742,7 +981,7 @@ export async function executeBrowserCommandAction({ action, command, snapshot, v
     if (String(target.value || "") === value) {
       return { status: "continued", result: "already-satisfied" };
     }
-    const filled = await webContents.executeJavaScript(`
+    const filled = await evaluateBrowserPage(webContents, `
       (() => {
         const located = ${BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE}(${JSON.stringify(target.domRef || "")});
         const element = located?.element;
@@ -791,7 +1030,7 @@ export async function executeBrowserCommandAction({ action, command, snapshot, v
     if (String(target.value || "") === value) {
       return { status: "continued", result: "already-satisfied" };
     }
-    const selected = await webContents.executeJavaScript(`
+    const selected = await evaluateBrowserPage(webContents, `
       (() => {
         const located = ${BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE}(${JSON.stringify(target.domRef || "")});
         const element = located?.element;
@@ -822,9 +1061,11 @@ export async function executeBrowserCommandAction({ action, command, snapshot, v
     };
   }
   if (kind === "press") {
-    const key = String(action.key || "Enter").slice(0, 40);
+    const requestedKey = String(action.key || "Enter").slice(0, 40);
+    const isEnter = /^(?:Enter|Return)$/i.test(requestedKey);
+    const key = isEnter ? "Return" : requestedKey;
     if (target) {
-      const focused = await webContents.executeJavaScript(`
+      const focused = await evaluateBrowserPage(webContents, `
         (() => {
           const located = ${BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE}(${JSON.stringify(target.domRef || "")});
           const element = located?.element;
@@ -836,8 +1077,13 @@ export async function executeBrowserCommandAction({ action, command, snapshot, v
       `);
       if (!focused) throw new Error("页面元素引用已经失效，请重新观察页面。");
     }
-    webContents.sendInputEvent({ type: "keyDown", keyCode: key });
-    webContents.sendInputEvent({ type: "keyUp", keyCode: key });
+    // Chromium does not synthesize keypress/default form submission from a
+    // raw keyDown. Textarea search boxes such as Bing's need the CR character.
+    await dispatchInput([
+      { type: "keyDown", keyCode: key },
+      ...(isEnter ? [{ type: "char", keyCode: "\r" }] : []),
+      { type: "keyUp", keyCode: key },
+    ]);
     await settle(webContents, 5_000);
     return { status: "continued" };
   }
@@ -871,9 +1117,12 @@ function browserActionFingerprint(action, snapshot) {
 
 export async function runBrowserCommandAgent({
   command,
+  initialNavigation,
   enforceNormalEntryNavigation = false,
   onProgress = () => {},
+  onLoginRequired,
   planNextAction,
+  sendInputEvents,
   signal,
   validateNavigation,
   waitIfPaused,
@@ -882,6 +1131,7 @@ export async function runBrowserCommandAgent({
   const maxActions = 50;
   const cleanCommand = String(command || "").trim().slice(0, 2000);
   if (!cleanCommand) return { status: "error", message: "请输入浏览器命令。" };
+  trackBrowserDocument(webContents);
   const evidence = createBrowserExecutionEvidence(cleanCommand);
   const history = [];
   let actionsExecuted = 0;
@@ -896,6 +1146,7 @@ export async function runBrowserCommandAgent({
   let repeatedLoginDismissCount = 0;
   let lastSnapshot = null;
   let prefetchedSnapshot = null;
+  let entryNavigationPending = initialNavigation;
   const withEvidence = (result, snapshot = prefetchedSnapshot || lastSnapshot) => ({
     ...result,
     evidenceLedger: evidence.exportEntries(),
@@ -911,6 +1162,15 @@ export async function runBrowserCommandAgent({
     signal?.throwIfAborted();
     await waitIfPaused?.();
     signal?.throwIfAborted();
+  };
+  const waitForManualLogin = async () => {
+    onProgress("此页面需要登录，Use 已暂停，请在网页中输入用户名和密码");
+    await onLoginRequired();
+    await waitForRunPermission();
+    // Login may navigate: never reuse pre-login references or loop counters.
+    prefetchedSnapshot = null;
+    previousSnapshotFingerprint = previousActionFingerprint = previousActionPageFingerprint = "";
+    unchangedPageCount = repeatedActionCount = alreadySatisfiedCount = 0;
   };
   while (true) {
     await waitForRunPermission();
@@ -942,6 +1202,37 @@ export async function runBrowserCommandAgent({
         history,
       }, snapshot);
     }
+    if (entryNavigationPending) {
+      const entry = entryNavigationPending;
+      entryNavigationPending = null;
+      let verifiedEntry = false;
+      try {
+        const requested = new URL(assertBrowserNavigationUrl(entry.requestedUrl));
+        const arrived = new URL(assertBrowserNavigationUrl(snapshot.url));
+        verifiedEntry = evidence.profile.intents.length === 1
+          && evidence.profile.intents[0] === "navigate"
+          && entry.beforeUrl !== entry.finalUrl
+          && entry.finalUrl === snapshot.url
+          && requested.hostname.replace(/^www\./, "") === arrived.hostname.replace(/^www\./, "")
+          && requested.port === arrived.port
+          && requested.pathname === "/" && arrived.pathname === "/"
+          && !arrived.search && !arrived.hash;
+      } catch { /* An invalid or mismatched receipt never counts as execution. */ }
+      if (verifiedEntry) {
+        const token = evidence.beginAction({
+          action: { action: "navigate", url: entry.requestedUrl },
+          snapshot: { url: entry.beforeUrl },
+          source: "system",
+          target: null,
+        });
+        evidence.finishAction(token, {
+          afterSnapshot: snapshot,
+          outcome: { status: "continued", result: "navigated", postcondition: { kind: "safe-navigation", verified: true } },
+        });
+        history.push({ action: "navigate", ref: "", target: sanitizeBrowserEvidenceUrl(snapshot.url), value: "", result: "navigated" });
+        actionsExecuted += 1;
+      }
+    }
     const loginDismissTarget = await findLoginModalDismissTarget(webContents);
     if (loginDismissTarget) {
       const loginDismissFingerprint = JSON.stringify([
@@ -964,7 +1255,7 @@ export async function runBrowserCommandAgent({
           target: null,
         });
         try {
-          await dismissLoginModal(webContents, loginDismissTarget);
+          await dismissLoginModal(webContents, loginDismissTarget, sendInputEvents);
           await waitForRunPermission();
           const afterSnapshot = await snapshotBrowserPage(webContents);
           prefetchedSnapshot = afterSnapshot;
@@ -994,6 +1285,12 @@ export async function runBrowserCommandAgent({
     } else {
       previousLoginDismissFingerprint = "";
       repeatedLoginDismissCount = 0;
+    }
+    const loginRequirement = await detectBrowserLoginRequirement(webContents);
+    if (loginRequirement) {
+      if (!onLoginRequired) return withEvidence({ status: "needs-login", message: "请在网页中登录后继续。", history }, snapshot);
+      await waitForManualLogin();
+      continue;
     }
     const snapshotFingerprint = browserSnapshotFingerprint(snapshot);
     unchangedPageCount = snapshotFingerprint === previousSnapshotFingerprint ? unchangedPageCount + 1 : 0;
@@ -1058,6 +1355,11 @@ export async function runBrowserCommandAgent({
       }
     }
     const requestedTarget = actionTarget(snapshot, action);
+    if (action.action === "fill" && requestedTarget?.credentialField) {
+      if (!onLoginRequired) return withEvidence({ status: "needs-login", message: "请在网页中手动输入登录信息。", history }, snapshot);
+      await waitForManualLogin();
+      continue;
+    }
     if (
       action.action === "click"
       && requestedTarget
@@ -1089,7 +1391,8 @@ export async function runBrowserCommandAgent({
     if (repeatedActionCount >= 5) {
       return withEvidence({ status: "error", message: "BrowserSkill 检测到相同动作连续重复，已自动终止错误循环。", history }, snapshot);
     }
-    onProgress(`正在执行第 ${actionsExecuted + 1} 步：${action.action}`);
+    const targetLabel = String(actionTarget(snapshot, action)?.name || "").slice(0, 80);
+    onProgress(`正在执行第 ${actionsExecuted + 1} 步：${action.action}${targetLabel ? ` · ${targetLabel}` : ""}`);
     let outcome;
     const evidenceTarget = actionTarget(snapshot, action);
     const evidenceToken = evidence.beginAction({
@@ -1101,6 +1404,8 @@ export async function runBrowserCommandAgent({
       outcome = await executeBrowserCommandAction({
         action,
         command: cleanCommand,
+        sendInputEvents,
+        signal,
         snapshot,
         validateNavigation,
         webContents,
@@ -1128,7 +1433,12 @@ export async function runBrowserCommandAgent({
     }
     let afterSnapshot;
     try {
-      afterSnapshot = await snapshotBrowserPage(webContents);
+      afterSnapshot = await snapshotBrowserPageAfterAction({
+        action,
+        onPageTransition: () => onProgress("页面正在切换，正在重新读取"),
+        waitForRunPermission,
+        webContents,
+      });
       await waitForRunPermission();
     } catch (error) {
       evidence.finishAction(evidenceToken, { error, outcome });
@@ -1166,11 +1476,13 @@ export async function runBrowserCommandAgent({
     history.push({
       action: action.action,
       ref: action.ref || "",
-      target: action.ref || (action.url ? sanitizeBrowserEvidenceUrl(action.url) : ""),
+      target: evidenceTarget?.sensitive ? action.ref : targetLabel || action.ref || (action.url ? sanitizeBrowserEvidenceUrl(action.url) : ""),
       value: ["fill", "select"].includes(action.action)
         ? (evidenceTarget?.sensitive || evidenceTarget?.type === "password" ? "[secret]" : "[redacted]")
         : "",
-      result: outcome.result || "executed",
+      result: postcondition.verified || outcome.result === "already-satisfied"
+        ? outcome.result || "executed"
+        : "no-observable-change",
     });
     actionsExecuted += 1;
   }
