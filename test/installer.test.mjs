@@ -28,6 +28,10 @@ test("installs native adapters and removes only managed files", async t => {
   assert.equal(installed.adapters.length, HARNESS_ADAPTERS.length);
   assert.equal(installed.skipped.length, 0);
   assert.match(await readFile(path.join(installed.bundle, "SKILL.md"), "utf8"), /# Brizo/);
+  assert.equal(
+    JSON.parse(await readFile(path.join(installed.bundle, "package.json"), "utf8")).version,
+    BRIZO_PACKAGE_VERSION,
+  );
 
   const nativeSkillPaths = [
     [".agents", "skills", "brizo"],
