@@ -1,6 +1,6 @@
 {
   "name": "brizo",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Open Brizo Use runtime and adapters for isolated browser tasks across AI harnesses.",
   "type": "module",
   "main": "./lib/client.mjs",

@@ -231,3 +231,26 @@ test("doctor reports copied adapters from an older package as outdated", async t
   assert.equal(status.adapters.find(item => item.id === "claude-code").status, "outdated");
   assert.equal(status.outdatedCount, 1);
 });
+
+test("upgrades versioned command adapters from an older package", async t => {
+  const homeDirectory = await mkdtemp(path.join(os.tmpdir(), "brizo-command-upgrade-"));
+  t.after(() => rm(homeDirectory, { recursive: true, force: true }));
+  const commandPath = path.join(homeDirectory, ".gemini", "commands", "brizo.toml");
+  await mkdir(path.dirname(commandPath), { recursive: true });
+  await writeFile(
+    commandPath,
+    '# installed-by-brizo-npm version=0.3.0 protocol=1\ndescription = "old managed command"\n',
+  );
+
+  const installed = await installIntegration({
+    homeDirectory,
+    packageRoot,
+    env: {},
+    targets: ["gemini"],
+  });
+
+  assert.equal(installed.skipped.length, 0);
+  const upgraded = await readFile(commandPath, "utf8");
+  assert.match(upgraded, new RegExp(`version=${BRIZO_PACKAGE_VERSION}`));
+  assert.doesNotMatch(upgraded, /old managed command/u);
+});

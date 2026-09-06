@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1 - 2026-09-06
+
+- Upgraded versioned Brizo-managed slash-command adapters in place while continuing to preserve unmarked user files.
+
 ## 0.4.0 - 2026-09-06
 
 - Added deterministic read-only search flows for Xiaohongshu, Douban, Bilibili, and Weibo.
