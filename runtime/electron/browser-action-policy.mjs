@@ -28,6 +28,7 @@ const EXPLICIT_ENTER_PATTERN = /按(?:下)?(?:回车|enter)|press\s+enter/i;
 const SEARCH_INTENT_PATTERN = /搜索|检索|查找|search|find/i;
 // “搜” also covers colloquial requests such as “去淘宝搜 10 个产品” and “搜一下”.
 const QUERY_INTENT_PATTERN = /搜|查询|检索|查找|查.{0,80}(?:航班|机票|车票|酒店|商品|价格|时间|资料|信息|差评|好评|评论|影评|评价|评分)|\b(?:search|find|look\s+up)\b/i;
+const INFORMATION_LOOKUP_INTENT_PATTERN = /(?:多少分|评分|分数|评价|影评|短评|书评|简介|资料|信息|播放量|观看数|点赞数|收藏数|热度|作者|导演|演员|score|rating|reviews?|details?|information|views?)/i;
 
 function isRequestedReadOnlySearch(command, target) {
   // Search forms often use native submit buttons. The user's query authorizes
@@ -35,8 +36,9 @@ function isRequestedReadOnlySearch(command, target) {
   const label = String(target?.name || "")
     .replace(/[\uE000-\uF8FF\s]/gu, "")
     .trim();
-  return QUERY_INTENT_PATTERN.test(String(command || ""))
-    && /^(?:(?:搜索|查询|检索|查找)(?:航班|机票|车票|酒店|商品|价格|结果)?|search|find)$/i.test(label);
+  const commandText = String(command || "");
+  return (QUERY_INTENT_PATTERN.test(commandText) || INFORMATION_LOOKUP_INTENT_PATTERN.test(commandText))
+    && /^(?:(?:搜索|搜一搜|搜一下|查询|检索|查找)(?:航班|机票|车票|酒店|商品|价格|电影|影片|书籍|视频|内容|结果)?|search|find)$/i.test(label);
 }
 
 export function hasNegativeSubmissionConstraint(command) {

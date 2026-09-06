@@ -103,6 +103,8 @@ const SITE_MENTION_GLOBALS = Object.freeze([
 const SEARCH_ACTION_PATTERN = /(?:搜索|搜一搜|搜一下|搜|查找|查一下|检索|找一下|找)/u;
 const CONTENT_NOUN_PATTERN = /(?:笔记|视频|微博|帖子|动态|广播|结果|条目|电影|书籍|影评|书评|内容)/u;
 const COUNT_PATTERN = /(\d{1,2}|[一二三四五六七八九十两]{1,3})\s*(?:篇|条|个|部|本)\s*(?:相关的?)?(?:笔记|视频|微博|帖子|动态|广播|结果|条目|电影|书籍|影评|书评|内容)?/u;
+const IMPLICIT_LOOKUP_DETAIL_PATTERN = /(?:多少分|评分|分数|评价|影评|短评|书评|简介|资料|信息|播放量|观看数|点赞数|收藏数|热度|作者|导演|演员|电影|影片|剧集|电视剧|书籍|图书|视频|笔记|帖子|动态|条目|作品|score|rating|review|details?|information|views?)/iu;
+const SINGLE_ITEM_DETAIL_PATTERN = /(?:多少分|评分|分数|简介|播放量|观看数|点赞数|收藏数|作者|导演|演员|score|rating|views?)\s*[?？]?$/iu;
 
 function compactVerification(checks) {
   const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
@@ -177,7 +179,9 @@ function chineseNumber(value) {
 
 function requestedCount(command) {
   const match = command.match(COUNT_PATTERN);
-  return Math.max(1, Math.min(10, chineseNumber(match?.[1] || "") || 5));
+  const explicitCount = chineseNumber(match?.[1] || "");
+  if (explicitCount) return Math.max(1, Math.min(10, explicitCount));
+  return SINGLE_ITEM_DETAIL_PATTERN.test(command) ? 1 : 5;
 }
 
 function requestedSort(command) {
@@ -220,6 +224,20 @@ function queryFromCommand(command) {
   return normalizedQuery(suffix);
 }
 
+function queryFromImplicitLookup(command) {
+  let query = command;
+  for (const pattern of SITE_MENTION_GLOBALS) query = query.replace(pattern, " ");
+  query = query
+    .replace(/^(?:请(?:帮我)?|帮我|麻烦(?:你)?|给我)?\s*(?:看看?|了解|告诉我|想知道)?\s*/u, "")
+    .replace(/[?？]+$/u, "")
+    .replace(
+      /\s*(?:(?:这部|这个|该)?(?:最新|热门|相关)?(?:电影|影片|剧集|电视剧|书籍|图书|书|视频|笔记|微博|帖子|动态|条目|作品)(?:的)?(?:多少分|评分|分数|评价|影评|短评|书评|简介|资料|信息|播放量|观看数|点赞数|收藏数|热度|作者|导演|演员)?|(?:多少分|评分|分数|评价|影评|短评|书评|简介|资料|信息|播放量|观看数|点赞数|收藏数|热度|作者|导演|演员|score|rating|reviews?|details?|information|views?))\s*$/iu,
+      "",
+    )
+    .replace(/^[\s:：]+|[\s:：]+$/gu, "");
+  return normalizedQuery(query);
+}
+
 function parseForSite(value, currentUrl = "", forcedSite = "") {
   const command = String(value || "").replace(/\s+/gu, " ").trim();
   if (!command) return null;
@@ -230,8 +248,15 @@ function parseForSite(value, currentUrl = "", forcedSite = "") {
   if (!SITE_CONFIG[site]) return null;
   const currentQuery = mainstreamContentQueryFromUrl(currentUrl, site);
   const hasSearchAction = SEARCH_ACTION_PATTERN.test(command);
-  if (!hasSearchAction && !(currentQuery && CONTENT_NOUN_PATTERN.test(command))) return null;
-  const query = queryFromCommand(command) || currentQuery;
+  const explicitQuery = queryFromCommand(command);
+  const implicitQuery = !hasSearchAction && IMPLICIT_LOOKUP_DETAIL_PATTERN.test(command)
+    ? queryFromImplicitLookup(command)
+    : "";
+  if (!hasSearchAction
+    && !(currentQuery && CONTENT_NOUN_PATTERN.test(command))
+    && !implicitQuery
+    && !(mentionedSite && explicitQuery)) return null;
+  const query = explicitQuery || implicitQuery || currentQuery;
   if (!query) return null;
   return Object.freeze({
     command,

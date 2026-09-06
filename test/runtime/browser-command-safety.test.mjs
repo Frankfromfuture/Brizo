@@ -182,6 +182,23 @@ test("an explicitly targeted search Enter is separate from fill and remains allo
   );
 });
 
+test("an informational site lookup can submit only the exact search control", () => {
+  const search = authorizeBrowserAction({
+    action: { action: "click", ref: "@e1" },
+    command: "豆瓣特立独行电影分数",
+    target: { ref: "@e1", name: "搜索", tag: "button", type: "submit", submitsForm: true },
+  });
+  assert.equal(search.allowed, true);
+
+  const publish = authorizeBrowserAction({
+    action: { action: "click", ref: "@e2" },
+    command: "豆瓣特立独行电影分数",
+    target: { ref: "@e2", name: "发布影评", tag: "button", type: "submit", submitsForm: true },
+  });
+  assert.equal(publish.allowed, false);
+  assert.equal(publish.code, "explicit-authorization-required");
+});
+
 test("navigation URL policy blocks local, private, metadata, credential and unsafe-port targets", async (t) => {
   const blockedUrls = [
     "http://localhost/",

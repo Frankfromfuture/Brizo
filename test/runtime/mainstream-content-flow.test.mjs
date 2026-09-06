@@ -76,6 +76,20 @@ test("parses and builds exact search intents for four mainstream content sites",
   assert.equal(parseXiaohongshuContentCommand(cases[1].command), null);
 });
 
+test("infers read-only lookups that omit an explicit search verb", () => {
+  const douban = parseMainstreamContentCommand("豆瓣特立独行电影分数");
+  assert.deepEqual(
+    { site: douban.site, query: douban.query, contentType: douban.contentType, count: douban.count },
+    { site: "douban", query: "特立独行", contentType: "movie", count: 1 },
+  );
+
+  const bilibili = parseMainstreamContentCommand("B站 Rust 教程播放量");
+  assert.deepEqual(
+    { site: bilibili.site, query: bilibili.query, contentType: bilibili.contentType, count: bilibili.count },
+    { site: "bilibili", query: "Rust 教程", contentType: "video", count: 1 },
+  );
+});
+
 test("rejects a lookalike search URL and item URL outside the intended site", () => {
   const intent = parseWeiboContentCommand(cases[3].command);
   assert.equal(mainstreamContentSearchUrlMatches(

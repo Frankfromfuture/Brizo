@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.2 - 2026-09-06
+
+- Recognized natural read-only requests such as `豆瓣特立独行电影分数` without requiring an explicit “搜索” verb.
+- Allowed the exact search control for informational lookups while preserving authorization checks for publishing and other external-impact actions.
+
 ## 0.4.1 - 2026-09-06
 
 - Upgraded versioned Brizo-managed slash-command adapters in place while continuing to preserve unmarked user files.
