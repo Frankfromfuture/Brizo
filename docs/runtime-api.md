@@ -55,7 +55,7 @@ Use `snapshotBrowserPage` and `executeBrowserCommandAction` directly only when t
 
 `brizo/runtime/result` exports deterministic evidence preparation, formatting, and Markdown audit helpers. `brizo/runtime/usage` exports a per-run provider usage collector. Provider input and output totals must come from real response metadata; callers must not estimate missing token counts.
 
-`brizo/runtime/adapters` contains the current deterministic Ctrip flight and Taobao price flows. These adapters still use the same navigation, security-block, observation, and postcondition rules as the general engine.
+`brizo/runtime/adapters` contains deterministic Ctrip flight and Taobao price flows, plus a shared read-only content flow for Xiaohongshu, Douban, Bilibili, and Weibo. The content adapters expose site-specific command parsers and URL builders together with shared observation, stable-wait, selection, verification, formatting, and highlighting helpers. Every adapter uses the same navigation, security-block, observation, and postcondition rules as the general engine.
 
 ## Compatibility
 

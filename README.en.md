@@ -2,7 +2,7 @@
 
 Brizo is an open-source browser Use runtime and Agent integration toolkit. It connects local AI harnesses such as Claude Code, Cursor, TRAE, Qwen Code, Codex, and others to isolated Brizo browser sessions.
 
-This repository contains only the Use layer: the CLI client, local bridge protocol, isolated task sandbox, page observation and actions, safety policies, result auditing, site adapters, and harness installers. The Brizo Browse window, tabs, bookmarks, downloads, passwords, search, and other product code remain in a private repository.
+This repository contains only the Use layer: the CLI client, local bridge protocol, isolated task sandbox, page observation and actions, safety policies, result auditing, site adapters, and harness installers. Site flows currently cover Ctrip, Taobao, Xiaohongshu, Douban, Bilibili, and Weibo. The Brizo Browse window, tabs, bookmarks, downloads, passwords, search, and other product code remain in a private repository.
 
 ## Install
 

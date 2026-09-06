@@ -12,6 +12,10 @@ test("public pure-Node runtime entry points link without Electron", () => {
   for (const exported of [
     adapters.parseCtripFlightCommand,
     adapters.parseTaobaoPriceCommand,
+    adapters.parseXiaohongshuContentCommand,
+    adapters.parseDoubanContentCommand,
+    adapters.parseBilibiliContentCommand,
+    adapters.parseWeiboContentCommand,
     command.runBrowserCommandAgent,
     command.createBrowserExecutionEvidence,
     pageInput.dispatchPageEvents,

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0 - 2026-09-06
+
+- Added deterministic read-only search flows for Xiaohongshu, Douban, Bilibili, and Weibo.
+- Added exact site/query validation, observable sort checks, stable result polling, source-bound item verification, and page highlighting for content results.
+- Added site-specific parsers and URL builders through the shared `brizo/runtime/adapters` entry point.
+- Added Brizo Browse host integration so dedicated Use sessions enter each public site root, use visible search controls, and finish only after independently verifying the requested results.
+
 ## 0.3.0 - 2026-09-06
 
 - Opened the Brizo Use execution runtime, isolated Electron sandbox, policy engine, evidence ledger, result audit, usage tracking, and Ctrip/Taobao adapters.

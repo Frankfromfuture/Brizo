@@ -4,7 +4,7 @@
 
 Brizo 是一套开源的网页 Use 运行时和 Agent 调用工具。它让 Claude Code、Cursor、TRAE、CodeBuddy、灵码、Qoder、Qwen Code 等本地 AI harness 通过 `/brizo` 使用独立浏览沙箱，也提供可嵌入 Electron 应用的执行核心。
 
-这个仓库只维护 Use：命令行客户端、本机桥接协议、隔离任务沙箱、页面观察与动作、安全策略、结果审计、站点流程和 harness 适配器。Brizo Browse 的窗口、标签、收藏、下载、密码、搜索和其他浏览器产品代码保存在私有仓库中。
+这个仓库只维护 Use：命令行客户端、本机桥接协议、隔离任务沙箱、页面观察与动作、安全策略、结果审计、站点流程和 harness 适配器。站点流程目前覆盖携程、淘宝、小红书、豆瓣、B 站和微博；Brizo Browse 的窗口、标签、收藏、下载、密码、搜索和其他浏览器产品代码保存在私有仓库中。
 
 ## 安装
 
@@ -85,6 +85,8 @@ import { assertBrowserNavigationUrl } from "brizo/runtime/policies";
 - `brizo/runtime/bridge`、`brizo/runtime/sandbox`：Electron 宿主入口。
 - `brizo/runtime/command`、`policies`、`page-input`：观察、动作、后置验证和安全边界。
 - `brizo/runtime/result`、`usage`、`adapters`：结果审计、用量和站点流程。
+
+`brizo/runtime/adapters` 为小红书、豆瓣、B 站和微博提供统一的只读内容搜索流程。流程会核对真实域名、结果页搜索词、可见排序状态和结果链接，稳定读取后再返回标题、作者、日期、指标与摘要；登录或安全验证不会被自动绕过。
 
 宿主接入方式、生命周期和注入接口见 [Runtime API](./docs/runtime-api.md) 与 [架构说明](./ARCHITECTURE.md)。
 
