@@ -15,15 +15,24 @@ test("validates local runtime descriptors and launch paths", () => {
   const directory = path.join(os.tmpdir(), "brizo-test");
   const valid = {
     protocol: 1,
-    socketPath: path.join(directory, "bridge-a1b2c3.sock"),
+    socketPath: process.platform === "win32"
+      ? "\\\\.\\pipe\\brizo-a1b2c3"
+      : path.join(directory, "bridge-a1b2c3.sock"),
     token: "a".repeat(64),
     pid: 42,
   };
   assert.equal(validateRuntimeDescriptor(valid, directory), valid);
   assert.throws(
-    () => validateRuntimeDescriptor({ ...valid, socketPath: "/tmp/other.sock" }, directory),
+    () => validateRuntimeDescriptor({
+      ...valid,
+      socketPath: process.platform === "win32" ? "\\\\.\\pipe\\other" : "/tmp/other.sock",
+    }, directory),
     error => error.code === "RUNTIME_INVALID",
   );
+  assert.equal(validateRuntimeDescriptor({
+    ...valid,
+    socketPath: "\\\\.\\pipe\\brizo-deadbeef",
+  }, directory, "win32").socketPath, "\\\\.\\pipe\\brizo-deadbeef");
   assert.throws(
     () => validateRuntimeDescriptor({ ...valid, protocol: 99 }, directory),
     error => error.code === "PROTOCOL_MISMATCH",
