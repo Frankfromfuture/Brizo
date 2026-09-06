@@ -6,6 +6,7 @@ import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { HARNESS_ADAPTERS, selectHarnessAdapters } from "../lib/platforms.mjs";
 import { installIntegration, integrationStatus, uninstallIntegration } from "../lib/installer.mjs";
 import { main } from "../lib/cli.mjs";
+import { BRIZO_PACKAGE_VERSION } from "../lib/version.mjs";
 
 const packageRoot = path.resolve(import.meta.dirname, "..");
 
@@ -145,7 +146,7 @@ test("supports targeted installs and aliases", async t => {
   assert.equal(await exists(path.join(legacyBundle, "old.txt")), false);
   assert.deepEqual(
     JSON.parse(await readFile(path.join(legacyBundle, ".brizo-managed"), "utf8")),
-    { managedBy: "installed-by-brizo-npm", packageVersion: "0.3.0", protocolVersion: 1 },
+    { managedBy: "installed-by-brizo-npm", packageVersion: BRIZO_PACKAGE_VERSION, protocolVersion: 1 },
   );
   assert.equal(selectHarnessAdapters(["ALL"]).length, HARNESS_ADAPTERS.length);
   assert.throws(() => selectHarnessAdapters(["unknown"]), error => error.code === "TARGET_INVALID");
