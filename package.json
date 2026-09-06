@@ -1,0 +1,89 @@
+{
+  "name": "brizo",
+  "version": "0.3.0",
+  "description": "Open Brizo Use runtime and adapters for isolated browser tasks across AI harnesses.",
+  "type": "module",
+  "main": "./lib/client.mjs",
+  "exports": {
+    ".": "./lib/client.mjs",
+    "./client": "./lib/client.mjs",
+    "./protocol": "./lib/protocol.mjs",
+    "./platforms": "./lib/platforms.mjs",
+    "./runtime/adapters": "./runtime/adapters.mjs",
+    "./runtime/bridge": "./runtime/electron/agent-bridge.mjs",
+    "./runtime/bridge-core": "./runtime/electron/agent-bridge-core.mjs",
+    "./runtime/command": "./runtime/command.mjs",
+    "./runtime/page-input": "./runtime/page-input.mjs",
+    "./runtime/policies": "./runtime/policies.mjs",
+    "./runtime/result": "./runtime/result.mjs",
+    "./runtime/sandbox": "./runtime/electron/agent-browser.mjs",
+    "./runtime/usage": "./runtime/usage.mjs",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "brizo": "./bin/brizo.mjs"
+  },
+  "files": [
+    "bin",
+    "docs",
+    "lib",
+    "runtime",
+    "skill",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "README.md",
+    "README.en.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "test:runtime": "node --test test/runtime/*.test.mjs",
+    "check:boundary": "node scripts/check-public-boundary.mjs",
+    "check:syntax": "node --check runtime/electron/agent-browser.mjs && node --check runtime/electron/use-login-prompts.mjs",
+    "check": "npm test && npm run check:boundary && npm run check:syntax && npm pack --dry-run",
+    "sync:browse": "node scripts/sync-browse.mjs --write",
+    "check:browse": "node scripts/sync-browse.mjs --check",
+    "prepublishOnly": "npm run check"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "peerDependencies": {
+    "electron": ">=30"
+  },
+  "peerDependenciesMeta": {
+    "electron": {
+      "optional": true
+    }
+  },
+  "brizoProtocolVersion": 1,
+  "keywords": [
+    "brizo",
+    "browser-agent",
+    "codex",
+    "claude-code",
+    "cursor",
+    "trae",
+    "qwen-code",
+    "kimi-cli",
+    "workbuddy",
+    "slash-command",
+    "agent-skill",
+    "browser-use",
+    "electron"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Frankfromfuture/Brizo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Frankfromfuture/Brizo/issues"
+  },
+  "homepage": "https://github.com/Frankfromfuture/Brizo#readme",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
