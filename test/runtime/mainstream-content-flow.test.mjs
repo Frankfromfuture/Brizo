@@ -88,6 +88,22 @@ test("infers read-only lookups that omit an explicit search verb", () => {
     { site: bilibili.site, query: bilibili.query, contentType: bilibili.contentType, count: bilibili.count },
     { site: "bilibili", query: "Rust 教程", contentType: "video", count: 1 },
   );
+
+  const terseCases = [
+    ["小红书上海周末露营攻略", "xiaohongshu", "上海周末露营攻略"],
+    ["豆瓣三体", "douban", "三体"],
+    ["B站 Rust 教程", "bilibili", "Rust 教程"],
+    ["微博人工智能趋势", "weibo", "人工智能趋势"],
+  ];
+  for (const [command, site, query] of terseCases) {
+    const intent = parseMainstreamContentCommand(command);
+    assert.equal(intent.site, site, command);
+    assert.equal(intent.query, query, command);
+  }
+
+  for (const command of ["打开豆瓣", "访问小红书官网", "进入B站首页", "微博登录"]) {
+    assert.equal(parseMainstreamContentCommand(command), null, command);
+  }
 });
 
 test("rejects a lookalike search URL and item URL outside the intended site", () => {

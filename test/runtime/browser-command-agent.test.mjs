@@ -290,6 +290,14 @@ test("parses a Taobao distinct-price request from the current search", () => {
   assert.equal(buildTaobaoSearchUrl(intent.query), currentUrl);
 });
 
+test("parses a terse Taobao price lookup without a search verb", () => {
+  const named = parseTaobaoPriceCommand("淘宝 iPhone 16 价格", "https://www.taobao.com/");
+  assert.equal(named.query, "iPhone 16");
+  const contextual = parseTaobaoPriceCommand("iPhone 16 多少钱", "https://www.taobao.com/");
+  assert.equal(contextual.query, "iPhone 16");
+  assert.equal(parseTaobaoPriceCommand("iPhone 16 多少钱", "https://example.com/"), null);
+});
+
 test("selects unique Taobao prices without sorting away page order", () => {
   const selected = selectDistinctPriceItems([
     { index: 0, price: 89, title: "A" },

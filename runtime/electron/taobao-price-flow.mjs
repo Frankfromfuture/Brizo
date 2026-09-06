@@ -36,6 +36,30 @@ export function taobaoQueryFromUrl(value) {
   }
 }
 
+function isTaobaoSiteUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    const hostname = url.hostname.toLocaleLowerCase();
+    return url.protocol === "https:" && !url.username && !url.password
+      && (!url.port || url.port === "443")
+      && (hostname === "taobao.com" || hostname.endsWith(".taobao.com"));
+  } catch {
+    return false;
+  }
+}
+
+function implicitTaobaoPriceQuery(command, currentUrl) {
+  if (!/(?:淘宝|taobao)/iu.test(command) && !isTaobaoSiteUrl(currentUrl)) return "";
+  return command
+    .replace(/(?:淘宝|taobao)/giu, " ")
+    .replace(/^(?:请(?:帮我)?|帮我|麻烦(?:你)?|给我)?\s*(?:(?:在|去|到|使用)\s*)?(?:上|里|中)?\s*(?:看看?|了解|告诉我|想知道|比较|对比)?\s*/u, "")
+    .replace(/\s*(?:的)?(?:不同的?|多个|各个)?(?:价格|价钱|多少钱|报价)\s*[?？]?$/u, "")
+    .replace(/^(?:几个|一些|不同的)+/u, "")
+    .replace(/的$/u, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
 export function parseTaobaoPriceCommand(value, currentUrl = "") {
   const command = String(value || "").replace(/\s+/g, " ").trim();
   if (!command || !/(价格|价钱|多少钱|报价)/.test(command)) return null;
@@ -43,7 +67,7 @@ export function parseTaobaoPriceCommand(value, currentUrl = "") {
   const commandQuery = command.match(/不同的(.+?)(?:的)?(?:价格|价钱|报价)/)?.[1]
     || command.match(/搜(?:索)?(?:一下)?(?:几个)?(.+?)(?:的)?(?:价格|价钱|报价)/)?.[1]
     || "";
-  const query = String(commandQuery || urlQuery)
+  const query = String(commandQuery || implicitTaobaoPriceQuery(command, currentUrl) || urlQuery)
     .replace(/^(?:几个|一些|不同的)+/, "")
     .replace(/的$/, "")
     .trim();

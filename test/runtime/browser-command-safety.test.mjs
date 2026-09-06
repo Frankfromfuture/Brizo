@@ -183,20 +183,54 @@ test("an explicitly targeted search Enter is separate from fill and remains allo
 });
 
 test("an informational site lookup can submit only the exact search control", () => {
-  const search = authorizeBrowserAction({
-    action: { action: "click", ref: "@e1" },
-    command: "豆瓣特立独行电影分数",
-    target: { ref: "@e1", name: "搜索", tag: "button", type: "submit", submitsForm: true },
-  });
-  assert.equal(search.allowed, true);
+  const readOnlyCases = [
+    ["豆瓣特立独行电影分数", "搜索"],
+    ["明天下午上海到北京机票", "查询航班"],
+    ["淘宝 iPhone 16 价格", "搜索商品"],
+    ["价格从低到高", "应用筛选"],
+    ["只看有货商品", "确认筛选"],
+    ["查看报名状态", "查询报名状态"],
+    ["查找已收藏内容", "搜索收藏内容"],
+    ["上海天气", "Show results"],
+  ];
+  for (const [command, name] of readOnlyCases) {
+    const result = authorizeBrowserAction({
+      action: { action: "click", ref: "@e1" },
+      command,
+      target: { ref: "@e1", name, tag: "button", type: "submit", submitsForm: true },
+    });
+    assert.equal(result.allowed, true, name);
+  }
 
-  const publish = authorizeBrowserAction({
-    action: { action: "click", ref: "@e2" },
+  const enter = authorizeBrowserAction({
+    action: { action: "press", key: "Enter", ref: "@e1" },
     command: "豆瓣特立独行电影分数",
-    target: { ref: "@e2", name: "发布影评", tag: "button", type: "submit", submitsForm: true },
+    target: {
+      ref: "@e1", fieldName: "q", name: "书籍、电影、音乐、小组", tag: "input", type: "text", value: "特立独行",
+    },
   });
-  assert.equal(publish.allowed, false);
-  assert.equal(publish.code, "explicit-authorization-required");
+  assert.equal(enter.allowed, true);
+
+  for (const name of ["发布影评", "搜索并购买", "查询并订阅", "搜索并确认", "搜索并登录", "保存筛选"]) {
+    const result = authorizeBrowserAction({
+      action: { action: "click", ref: "@e2" },
+      command: "豆瓣特立独行电影分数",
+      target: {
+        ref: "@e2", name, purpose: name === "查询并订阅" ? "搜索" : "", tag: "button", type: "submit", submitsForm: true,
+      },
+    });
+    assert.equal(result.allowed, false, name);
+    assert.equal(result.code, "explicit-authorization-required", name);
+  }
+
+  const misleadingPurpose = authorizeBrowserAction({
+    action: { action: "click", ref: "@e3" },
+    command: "北京天气",
+    target: {
+      ref: "@e3", name: "继续", purpose: "搜索", tag: "button", type: "submit", submitsForm: true,
+    },
+  });
+  assert.equal(misleadingPurpose.allowed, false);
 });
 
 test("navigation URL policy blocks local, private, metadata, credential and unsafe-port targets", async (t) => {

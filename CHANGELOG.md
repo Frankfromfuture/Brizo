@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.3 - 2026-09-06
+
+- Treated exact search, query, filter, sort, and result-view controls as read-only form actions across sites, including text search fields submitted with Enter.
+- Generalized terse no-verb content lookups across Xiaohongshu, Douban, Bilibili, and Weibo, and added the same behavior to Taobao price queries.
+- Kept combined purchase, publish, subscription, save, and other write controls behind explicit authorization.
+
 ## 0.4.2 - 2026-09-06
 
 - Recognized natural read-only requests such as `豆瓣特立独行电影分数` without requiring an explicit “搜索” verb.

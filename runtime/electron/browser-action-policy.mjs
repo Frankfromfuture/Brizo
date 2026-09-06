@@ -29,16 +29,48 @@ const SEARCH_INTENT_PATTERN = /搜索|检索|查找|search|find/i;
 // “搜” also covers colloquial requests such as “去淘宝搜 10 个产品” and “搜一下”.
 const QUERY_INTENT_PATTERN = /搜|查询|检索|查找|查.{0,80}(?:航班|机票|车票|酒店|商品|价格|时间|资料|信息|差评|好评|评论|影评|评价|评分)|\b(?:search|find|look\s+up)\b/i;
 const INFORMATION_LOOKUP_INTENT_PATTERN = /(?:多少分|评分|分数|评价|影评|短评|书评|简介|资料|信息|播放量|观看数|点赞数|收藏数|热度|作者|导演|演员|score|rating|reviews?|details?|information|views?)/i;
+const SEARCH_FIELD_NAME_PATTERN = /^(?:q|query|keyword|keywords|search|searchquery|searchterm|wd|word)$/i;
+const READ_ONLY_QUERY_TARGET_PATTERN = /^(?:(?:开始|立即|重新|执行)?(?:搜索|搜寻|搜一搜|搜一下|查询|检索|查找|查)[\p{L}\d]{0,16}|(?:应用|确认|执行|开始|重新)?(?:筛选|过滤|排序)(?:结果|条件)?|(?:查看|显示|刷新|加载)(?:搜索|查询|筛选|过滤)?结果|(?:search|find|lookup)(?:products?|movies?|books?|videos?|posts?|users?|members?|flights?|hotels?|orders?|records?|prices?|routes?|weather)?|filter|sort|applyfilters?|showresults?|viewresults?|refreshresults?|checkavailability)$/iu;
+const CONFIRM_READ_ONLY_FILTER_PATTERN = /^(?:确认筛选|确认过滤|确认排序)$/u;
+const EXTERNAL_EFFECT_LABEL_PATTERN = /(?:删除|移除|清空|注销|销毁|购买|付款|支付|下单|结账|转账|汇款|加入购物车|预订|预约|提交|确认|登录|登陆|发送|发布|发表|上传|保存|授权|同意|注册|报名|订阅|点赞|收藏|关注|投票|评论|回复|转发|私信|领取|兑换|安装|delete|remove|clear|destroy|buy|purchase|pay|checkout|transfer|submit|confirm|login|sign\s*in|send|publish|upload|save|authorize|accept|register|signup|subscribe|like|favorite|favourite|bookmark|follow|vote|comment|reply|repost|share|message|install)/iu;
+const COMBINED_EXTERNAL_EFFECT_PATTERN = /(?:(?:并|并且|且|然后|之后|后|同时)(?:删除|移除|清空|注销|购买|付款|支付|下单|转账|提交|确认|登录|发送|发布|发表|上传|保存|授权|同意|注册|报名|订阅|点赞|收藏|关注|投票|评论|回复|转发|私信|领取|兑换|安装)|(?:and|then)(?:delete|remove|buy|purchase|pay|submit|confirm|login|send|publish|upload|save|authorize|register|subscribe|like|favorite|follow|vote|comment|reply|share|install))|(?:(?:搜索|搜寻|查询|检索|查找|search|find|lookup)(?:提交|确认|登录|发送|发布|保存|授权|同意|注册|订阅|submit|confirm|login|send|publish|save|authorize|register|subscribe))$/iu;
 
-function isRequestedReadOnlySearch(command, target) {
-  // Search forms often use native submit buttons. The user's query authorizes
-  // that search, but never an adjacent purchase/confirmation or combined action.
-  const label = String(target?.name || "")
-    .replace(/[\uE000-\uF8FF\s]/gu, "")
+function compactTargetLabel(value) {
+  return String(value || "")
+    .replace(/[\uE000-\uF8FF\s:：·.…]/gu, "")
     .trim();
-  const commandText = String(command || "");
-  return (QUERY_INTENT_PATTERN.test(commandText) || INFORMATION_LOOKUP_INTENT_PATTERN.test(commandText))
-    && /^(?:(?:搜索|搜一搜|搜一下|查询|检索|查找)(?:航班|机票|车票|酒店|商品|价格|电影|影片|书籍|视频|内容|结果)?|search|find)$/i.test(label);
+}
+
+function isReadOnlyQueryControl(target) {
+  // Exact search/filter controls only retrieve or reorder information. Anchored
+  // labels keep combined write actions restricted. The explicit accessible name
+  // takes precedence over an inferred search purpose from page CSS metadata.
+  const name = compactTargetLabel(target?.name);
+  const purpose = compactTargetLabel(target?.purpose);
+  if (name) {
+    if (CONFIRM_READ_ONLY_FILTER_PATTERN.test(name)) {
+      return !purpose || !EXTERNAL_EFFECT_LABEL_PATTERN.test(purpose);
+    }
+    if (READ_ONLY_QUERY_TARGET_PATTERN.test(name)) {
+      return !COMBINED_EXTERNAL_EFFECT_PATTERN.test(name);
+    }
+    if (EXTERNAL_EFFECT_LABEL_PATTERN.test(name)) return false;
+    return false;
+  }
+  return Boolean(purpose)
+    && READ_ONLY_QUERY_TARGET_PATTERN.test(purpose)
+    && !COMBINED_EXTERNAL_EFFECT_PATTERN.test(purpose);
+}
+
+function isSearchEntryTarget(target) {
+  if (!target || target.credentialField || target.sensitive) return false;
+  const inputLike = target.tag === "input" || target.tag === "textarea"
+    || target.role === "textbox" || /^(?:search|text)$/i.test(String(target.type || ""));
+  if (!inputLike) return false;
+  const fieldName = String(target.fieldName || "").replace(/[-_\s]/gu, "");
+  return target.type === "search"
+    || SEARCH_INTENT_PATTERN.test(`${target.name || ""} ${target.purpose || ""}`)
+    || SEARCH_FIELD_NAME_PATTERN.test(fieldName);
 }
 
 export function hasNegativeSubmissionConstraint(command) {
@@ -92,8 +124,8 @@ export function authorizeBrowserAction({ action, command, target }) {
   // Positive authority is derived exclusively from the original user command.
   if (kind === "click") {
     const category = targetRiskCategory(target);
-    const requestedSearch = category === "submission" && isRequestedReadOnlySearch(command, target);
-    if (category && !requestedSearch && !commandAuthorizesCategory(command, category)) {
+    const readOnlyQuery = category === "submission" && isReadOnlyQueryControl(target);
+    if (category && !readOnlyQuery && !commandAuthorizesCategory(command, category)) {
       return {
         allowed: false,
         code: "explicit-authorization-required",
@@ -104,13 +136,13 @@ export function authorizeBrowserAction({ action, command, target }) {
 
   if (kind === "press" && /^(?:enter|return)$/i.test(String(action?.key || ""))) {
     const explicitlyRequested = EXPLICIT_ENTER_PATTERN.test(String(command || ""));
-    const targetLabel = `${target?.name || ""} ${target?.purpose || ""} ${target?.type || ""}`;
     const targetedSearch = Boolean(target)
       && (
         QUERY_INTENT_PATTERN.test(String(command || ""))
+        || INFORMATION_LOOKUP_INTENT_PATTERN.test(String(command || ""))
         || Boolean(String(target?.value || "").trim())
       )
-      && (target?.type === "search" || SEARCH_INTENT_PATTERN.test(targetLabel));
+      && isSearchEntryTarget(target);
     const submissionRequested = Object.values(COMMAND_AUTHORIZATION_PATTERNS)
       .some((pattern) => pattern.test(String(command || "")));
     if (!explicitlyRequested && !targetedSearch && !submissionRequested) {

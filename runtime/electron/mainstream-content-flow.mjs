@@ -105,6 +105,7 @@ const CONTENT_NOUN_PATTERN = /(?:笔记|视频|微博|帖子|动态|广播|结�
 const COUNT_PATTERN = /(\d{1,2}|[一二三四五六七八九十两]{1,3})\s*(?:篇|条|个|部|本)\s*(?:相关的?)?(?:笔记|视频|微博|帖子|动态|广播|结果|条目|电影|书籍|影评|书评|内容)?/u;
 const IMPLICIT_LOOKUP_DETAIL_PATTERN = /(?:多少分|评分|分数|评价|影评|短评|书评|简介|资料|信息|播放量|观看数|点赞数|收藏数|热度|作者|导演|演员|电影|影片|剧集|电视剧|书籍|图书|视频|笔记|帖子|动态|条目|作品|score|rating|review|details?|information|views?)/iu;
 const SINGLE_ITEM_DETAIL_PATTERN = /(?:多少分|评分|分数|简介|播放量|观看数|点赞数|收藏数|作者|导演|演员|score|rating|views?)\s*[?？]?$/iu;
+const IMPLICIT_NON_QUERY_PATTERN = /^(?:打开|访问|前往|进入|使用|登录|登陆|注册|设置|首页|主页|官网|网站|客户端|下载|发布|发表|上传|发送|发|点赞|收藏|关注|评论|回复|转发|私信|通知|消息|账户|账号|个人中心|我的)$/iu;
 
 function compactVerification(checks) {
   const failures = Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name);
@@ -228,14 +229,16 @@ function queryFromImplicitLookup(command) {
   let query = command;
   for (const pattern of SITE_MENTION_GLOBALS) query = query.replace(pattern, " ");
   query = query
-    .replace(/^(?:请(?:帮我)?|帮我|麻烦(?:你)?|给我)?\s*(?:看看?|了解|告诉我|想知道)?\s*/u, "")
+    .replace(/^(?:请(?:帮我)?|帮我|麻烦(?:你)?|给我)?\s*(?:(?:在|去|到|使用|打开|访问|前往|进入)\s*)?(?:看看?|了解|告诉我|想知道)?\s*/u, "")
     .replace(/[?？]+$/u, "")
     .replace(
       /\s*(?:(?:这部|这个|该)?(?:最新|热门|相关)?(?:电影|影片|剧集|电视剧|书籍|图书|书|视频|笔记|微博|帖子|动态|条目|作品)(?:的)?(?:多少分|评分|分数|评价|影评|短评|书评|简介|资料|信息|播放量|观看数|点赞数|收藏数|热度|作者|导演|演员)?|(?:多少分|评分|分数|评价|影评|短评|书评|简介|资料|信息|播放量|观看数|点赞数|收藏数|热度|作者|导演|演员|score|rating|reviews?|details?|information|views?))\s*$/iu,
       "",
     )
+    .replace(/\s*(?:官网|网站|首页|主页)\s*$/u, "")
     .replace(/^[\s:：]+|[\s:：]+$/gu, "");
-  return normalizedQuery(query);
+  const normalized = normalizedQuery(query);
+  return IMPLICIT_NON_QUERY_PATTERN.test(normalized) ? "" : normalized;
 }
 
 function parseForSite(value, currentUrl = "", forcedSite = "") {
@@ -249,7 +252,8 @@ function parseForSite(value, currentUrl = "", forcedSite = "") {
   const currentQuery = mainstreamContentQueryFromUrl(currentUrl, site);
   const hasSearchAction = SEARCH_ACTION_PATTERN.test(command);
   const explicitQuery = queryFromCommand(command);
-  const implicitQuery = !hasSearchAction && IMPLICIT_LOOKUP_DETAIL_PATTERN.test(command)
+  const implicitQuery = !hasSearchAction
+    && (Boolean(mentionedSite) || (Boolean(currentSite) && IMPLICIT_LOOKUP_DETAIL_PATTERN.test(command)))
     ? queryFromImplicitLookup(command)
     : "";
   if (!hasSearchAction
