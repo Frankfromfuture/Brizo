@@ -1,12 +1,13 @@
 {
   "name": "brizo",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "description": "Open Brizo Use runtime and adapters for isolated browser tasks across AI harnesses.",
   "type": "module",
   "main": "./lib/client.mjs",
   "exports": {
     ".": "./lib/client.mjs",
     "./client": "./lib/client.mjs",
+    "./agent": "./lib/agent-session.mjs",
     "./protocol": "./lib/protocol.mjs",
     "./platforms": "./lib/platforms.mjs",
     "./runtime/adapters": "./runtime/adapters.mjs",
@@ -39,6 +40,7 @@
   "scripts": {
     "test": "node --test",
     "test:runtime": "node --test test/runtime/*.test.mjs",
+    "verify:agent": "node scripts/verify-agent.mjs",
     "check:boundary": "node scripts/check-public-boundary.mjs",
     "check:syntax": "node --check runtime/electron/agent-browser.mjs && node --check runtime/electron/use-login-prompts.mjs",
     "check": "npm test && npm run check:boundary && npm run check:syntax && npm pack --dry-run",

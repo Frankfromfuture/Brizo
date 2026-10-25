@@ -1,0 +1,14 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Agent workbench</title>
+<style>body{font:16px system-ui;margin:20px;background:#faf8f0}label{display:inline-flex;flex-direction:column;margin-right:12px}input,select,button{font:inherit;padding:8px}canvas{position:absolute;left:20px;top:260px;width:500px;height:200px;border:1px solid #222}#drag-status{position:absolute;top:470px}#extras{position:absolute;top:540px}</style>
+<h1>Agent workbench</h1><label>Search<input aria-label="Search" name="q"></label><label>City<input aria-label="City" name="city"></label>
+<label>Sort<select aria-label="Sort"><option value="relevance">Relevance</option><option value="newest">Newest</option></select></label>
+<button id="search" type="button">Search</button><button type="button">Submit</button><p id="results">No results yet</p>
+<canvas width="500" height="200" tabindex="0" aria-label="Card board"></canvas><p id="drag-status">Drag the blue card</p><div id="extras"></div>
+<script>
+const q=document.querySelector('[name=q]'), city=document.querySelector('[name=city]'),sort=document.querySelector('select');
+document.querySelector('#search').onclick=()=>setTimeout(()=>document.querySelector('#results').textContent=`Found ${q.value} in ${city.value} (${sort.value})`,80);
+const canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d');let dragging=false,pos={x:20,y:20};
+function draw(){ctx.fillStyle='#f3ead3';ctx.fillRect(0,0,500,200);ctx.fillStyle='#496ca0';ctx.fillRect(pos.x,pos.y,70,90);ctx.fillStyle='white';ctx.font='16px sans-serif';ctx.fillText('Card',pos.x+15,pos.y+45)}draw();
+canvas.onmousedown=e=>{dragging=true};canvas.onmousemove=e=>{if(dragging){pos={x:e.offsetX-35,y:e.offsetY-45};draw()}};canvas.onmouseup=()=>{if(dragging)document.querySelector('#drag-status').textContent='Card dragged';dragging=false};
+for(let i=0;i<60;i++){const button=document.createElement('button');button.textContent=`Item ${i}`;document.querySelector('#extras').append(button)}
+</script></html>

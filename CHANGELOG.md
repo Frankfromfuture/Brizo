@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0
+
+- Return initial observations and runtime capabilities from task creation; preserve screenshot observation IDs and CSS/image coordinate metadata through the client.
+- Add semantic targets, preflighted 20-step batches with partial failure evidence, bounded condition waits and structured recovery advice.
+- Add compact, filtered and delta observations with disclosed output limits; retain full control details on request.
+- Add screenshot-bound canvas click, hover, double-click and drag, including cancellation cleanup and viewport-change checks.
+- Add a JavaScript session SDK, local topic help, skill output and aggregate diagnostics.
+- Capture with explicit hidden-window options and support trusted offscreen embedding hosts. Add reproducible hidden Electron acceptance fixtures.
+
+
 ## 0.4.3 - 2026-09-06
 
 - Treated exact search, query, filter, sort, and result-view controls as read-only form actions across sites, including text search fields submitted with Enter.

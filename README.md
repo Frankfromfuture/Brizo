@@ -67,6 +67,12 @@ Windows PowerShell 可使用相同的 `--json` 写法。任务含复杂引号或
 
 每条浏览器命令只输出一行 JSON。Agent 必须使用最新观察返回的 `snapshotId` 和 `@eN` 控件引用；登录、验证码或敏感动作会把控制权交给用户。完整协议见 [skill/SKILL.md](./skill/SKILL.md)。
 
+0.5 运行时在创建任务时直接返回观察，动作也会带回下一份观察。语义目标可按角色、名称或字段名定位；`batch` 将已确定的连续步骤放进一次调用，逐步重新定位并在失败时返回已完成部分。`wait` 等待实际页面条件，观察支持精简、筛选和变化输出。Canvas 点击与拖拽绑定截图，返回视口坐标和图片缩放信息。
+
+需要脚本时，可使用 `brizo/agent` 的 `createAgentSession`，由 SDK 跟踪观察编号。按需查看 `brizo help batch`、`brizo help wait` 或 [Agent API](./docs/agent-api.md)。这些能力需要宿主同步嵌入 0.5 运行时；仅更新 CLI 不会更新桌面宿主。`brizo capabilities` 描述本机客户端，实际宿主能力以 `create` 或 `ping` 的返回为准。
+
+隐藏 Chromium 验收及测量范围见[验收记录](./docs/agent-validation.md)。当前没有可用的 Ego 对比性能结论。
+
 ## 作为运行时使用
 
 CLI 不需要 Electron。只有宿主应用创建原生 `WebContentsView` 沙箱时，才需要安装可选 peer dependency `electron`。

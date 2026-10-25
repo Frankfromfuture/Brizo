@@ -1,0 +1,111 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createAgentSession } from "../lib/agent-session.mjs";
+import { main } from "../lib/cli.mjs";
+import { authorizeVisualIntent } from "../runtime/electron/agent-visual-input.mjs";
+import { findTarget, matchesWait, presentObservation, validateAgentAction, validateBatch, waitForObservation } from "../runtime/electron/agent-session-tools.mjs";
+
+const snapshot = (value = "") => ({ title: "Fixture", url: "https://example.com/", pageText: "Search products", viewport: { width: 800, height: 600 }, frames: [], elements: [
+  { ref: "@e1", domRef: "private", tag: "input", type: "search", role: "", name: "Search", fieldName: "q", value, disabled: false, sensitive: false },
+  { ref: "@e2", domRef: "private2", tag: "button", role: "", name: "Search", fieldName: "", value: "", disabled: false },
+] });
+
+test("semantic targets disambiguate a search field from an equally named button", () => {
+  assert.equal(findTarget(snapshot(), { role: "textbox", name: "Search" }).ref, "@e1");
+  assert.throws(() => findTarget(snapshot(), { name: "Search" }), { code: "TARGET_AMBIGUOUS" });
+  assert.throws(() => findTarget(snapshot(), { role: "link", name: "Missing" }), { code: "TARGET_NOT_FOUND" });
+  assert.throws(() => findTarget(snapshot(), { css: "input" }), { code: "TARGET_INVALID" });
+});
+
+test("visual input derives authorization from the original user goal", () => {
+  assert.throws(() => authorizeVisualIntent("Read this chart", { action: "click" }), { code: "VISUAL_INTENT_REQUIRED" });
+  assert.doesNotThrow(() => authorizeVisualIntent("Drag the card", { action: "drag" }));
+});
+
+test("CLI exposes local help without claiming the runtime has been probed", async () => {
+  const chunks = [];
+  const output = { write: value => chunks.push(value) };
+  await main(["capabilities"], { output });
+  assert.equal(JSON.parse(chunks.pop()).runtimeVerified, false);
+  await main(["help", "batch"], { output });
+  assert.equal(JSON.parse(chunks.pop()).result.example.actions.length, 2);
+});
+
+test("compact observations retain actionable values and strip private DOM identifiers", () => {
+  const output = presentObservation(snapshot("Brizo"), { tabId: "tab", snapshotId: "s1" });
+  assert.equal(output.elements[0].value, "Brizo");
+  assert.equal(output.elements[0].role, "textbox");
+  assert.equal(JSON.stringify(output).includes("private"), false);
+  assert.equal(output.viewport.units, "css-pixels");
+});
+
+test("filtered observations preserve original refs and disclose truncation", () => {
+  const output = presentObservation(snapshot(), { tabId: "tab", snapshotId: "s1", options: { filter: { role: "button" }, maxChars: 3 } });
+  assert.equal(output.elements[0].ref, "@e2");
+  assert.equal(output.truncated.text, true);
+  assert.throws(() => presentObservation(snapshot(), { options: { maxElements: -1 } }), { code: "ARGUMENT_INVALID" });
+});
+
+test("delta observations report changed controls without repeating unchanged page text", () => {
+  const before = snapshot();
+  const after = snapshot("Brizo");
+  const output = presentObservation(after, { tabId: "tab", snapshotId: "s2", options: { since: "s1" }, previous: before });
+  assert.equal(output.pageText, "");
+  assert.deepEqual(output.elements.map(item => item.ref), ["@e1"]);
+  assert.equal(output.changes.textChanged, false);
+  assert.throws(() => presentObservation(after, { options: { since: "missing" } }), { code: "SNAPSHOT_UNKNOWN" });
+});
+
+test("wait observes actual control state and does not turn a read timeout into user control", async () => {
+  let reads = 0;
+  const result = await waitForObservation(async () => snapshot(++reads > 1 ? "ready" : ""), { target: { fieldName: "q" }, value: "ready", timeoutMs: 1000 });
+  assert.equal(result.snapshot.elements[0].value, "ready");
+  await assert.rejects(waitForObservation(async () => snapshot(), { text: "missing", timeoutMs: 0 }), { code: "CONDITION_TIMEOUT" });
+  assert.equal(matchesWait(snapshot(), { target: { role: "link" }, state: "hidden" }), true);
+});
+
+test("wait supports cancellation and rejects an unbounded timeout", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(waitForObservation(async () => snapshot(), { text: "missing" }, controller.signal), { name: "AbortError" });
+  await assert.rejects(waitForObservation(async () => snapshot(), { text: "missing", timeoutMs: 50000 }), { code: "ARGUMENT_INVALID" });
+});
+
+test("batch rejects stale refs in later steps before dispatching any action", () => {
+  assert.throws(() => validateBatch({ actions: [{ action: "click", ref: "@e1" }, { action: "click", ref: "@e2" }] }), { code: "ARGUMENT_INVALID" });
+  assert.throws(() => validateBatch({ actions: Array.from({ length: 21 }, () => ({ action: "scroll" })) }), { code: "ARGUMENT_INVALID" });
+});
+
+test("batch preflight rejects an invalid later step and an invalid post-action wait", () => {
+  assert.throws(() => validateBatch({ actions: [{ action: "fill", target: { fieldName: "q" }, value: "first" }, { action: "invented" }] }), { code: "ACTION_INVALID" });
+  assert.throws(() => validateAgentAction({ action: "click", ref: "@e1", wait: { text: "ready", timeoutMs: 90000 } }), { code: "ARGUMENT_INVALID" });
+});
+
+test("SDK reuses create evidence, follows screenshot evidence, and never replays failed actions", async () => {
+  const calls = [];
+  const command = async (method, id, args) => {
+    calls.push({ method, id, args });
+    if (method === "create") return { sessionId: "task", observation: { snapshotId: "s1" } };
+    if (method === "screenshot") return { path: "/tmp/s.png", observation: { snapshotId: "s2" } };
+    if (method === "act") throw Object.assign(new Error("changed"), { code: "STALE_SNAPSHOT" });
+    return { status: "closed" };
+  };
+  const session = await createAgentSession({ goal: "fixture" }, { command });
+  await session.screenshot();
+  await assert.rejects(session.act({ action: "click", ref: "@e1" }), { code: "STALE_SNAPSHOT" });
+  assert.equal(calls.at(-1).args.snapshotId, "s2");
+  assert.equal(calls.filter(item => item.method === "act").length, 1);
+  assert.equal(session.observation, undefined);
+  await session.close();
+  await assert.rejects(session.observe(), { code: "CLOSED" });
+});
+
+test("SDK keeps partial batch evidence available for explicit recovery", async () => {
+  const observation = { snapshotId: "after-error" };
+  const session = await createAgentSession({}, { command: async method => {
+    if (method === "create") return { sessionId: "task" };
+    throw Object.assign(new Error("missing"), { details: { completed: [{ index: 0 }], failedIndex: 1, observation } });
+  } });
+  await assert.rejects(session.batch([{ action: "click", target: { name: "Next" } }]), error => error.details.failedIndex === 1);
+  assert.equal(session.observation, observation);
+});
