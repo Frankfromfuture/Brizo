@@ -1049,20 +1049,34 @@ export async function executeBrowserCommandAction({ action, command, sendInputEv
         element.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
         const rect = element.getBoundingClientRect();
         if (rect.width <= 1 || rect.height <= 1) return null;
-        const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
-        let hit = element.getRootNode().elementFromPoint(x, y);
-        for (let depth = 0; hit?.shadowRoot && depth < 8; depth++) {
-          const nested = hit.shadowRoot.elementFromPoint(x, y);
-          if (!nested || nested === hit) break;
-          hit = nested;
-        }
-        let reachable = false;
-        for (let node = hit; node; node = node.parentNode || node.host) if (node === element) { reachable = true; break; }
-        if (!reachable) return { blocked: true };
-        return {
-          x: Math.round(located.offsetX + (rect.left + rect.width / 2) * located.scaleX),
-          y: Math.round(located.offsetY + (rect.top + rect.height / 2) * located.scaleY),
+        const deepHit = (root, x, y) => {
+          let hit = root.elementFromPoint(x, y);
+          for (let depth = 0; hit?.shadowRoot && depth < 8; depth++) {
+            const nested = hit.shadowRoot.elementFromPoint(x, y);
+            if (!nested || nested === hit) break;
+            hit = nested;
+          }
+          return hit;
         };
+        const contains = (expected, hit) => {
+          for (let node = hit; node; node = node.parentNode || node.host) if (node === expected) return true;
+          return false;
+        };
+        let x = rect.left + rect.width / 2, y = rect.top + rect.height / 2, owner = element.ownerDocument;
+        let reachable = contains(element, deepHit(owner, x, y));
+        // scrollIntoView can move outer frame viewports. Recompute each level
+        // after scrolling and reject covers in any parent document.
+        for (let depth = 0; reachable && owner !== document && depth < 8; depth++) {
+          const frame = owner.defaultView?.frameElement;
+          if (!frame) { reachable = false; break; }
+          const bounds = frame.getBoundingClientRect();
+          x = bounds.left + (x + frame.clientLeft) * bounds.width / Math.max(1, frame.offsetWidth);
+          y = bounds.top + (y + frame.clientTop) * bounds.height / Math.max(1, frame.offsetHeight);
+          owner = frame.ownerDocument;
+          reachable = contains(frame, deepHit(owner, x, y));
+        }
+        if (!reachable || owner !== document) return { blocked: true };
+        return { x: Math.round(x), y: Math.round(y) };
       })()
     `);
     if (!position) throw new Error("页面元素引用已经失效，请重新观察页面。");

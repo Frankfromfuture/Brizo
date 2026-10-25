@@ -39,7 +39,7 @@ try {
     // memory. Production navigation and network policies remain unchanged.
     installNetworkPolicy(partition) {
       partition.protocol.handle("https", request => new URL(request.url).origin === "https://fixture.brizo.example"
-        ? new Response(new URL(request.url).pathname === "/component" ? componentFixture() : new URL(request.url).pathname === "/not-ready" ? componentFixture(true) : new URL(request.url).pathname === "/frames" ? `<iframe srcdoc="&lt;main aria-label='Frame article'&gt;&lt;button onclick=&quot;this.textContent='Clicked'&quot;&gt;Inside frame&lt;/button&gt;&lt;/main&gt;"></iframe><iframe src="https://cross-origin.example/"></iframe>` : new URL(request.url).pathname === "/long" ? longFixture : new URL(request.url).searchParams.has("login")
+        ? new Response(new URL(request.url).pathname === "/component" ? componentFixture() : new URL(request.url).pathname === "/not-ready" ? componentFixture(true) : new URL(request.url).pathname === "/frames" ? `<iframe style="margin-top:1200px" srcdoc="&lt;main aria-label='Frame article'&gt;&lt;button onclick=&quot;this.textContent='Clicked'&quot;&gt;Inside frame&lt;/button&gt;&lt;/main&gt;"></iframe><iframe src="https://cross-origin.example/"></iframe>` : new URL(request.url).pathname === "/long" ? longFixture : new URL(request.url).searchParams.has("login")
           ? fixture.replace("</html>", '<dialog open aria-label="Sign in"><form><label>Password<input type="password" value="login-fixture-value"></label></form></dialog></html>') : fixture,
           { headers: { "Content-Type": "text/html; charset=utf-8" } })
         : new Response("Blocked fixture request", { status: 403 }));
@@ -187,12 +187,14 @@ try {
   await session.observe();
   results.push({ scenario: "covered-control-never-receives-click", passed: true });
   await session.act({ action: "navigate", url: "https://fixture.brizo.example/frames" });
-  const same = session.observation.frames.find(f => f.sameOrigin);
+  const framePage = await session.observe({ scope: "full_page", maxElements: 1000 });
+  const same = framePage.frames.find(f => f.sameOrigin);
   const frameView = await session.observe({ scope: "subtree", root: same.ref });
   assert.ok(frameView.elements.some(e => e.name === "Inside frame"));
   const buttonTree = await session.observe({ scope: "subtree", root: frameView.elements[0].ref });
   await session.act({ action: "click", ref: buttonTree.elements[0].ref });
-  await session.observe();
+  assert.ok(session.observation.elements.some(e => e.name === "Clicked"));
+  await session.observe({ scope: "full_page", maxElements: 1000 });
   const other = session.observation.frames.find(f => !f.sameOrigin);
   await assert.rejects(session.observe({ scope: "subtree", root: other.ref }), { code: "FRAME_UNAVAILABLE" });
   await session.observe();

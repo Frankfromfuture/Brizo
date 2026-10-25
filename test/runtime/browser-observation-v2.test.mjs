@@ -100,6 +100,6 @@ test("every ref-based executor uses the shadow/frame-aware locator", async () =>
   assert.match(source, /Cross-origin frame: it is deliberately observable only as a boundary/);
   const locatorUses = source.match(/BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE}\(/g) || [];
   assert.equal(locatorUses.length, 4, "click, fill, select and targeted press must share the recursive locator");
-  assert.match(source, /located\.offsetX \+ \(rect\.left \+ rect\.width \/ 2\) \* located\.scaleX/);
+  assert.match(source, /x = bounds\.left \+ \(x \+ frame\.clientLeft\) \* bounds\.width \/ Math\.max\(1, frame\.offsetWidth\)/);
   assert.match(source, /element\.ownerDocument\?\.activeElement/);
 });

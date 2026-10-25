@@ -60,10 +60,12 @@ MDN 输入丢失已定位并修复：输入框所在的声明式 Shadow DOM 在�
 
 [最终 Brizo 记录](./agent-evidence/mdn-scopes-2026-10-25/brizo-final.json)、[GitHub 定点记录](./agent-evidence/mdn-scopes-2026-10-25/github-targeted.json)、[Ego 记录](./agent-evidence/mdn-scopes-2026-10-25/ego-final.json)和[运行审计](./agent-evidence/mdn-scopes-2026-10-25/run-audit.json)包含动作、检查、错误、耗时和源码哈希。每站单次流程及限定的复测不足以发布整体速度或稳定性排名。
 
-两端视口为 1348×802 CSS 像素、DPR 2。Brizo 使用 Electron 44.2.0／Chromium 152.0.7977.76；Ego 保留运行版本 0.6.0.20、Skill 2.1.0，在本次独立 Space 52 后台执行。没有登录账号或操作日常标签。环境与当前源码哈希见[环境记录](./agent-evidence/mdn-scopes-2026-10-25/environment.json)。
+两端视口为 1348×802 CSS 像素、DPR 2。Brizo 使用 Electron 44.2.0／Chromium 152.0.7977.76；Ego 保留运行版本 0.6.0.20、Skill 2.1.0，在本次独立 Space 52 后台执行。没有登录账号或操作日常标签。环境与三站测量所用源码哈希见[环境记录](./agent-evidence/mdn-scopes-2026-10-25/environment.json)。
 
 ## 功能验证
 
 126 项项目测试通过。公共隐藏 Chromium 验收 22 个场景，桌面集成 23 个场景；覆盖延迟组件定义、输入只派发一次、未就绪不写入、整页分页、子树隔离及过期根、同源与跨域 frame 边界，并保留原有批处理、Canvas、登录接管和追问继续执行。一次生产构建与镜像检查通过，日常应用未重启。
 
 复现真实流程仍使用仓库的 `scripts/agent-real-sites-host.mjs` 和 `scripts/benchmark-real-sites.mjs`，命令见[上一轮报告](./real-sites-comparison-2026-10-25.md)。当前脚本会在每个成功流程后记录三个观察范围，并在目标不在视口时使用整页观察；本轮使用普通执行模式，未启用补填恢复。固定组件场景可通过 `npm run verify:agent` 在后台复现。
+
+最终帧坐标复核另修正了滚动后的换算：逐层读取当前 frame 边界并检查父文档遮挡，不复用滚动前的位置。固定场景把同源 iframe 放在视口下方，经整页与子树观察选中按钮后，验证真实点击将文字改为 `Clicked`。公共 22 个、桌面 23 个场景再次通过，见 [frame-acceptance.json](./agent-evidence/mdn-scopes-2026-10-25/frame-acceptance.json) 与 [frame-desktop-acceptance.json](./agent-evidence/mdn-scopes-2026-10-25/frame-desktop-acceptance.json)。三站记录仍保留其测量版本 `79b3242` 与原始哈希，没有改写为这项定点修复后的数据。

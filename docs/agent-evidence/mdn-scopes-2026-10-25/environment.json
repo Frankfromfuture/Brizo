@@ -22,5 +22,13 @@
     "runtime/electron/agent-session-tools.mjs": "3ee6fa354c46c2a740c83a394de23e560b338f97bdfb666557e3ba314f467351",
     "lib/agent-session.mjs": "fd502c839c634dd3f83d27354784ad8521664294c20f85aae131ca3b1cbd27e1",
     "runtime/electron/agent-observation-scope.mjs": "5a0dbff690f78fe7233fb828cbf592af1a4718219bec2d24ebcaef65070d8976"
+  },
+  "measuredRevision": "79b3242b0508016b4452270d812d7aea257255bd",
+  "frameCoordinateFollowup": {
+    "sourceFile": "runtime/electron/browser-command-agent.mjs",
+    "sha256": "befbc7c0dd051a39d89f2d1eb49f4f5c5f9e3670e2a51c8dea99cbad08c99183",
+    "publicEvidence": "frame-acceptance.json",
+    "desktopEvidence": "frame-desktop-acceptance.json",
+    "scope": "Targeted offscreen same-origin frame click regression after the three-site measurement; top-document task logic unchanged."
   }
 }
