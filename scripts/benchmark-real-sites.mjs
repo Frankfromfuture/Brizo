@@ -60,23 +60,33 @@ async function executeEgoPlan({space,pageLabel,url,site,evidence,engine,phase}) 
  const result=await runPlan(a,site);result.apiCalls=calls;result.fallbacks=fallbacks;return result;
 }
 
-const sourceFiles={};for(const name of ['runtime/electron/agent-browser.mjs','runtime/electron/browser-command-agent.mjs','runtime/electron/agent-session-tools.mjs','lib/agent-session.mjs'])sourceFiles[name]=createHash('sha256').update(await readFile(new URL('../'+name,import.meta.url))).digest('hex');
+const sourceFiles={};for(const name of ['runtime/electron/agent-browser.mjs','runtime/electron/browser-command-agent.mjs','runtime/electron/agent-session-tools.mjs','lib/agent-session.mjs','runtime/electron/agent-observation-scope.mjs'])sourceFiles[name]=createHash('sha256').update(await readFile(new URL('../'+name,import.meta.url))).digest('hex');
+const selectedSites=Object.entries(sites).filter(([name])=>option('--sites','wikipedia,mdn,github').split(',').includes(name));
+if(!selectedSites.length)throw new Error("Choose at least one known site");
 const results=[];let session;
 try{
- if(engine==='brizo')session=await createAgentSession({goal:'Read Wikipedia, MDN and GitHub. Click article section links, search Wikipedia, filter the MDN sidebar and GitHub branch menu, inspect Promise methods and repository releases, and return using history. No account changes.',client:'real-site-benchmark',url:sites.wikipedia,observe:{format:'text'}},{clientOptions:{directory}});
- for(const [site,url]of Object.entries(sites).filter(([name])=>option('--sites','wikipedia,mdn,github').split(',').includes(name))){
+ if(engine==='brizo')session=await createAgentSession({goal:'Read Wikipedia, MDN and GitHub. Click article section links, search Wikipedia, filter the MDN sidebar and GitHub branch menu, inspect Promise methods and repository releases, and return using history. No account changes.',client:'real-site-benchmark',url:selectedSites[0][1],observe:{format:'text'}},{clientOptions:{directory}});
+ for(const [site,url]of selectedSites){
   let result;
   if(engine==='brizo'){
-   if(site!=='wikipedia')await session.act({action:'navigate',url});
+   if(site!==selectedSites[0][0])await session.act({action:'navigate',url});
    let last=session.observation;let calls=0;const fallbacks=[];
    const a={raw:()=>JSON.stringify(last),text:()=>[last?.pageText,last?.controls].filter(Boolean).join('\n'),url:async()=>last?.url||'',save:async name=>{await writeFile(path.join(evidence,`${engine}-${phase}-${site}-${name}.json`),JSON.stringify(last));},
     async act(action){calls++;try{const r=await session.act(action);last=r.observation;return r;}catch(error){if(session.observation)last=session.observation;throw error;}},
-    async named(action,role,name,value){return this.act({action,target:{role,name},...(action==='press'?{key:value}:value!==undefined?{value}:{}),...(action==='press'?{wait:{url:'Machine_learning',timeoutMs:10000}}:name==='main branch'?{wait:{target:{role:'textbox',name:'Filter branches'},timeoutMs:5000}}:{})});},
+    async named(action,role,name,value){if(!String(last.controls).includes(' '+role+' '+JSON.stringify(name))){fallbacks.push({kind:'full-page-observation',target:name});calls++;last=await session.observe({scope:'full_page',maxElements:1000,maxChars:0});}return this.act({action,target:{role,name},...(action==='press'?{key:value}:value!==undefined?{value}:{}),...(action==='press'?{wait:{url:'Machine_learning',timeoutMs:10000}}:name==='main branch'?{wait:{target:{role:'textbox',name:'Filter branches'},timeoutMs:5000}}:{})});},
     async recover(name,error){if(phase!=='recovery'||name!=='filter-sidebar'||error.code!=='CONDITION_TIMEOUT')return false;last=session.observation||await session.observe();const line=String(last.controls).split('\n').find(line=>line.includes('textbox \"Filter sidebar\"'));if(!line||line.includes('value='))return false;fallbacks.push({kind:'explicit-refill-after-observed-blank'});return true;},
     async filterSidebar(value){return this.act({action:'fill',target:{role:'textbox',name:'Filter sidebar'},value,wait:{target:{role:'link',href:'https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise'},timeoutMs:5000}});},
-    async href(suffix,prefix=false){const find=()=>String(last.controls).split('\n').find(line=>{const h=line.match(/href="([^"]+)"/)?.[1];return h&&(prefix?h.includes(suffix):h.endsWith(suffix));});let line=find();if(!line&&phase==='recovery'){fallbacks.push({kind:'scroll-and-wait',target:suffix});await this.act({action:'scroll',amount:600});calls++;const r=await session.wait({target:{href:suffix,exact:false},timeoutMs:5000});last=r.observation;line=find();}if(!line)throw Object.assign(new Error('Target link is absent from current observation: '+suffix),{code:'TARGET_NOT_OBSERVED'});const href=line.match(/href="([^"]+)"/)[1];return this.act({action:'click',ref:line.match(/^@e\d+/)[0],wait:{url:href,timeoutMs:10000}});},
+    async href(suffix,prefix=false){const find=()=>String(last.controls).split('\n').find(line=>{const h=line.match(/href="([^"]+)"/)?.[1];return h&&(prefix?h.includes(suffix):h.endsWith(suffix));});let line=find();if(!line){fallbacks.push({kind:'full-page-observation',target:suffix});calls++;last=await session.observe({scope:'full_page',maxElements:1000,maxChars:0});line=find();if(!line){calls++;const r=await session.wait({target:{href:suffix,exact:false},timeoutMs:10000,observe:{scope:'full_page',maxElements:1000,maxChars:0}});last=r.observation;line=find();}}if(!line)throw Object.assign(new Error('Target link is absent from current observation: '+suffix),{code:'TARGET_NOT_OBSERVED'});const href=line.match(/href="([^"]+)"/)[1];const unique=String(last.controls).split('\n').filter(row=>row.includes('href='+JSON.stringify(href))).length===1;return this.act({action:'click',...(unique?{target:{role:'link',href}}:{ref:line.match(/^@e\d+/)[0]}),wait:{url:href,timeoutMs:10000}});},
     async back(){return this.act({action:'back'});}};
    result=await runPlan(a,site);result.apiCalls=calls;result.fallbacks=fallbacks;
+   if(result.success){
+    const probe={viewport:{bytes:Buffer.byteLength(JSON.stringify(last)),counts:last.counts,truncated:last.truncated}};
+    const full=await session.observe({scope:'full_page',maxElements:30,maxChars:500});
+    probe.full_page={bytes:Buffer.byteLength(JSON.stringify(full)),counts:full.counts,truncated:full.truncated,pagination:full.pagination};
+    const main=full.regions?.find(r=>['main','article'].includes(r.role)) || full.regions?.[0];
+    if(main){const sub=await session.observe({scope:'subtree',root:main.ref,maxElements:30,maxChars:500});probe.subtree={root:main.role,bytes:Buffer.byteLength(JSON.stringify(sub)),counts:sub.counts,truncated:sub.truncated};}
+    result.scopeProbe=probe;await session.observe();
+   }
    if(!result.success){try{last=await session.observe();await a.save('recovery');}catch(error){result.recoveryError={code:error.code,message:error.message};throw Object.assign(error,{partial:result});}}
   }else{
    const source=`const runPlan=${runPlan.toString()};const executeEgoPlan=${executeEgoPlan.toString()};console.log('REAL '+JSON.stringify(await executeEgoPlan(${JSON.stringify({space,pageLabel,url,site,evidence,engine,phase})})));`;

@@ -76,12 +76,18 @@ The SDK reuses a validated runtime connection within its client-options lifetime
 Local help is available through `brizo help act|batch|wait|observe|screenshot|visual|agent`. `brizo skill` prints the installed guide without opening a browser.
 
 
-### 长页面和连续任务
+### 观察范围与连续任务
 
-观察正文优先包含视口中的文本，随后补充文档开头；`truncated` 继承底层采集上限。普通章节片段保留在 URL 与链接中，含参数的认证片段继续隐藏。控件观察仍受视口与 140 项上限约束。
+默认 `scope:"viewport"` 只采集当前视口正文，不再重复文档开头。`full_page` 采集整页已渲染 DOM；`regions` 最多提供 32 个区域入口。`subtree` 的 `root` 使用最新观察中的 `@rN` 区域、`@eN` 控件或同源 `@fN` iframe。SDK 自动带入最新观察 ID，CLI 同时传 `snapshotId`。过期根引用会报错，跨域 frame 继续保持边界。
 
-控件名称支持 `aria-labelledby`，可见文字优先于提示 title，交互控件中的装饰子节点不再重复作为控件返回。点击先将目标滚入视图并检查遮挡；公共 Runtime 返回 `TARGET_OCCLUDED` 时没有派发点击。桌面宿主原有的更完整命中检查保持不变。
+默认正文 6000 字符、控件 140 项；单次最多 10000 字符、1000 个控件。根据 `pagination.nextOffset` 与 `nextTextOffset` 分页。`counts.elements` 是本次缓存的控件数，不是整页总数；`truncated` 表示采集或输出仍有剩余。页面尚未加载的内容不在 DOM 观察范围内。
 
-存在性等待可接受多个匹配；动作、控件值和选中状态验证仍要求唯一目标。`CONDITION_TIMEOUT` 的 `details.observation` 提供当前状态，SDK 据此更新观察编号。页面初始化覆盖输入等情况仍需调用方判断后显式恢复，不做隐式动作重试。
+```js
+const full = await session.observe({scope:"full_page", maxElements:100, maxChars:2000});
+const main = full.regions.find(region => region.role === "main");
+if (main) await session.observe({scope:"subtree", root:main.ref, maxChars:2000});
+```
 
-真实网站流程、失败与恢复记录见 [三站实测](./real-sites-comparison-2026-10-25.md)。
+填值在 Shadow DOM 组件定义及其 `updateComplete` 完成后才执行，再重新核对控件。组件就绪等待上限为 10 秒，仍受外层请求截止时间约束；`CONTROL_NOT_READY` 不会写入或自动重试。`CONDITION_TIMEOUT` 提供当前观察供调用方继续。直接构造 `AgentSession` 接续任务时，应保留首次创建的 `capabilities`。
+
+公共 Runtime 保留遮挡点击检查、提交授权与登录接管。普通章节片段可见，认证片段隐藏；区域和 iframe 的内部 DOM 标记不返回客户端。

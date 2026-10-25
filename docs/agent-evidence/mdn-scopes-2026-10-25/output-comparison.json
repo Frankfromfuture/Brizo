@@ -1,0 +1,26 @@
+[
+  {
+    "site": "wikipedia",
+    "checkpoint": "ethics",
+    "previousBrizoBytes": 14497,
+    "currentBrizoBytes": 7828,
+    "currentEgoBytes": 11534,
+    "reductionPercent": 46.0
+  },
+  {
+    "site": "mdn",
+    "checkpoint": "filter-sidebar",
+    "previousBrizoBytes": 12687,
+    "currentBrizoBytes": 6456,
+    "currentEgoBytes": 7659,
+    "reductionPercent": 49.1
+  },
+  {
+    "site": "github",
+    "checkpoint": "branch-menu",
+    "previousBrizoBytes": 16546,
+    "currentBrizoBytes": 12585,
+    "currentEgoBytes": 18421,
+    "reductionPercent": 23.9
+  }
+]

@@ -1,8 +1,10 @@
 # Agent 接口验收
 
-2026 年 10 月 25 日，本轮 124 项项目测试、18 个公共隐藏 Chromium 场景和 19 个桌面集成场景通过。公开文件边界、语法与 npm 包检查通过；原始场景见 [validation.json](./agent-evidence/validation.json) 和 [desktop-validation.json](./agent-evidence/desktop-validation.json)。
+2026 年 10 月 25 日，本轮 126 项项目测试、22 个公共隐藏 Chromium 场景和 23 个桌面集成场景通过。公开文件边界、语法与 npm 包检查通过；原始场景见 [validation.json](./agent-evidence/validation.json) 和 [desktop-validation.json](./agent-evidence/desktop-validation.json)。
 
 测试环境为 macOS、Electron 44.2.0、Chromium 152.0.7977.76。固定页面在隔离会话中响应合成域名；窗口隐藏，前台激活 API 调用为 0。桌面加载当前生产构建及嵌入 Runtime，保留原有过程记录与追问继续执行。日常应用未重启。
+
+最新 MDN 输入根因、整页／子树范围与三站复测见[新验收](./mdn-scopes-validation-2026-10-25.md)。
 
 本轮新增验证长文章的当前视口正文、安全章节片段、控件标签、底层截断提示，以及被遮挡的控件不接收点击。等待超时返回当前观察；多匹配存在性等待通过，动作和控件值验证仍拦截歧义。既有语义批处理、截图坐标、125% 缩放 Canvas 拖拽、输入授权与登录接管场景也通过。
 

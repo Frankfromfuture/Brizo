@@ -1,0 +1,106 @@
+{
+  "engine": "brizo",
+  "phase": "github-targeted",
+  "date": "2026-10-25T04:51:14.732Z",
+  "sourceFiles": {
+    "runtime/electron/agent-browser.mjs": "4e8dc3bf6e83cb319855e5b82ac6b98d3985943fb71b03e2f7ed0a4a22bf5269",
+    "runtime/electron/browser-command-agent.mjs": "76b2b1ab21d695feae51484fcf54e1fa5b6e57c98ffd3b312077aeab16271854",
+    "runtime/electron/agent-session-tools.mjs": "3ee6fa354c46c2a740c83a394de23e560b338f97bdfb666557e3ba314f467351",
+    "lib/agent-session.mjs": "fd502c839c634dd3f83d27354784ad8521664294c20f85aae131ca3b1cbd27e1",
+    "runtime/electron/agent-observation-scope.mjs": "5a0dbff690f78fe7233fb828cbf592af1a4718219bec2d24ebcaef65070d8976"
+  },
+  "results": [
+    {
+      "site": "github",
+      "success": true,
+      "records": [
+        {
+          "name": "branch-menu",
+          "elapsedMs": 252.34954200000016,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 7972
+        },
+        {
+          "name": "filter-branches",
+          "elapsedMs": 243.10850000000028,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 12346
+        },
+        {
+          "name": "cancel-menu",
+          "elapsedMs": 250.82712500000025,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 12003
+        },
+        {
+          "name": "tags",
+          "elapsedMs": 778.941167,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright/tags",
+          "outputBytes": 5894
+        },
+        {
+          "name": "release",
+          "elapsedMs": 952.6268339999997,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright/releases/tag/v1.64.1",
+          "outputBytes": 4788
+        },
+        {
+          "name": "back",
+          "elapsedMs": 201.7060419999998,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright/tags",
+          "outputBytes": 5768
+        }
+      ],
+      "apiCalls": 6,
+      "fallbacks": [],
+      "scopeProbe": {
+        "viewport": {
+          "bytes": 5768,
+          "counts": {
+            "elements": 56,
+            "returned": 56
+          },
+          "truncated": {
+            "elements": false,
+            "text": false
+          }
+        },
+        "full_page": {
+          "bytes": 3730,
+          "counts": {
+            "elements": 98,
+            "returned": 30
+          },
+          "truncated": {
+            "elements": true,
+            "text": true
+          },
+          "pagination": {
+            "nextOffset": 30,
+            "nextTextOffset": 500,
+            "offset": 0,
+            "textOffset": 0
+          }
+        },
+        "subtree": {
+          "root": "main",
+          "bytes": 3851,
+          "counts": {
+            "elements": 76,
+            "returned": 30
+          },
+          "truncated": {
+            "elements": true,
+            "text": true
+          }
+        }
+      }
+    }
+  ]
+}

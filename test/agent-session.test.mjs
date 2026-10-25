@@ -167,3 +167,18 @@ test("existence waits accept multiple links while actions and value waits stay u
   assert.throws(() => findTarget(page, target), { code: "TARGET_AMBIGUOUS" });
   assert.throws(() => matchesWait(page, { target, value: "x" }), { code: "TARGET_AMBIGUOUS" });
 });
+
+test("scope options are bounded and subtree roots are explicit", () => {
+  assert.throws(() => presentObservation(snapshot(), {options:{scope:"all"}}), {code:"ARGUMENT_INVALID"});
+  assert.throws(() => presentObservation(snapshot(), {options:{scope:"subtree",root:"body"}}), {code:"ARGUMENT_INVALID"});
+  assert.throws(() => presentObservation(snapshot(), {options:{maxElements:1001}}), {code:"ARGUMENT_INVALID"});
+  const result=presentObservation({...snapshot(),scope:"subtree",regions:[{ref:"@r1",domRef:"private",role:"main"}],frames:[{ref:"@f1",domRef:"private-frame",url:"https://example.com/"}]},{options:{scope:"subtree",root:"@r1"}});
+  assert.equal(JSON.stringify(result).includes("private"),false);
+});
+
+test("SDK binds subtree requests to the current observation", async () => {
+  const sent=[];
+  const session=await createAgentSession({goal:"Read"},{command:async(method,id,args)=>{sent.push({method,args});return method==="create"?{sessionId:"s",observation:{snapshotId:"latest"},capabilities:{methods:["observe"],observations:["subtree"]}}:{snapshotId:"next"};}});
+  await session.observe({scope:"subtree",root:"@r1"});
+  assert.equal(sent[1].args.snapshotId,"latest");
+});

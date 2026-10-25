@@ -2,6 +2,10 @@
 
 ## 0.5.0
 
+- Wait for declarative shadow-root components to register and finish their update before filling; revalidate the target without replaying input.
+- Add viewport, full-page and snapshot-bound subtree observations with region/frame refs and control/text pagination. Preserve frame-origin and login boundaries.
+- Return scope text once instead of duplicating the document prefix; default to 6000 text characters and allow up to 1000 controls per paged observation.
+
 - Prioritize viewport text on long pages, retain safe section fragments, resolve labelled controls and disclose upstream truncation.
 - Scroll observed click targets into view and reject covered controls before dispatch. Return fresh observations on condition timeouts without replaying actions.
 - Allow multiple matches for existence waits while preserving action/value ambiguity checks. Publish live Wikipedia, MDN and GitHub workflows, including failures and explicit recovery costs.

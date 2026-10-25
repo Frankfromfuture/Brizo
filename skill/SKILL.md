@@ -38,11 +38,15 @@ node "/本 skill 的绝对路径/scripts/brizo.mjs" act SESSION_ID --json '{"sna
 
 默认观察精简空字段。`observe` 可传 JSON 参数 `filter:{role,text,frameRef}`、`maxChars`、`maxElements`；`since` 返回最近四份观察中的变化。完整属性用 `detail:"full"`。变化观察中的旧引用只作说明，后续使用新编号、新引用或语义目标。
 
-长页面的正文优先返回当前视口内容，再补文档开头。目录链接保留普通章节片段；含令牌参数的片段仍会隐藏。`truncated` 同时反映采集上限与输出上限；控件列表仍限于当前视口，目标未出现时先滚动，再观察。
+默认 `scope:"viewport"` 只返回当前视口的正文与控件，不再拼接文档开头。`scope:"full_page"` 采集整页已渲染 DOM；`scope:"subtree"` 配合最新观察中的 `root:"@rN|@eN|@fN"` 限定区域。`regions` 提供最多 32 个正文、导航等区域引用；跨域 iframe 保留边界。
+
+默认正文上限 6000 字符、控件 140 项，单次最多 10000 字符、1000 个控件。使用 `pagination.nextOffset` 继续控件列表，`nextTextOffset` 继续正文；`truncated` 表明还有内容。子树的 CLI 请求同时传入最新 `snapshotId`；SDK `session.observe({scope:"subtree",root})` 自动绑定当前观察编号。接续已有 `AgentSession` 时保留首次创建返回的 `capabilities`。
+
+目录链接保留普通章节 ID，认证参数片段仍隐藏。需要未出现在视口内的链接时，先做整页观察或缩小到子树，再根据新引用操作。
 
 点击已观察到的链接时，若后续步骤依赖新页面，附上预期 URL 或目标控件的 `wait`；页面改了地址，内容可能还在加载。存在性等待允许多个匹配，点击及值验证仍需唯一目标。`TARGET_OCCLUDED` 表示控件被遮住，先重新观察。
 
-`CONDITION_TIMEOUT` 会附带当前观察并保留控制权。先核对字段值和页面状态，再决定接续哪一步。动态页面若把刚填的值清空，可在确认当前字段为空后明确重填一次；保留首次失败记录。SDK 不会自动重放动作。
+填值前会等待声明式 Shadow DOM 组件完成定义与本轮更新，再核对当前控件；不会提前写入后再补填。`CONTROL_NOT_READY` 表示等待到上限且未派发输入，先重新观察。`CONDITION_TIMEOUT` 附带当前观察，核对状态后继续；SDK 不会自动重放动作。
 
 Agent 阅读优先使用 `format:"text"`，控件在 `controls` 中按行显示，保留 ref、角色、名称、值和限制。程序需要对象数组时用 `format:"json"` 读取 `elements`。创建时指定的格式会作为后续观察的默认值，单次调用仍可覆盖。
 

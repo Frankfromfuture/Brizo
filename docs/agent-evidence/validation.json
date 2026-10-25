@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "date": "2026-10-25T04:08:52.259Z",
+  "date": "2026-10-25T04:46:29.389Z",
   "platform": "darwin",
   "electron": "44.2.0",
   "chromium": "152.0.7977.76",
@@ -25,9 +25,9 @@
       "scenario": "observation-budget",
       "passed": true,
       "bytes": {
-        "full": 40579,
-        "compact": 9650,
-        "filtered": 483
+        "full": 40782,
+        "compact": 9350,
+        "filtered": 570
       }
     },
     {
@@ -65,11 +65,27 @@
       "passed": true
     },
     {
+      "scenario": "full-page-pagination-and-bound-subtree",
+      "passed": true
+    },
+    {
       "scenario": "deep-section-text-and-safe-fragments",
       "passed": true
     },
     {
       "scenario": "covered-control-never-receives-click",
+      "passed": true
+    },
+    {
+      "scenario": "subtree-frame-origin-boundary",
+      "passed": true
+    },
+    {
+      "scenario": "declarative-component-fill-after-upgrade",
+      "passed": true
+    },
+    {
+      "scenario": "unready-component-has-no-input-effects",
       "passed": true
     },
     {
@@ -86,15 +102,15 @@
     }
   ],
   "metrics": {
-    "calls": 32,
-    "outputBytes": 242972,
-    "elapsedMs": 2295
+    "calls": 48,
+    "outputBytes": 253869,
+    "elapsedMs": 13792
   },
   "profileIsolated": true,
   "foregroundCalls": 0,
   "verification": {
-    "tests": 124,
-    "passed": 124,
+    "tests": 126,
+    "passed": 126,
     "failed": 0,
     "boundary": "passed",
     "syntax": "passed",

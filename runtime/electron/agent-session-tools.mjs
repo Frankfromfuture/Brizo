@@ -6,7 +6,11 @@ export function validateObservationOptions(options = {}) {
   if (!options || typeof options !== "object" || Array.isArray(options)) throw agentError("ARGUMENT_INVALID", "Observation options must be an object.");
   if (options.detail !== undefined && !["compact", "full"].includes(options.detail)) throw agentError("ARGUMENT_INVALID", "detail must be compact or full.");
   if (options.format !== undefined && !["json", "text"].includes(options.format)) throw agentError("ARGUMENT_INVALID", "format must be json or text.");
-  for (const [key, limit] of [["maxChars", 10000], ["maxElements", 140]]) {
+  if (options.scope !== undefined && !["viewport", "full_page", "subtree"].includes(options.scope)) throw agentError("ARGUMENT_INVALID", "scope must be viewport, full_page or subtree.");
+  if (options.scope === "subtree" && !/^@[erf][1-9]\d*$/.test(options.root || "")) throw agentError("ARGUMENT_INVALID", "subtree needs a root ref from the latest observation.");
+  if (options.root !== undefined && options.scope !== "subtree") throw agentError("ARGUMENT_INVALID", "root requires scope=subtree.");
+  for (const key of ["offset", "textOffset"]) if (options[key] !== undefined && (!Number.isInteger(options[key]) || options[key] < 0 || options[key] > 1000000)) throw agentError("ARGUMENT_INVALID", `${key} must be 0–1000000.`);
+  for (const [key, limit] of [["maxChars", 10000], ["maxElements", 1000]]) {
     if (options[key] !== undefined && (!Number.isInteger(options[key]) || options[key] < 0 || options[key] > limit)) throw agentError("ARGUMENT_INVALID", `${key} must be 0–${limit}.`);
   }
   if (options.filter && (typeof options.filter !== "object" || Array.isArray(options.filter)
@@ -34,7 +38,7 @@ export function validateAgentAction(action) {
 
 export function errorRecovery(code) {
   if (["STALE_SNAPSHOT", "SNAPSHOT_UNKNOWN", "SCREENSHOT_REQUIRED"].includes(code)) return { retryable: true, next: code === "SCREENSHOT_REQUIRED" ? "screenshot" : "observe", requiresUser: false };
-  if (code === "CONDITION_TIMEOUT" || code === "TARGET_NOT_FOUND" || code === "TARGET_OCCLUDED") return { retryable: true, next: "observe", requiresUser: false };
+  if (code === "CONDITION_TIMEOUT" || code === "TARGET_NOT_FOUND" || code === "TARGET_OCCLUDED" || code === "CONTROL_NOT_READY") return { retryable: true, next: "observe", requiresUser: false };
   if (code === "TARGET_AMBIGUOUS") return { retryable: false, next: "narrow-target", requiresUser: false };
   if (["USER_CONTROL", "NEEDS_LOGIN", "SITE_BLOCKED", "NEEDS_CONFIRMATION", "BROWSER_PAUSED", "TIMEOUT", "DISCONNECTED"].includes(code)) {
     return { retryable: false, next: "status", requiresUser: true };
@@ -88,9 +92,9 @@ function controlText(element) {
 
 export function presentObservation(snapshot, { tabId, snapshotId, options = {}, previous, cleanUrl = value => value }) {
   validateObservationOptions(options);
-  const maxChars = options.maxChars ?? 10000;
+  const maxChars = options.maxChars ?? 6000;
   const maxElements = options.maxElements ?? 140;
-  if (!Number.isInteger(maxChars) || maxChars < 0 || maxChars > 10000 || !Number.isInteger(maxElements) || maxElements < 0 || maxElements > 140) {
+  if (!Number.isInteger(maxChars) || maxChars < 0 || maxChars > 10000 || !Number.isInteger(maxElements) || maxElements < 0 || maxElements > 1000) {
     throw agentError("ARGUMENT_INVALID", "maxChars must be 0–10000 and maxElements 0–140.");
   }
   let elements = snapshot.elements;
@@ -132,7 +136,9 @@ export function presentObservation(snapshot, { tabId, snapshotId, options = {}, 
   return {
     tabId, snapshotId, title: snapshot.title, url: cleanUrl(snapshot.url), pageText,
     viewport: { ...snapshot.viewport, units: "css-pixels" },
-    frames: snapshot.frames?.map(frame => ({ ...frame, url: cleanUrl(frame.url) })),
+    ...(snapshot.frames?.length ? { frames: snapshot.frames.map(({ domRef, ...frame }) => ({ ...frame, url: cleanUrl(frame.url) })) } : {}),
+    ...(snapshot.scope ? { scope: snapshot.scope, pagination: snapshot.pagination } : {}),
+    ...(snapshot.regions?.length ? { regions: snapshot.regions.map(({ domRef, ...region }) => region) } : {}),
     ...(options.format === "text" ? { controls: elements.map(controlText).join("\n") } : { elements }),
     ...(changes ? { changes } : {}),
     truncated: { elements: Boolean(snapshot.truncated?.elements || totalElements > elements.length), text: Boolean((snapshot.truncated?.text || maxChars < snapshot.pageText.length) && (!changes || changes.textChanged)) },

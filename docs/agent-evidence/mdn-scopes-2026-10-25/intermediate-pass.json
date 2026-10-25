@@ -1,0 +1,271 @@
+{
+  "engine": "brizo",
+  "phase": "scope-fixed-final",
+  "date": "2026-10-25T04:45:50.149Z",
+  "sourceFiles": {
+    "runtime/electron/agent-browser.mjs": "4e8dc3bf6e83cb319855e5b82ac6b98d3985943fb71b03e2f7ed0a4a22bf5269",
+    "runtime/electron/browser-command-agent.mjs": "f66a93a8a77f064698e7f40677a1222d9eb3ebcb4fcbff0e0bd4ecf19e7dc49c",
+    "runtime/electron/agent-session-tools.mjs": "3ee6fa354c46c2a740c83a394de23e560b338f97bdfb666557e3ba314f467351",
+    "lib/agent-session.mjs": "fd502c839c634dd3f83d27354784ad8521664294c20f85aae131ca3b1cbd27e1",
+    "runtime/electron/agent-observation-scope.mjs": "5a0dbff690f78fe7233fb828cbf592af1a4718219bec2d24ebcaef65070d8976"
+  },
+  "results": [
+    {
+      "site": "wikipedia",
+      "success": true,
+      "records": [
+        {
+          "name": "ethics",
+          "elapsedMs": 539.3633749999999,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence#Ethics",
+          "outputBytes": 7879
+        },
+        {
+          "name": "collapse-ethics",
+          "elapsedMs": 643.7140420000001,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence#Ethics",
+          "outputBytes": 7213
+        },
+        {
+          "name": "history",
+          "elapsedMs": 414.75591600000007,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence#History",
+          "outputBytes": 9294
+        },
+        {
+          "name": "top",
+          "elapsedMs": 429.3405419999999,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence",
+          "outputBytes": 11927
+        },
+        {
+          "name": "search",
+          "elapsedMs": 491.328125,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence",
+          "outputBytes": 11954
+        },
+        {
+          "name": "search-enter",
+          "elapsedMs": 1210.2760420000004,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Machine_learning",
+          "outputBytes": 9815
+        }
+      ],
+      "apiCalls": 6,
+      "fallbacks": [],
+      "scopeProbe": {
+        "viewport": {
+          "bytes": 9815,
+          "counts": {
+            "elements": 84,
+            "returned": 84
+          },
+          "truncated": {
+            "elements": false,
+            "text": false
+          }
+        },
+        "full_page": {
+          "bytes": 4323,
+          "counts": {
+            "elements": 140,
+            "returned": 30
+          },
+          "truncated": {
+            "elements": true,
+            "text": true
+          },
+          "pagination": {
+            "nextOffset": 30,
+            "nextTextOffset": 500,
+            "offset": 0,
+            "textOffset": 0
+          }
+        },
+        "subtree": {
+          "root": "main",
+          "bytes": 3692,
+          "counts": {
+            "elements": 140,
+            "returned": 30
+          },
+          "truncated": {
+            "elements": true,
+            "text": true
+          }
+        }
+      }
+    },
+    {
+      "site": "mdn",
+      "success": true,
+      "records": [
+        {
+          "name": "filter-sidebar",
+          "elapsedMs": 1783.185458,
+          "success": true,
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript",
+          "outputBytes": 6456
+        },
+        {
+          "name": "promise",
+          "elapsedMs": 550.9845829999995,
+          "success": true,
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise",
+          "outputBytes": 6412
+        },
+        {
+          "name": "static-methods",
+          "elapsedMs": 198.49049999999988,
+          "success": true,
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise#static_methods",
+          "outputBytes": 7206
+        },
+        {
+          "name": "all-settled",
+          "elapsedMs": 626.672790999999,
+          "success": true,
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/allSettled",
+          "outputBytes": 6072
+        },
+        {
+          "name": "back",
+          "elapsedMs": 205.01537499999904,
+          "success": true,
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise#static_methods",
+          "outputBytes": 6994
+        }
+      ],
+      "apiCalls": 5,
+      "fallbacks": [],
+      "scopeProbe": {
+        "viewport": {
+          "bytes": 6994,
+          "counts": {
+            "elements": 48,
+            "returned": 48
+          },
+          "truncated": {
+            "elements": false,
+            "text": false
+          }
+        },
+        "full_page": {
+          "bytes": 4270,
+          "counts": {
+            "elements": 140,
+            "returned": 30
+          },
+          "truncated": {
+            "elements": true,
+            "text": true
+          },
+          "pagination": {
+            "nextOffset": 30,
+            "nextTextOffset": 500,
+            "offset": 0,
+            "textOffset": 0
+          }
+        }
+      }
+    },
+    {
+      "site": "github",
+      "success": true,
+      "records": [
+        {
+          "name": "branch-menu",
+          "elapsedMs": 249.55033299999923,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 12585
+        },
+        {
+          "name": "filter-branches",
+          "elapsedMs": 233.960959,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 12346
+        },
+        {
+          "name": "cancel-menu",
+          "elapsedMs": 240.31733299999905,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 12003
+        },
+        {
+          "name": "tags",
+          "elapsedMs": 746.8493749999998,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright/tags",
+          "outputBytes": 5894
+        },
+        {
+          "name": "release",
+          "elapsedMs": 579.1940409999988,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright/releases/tag/v1.64.1",
+          "outputBytes": 4788
+        },
+        {
+          "name": "back",
+          "elapsedMs": 182.1955420000013,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright/tags",
+          "outputBytes": 4772
+        }
+      ],
+      "apiCalls": 6,
+      "fallbacks": [],
+      "scopeProbe": {
+        "viewport": {
+          "bytes": 4772,
+          "counts": {
+            "elements": 42,
+            "returned": 42
+          },
+          "truncated": {
+            "elements": false,
+            "text": false
+          }
+        },
+        "full_page": {
+          "bytes": 3694,
+          "counts": {
+            "elements": 43,
+            "returned": 30
+          },
+          "truncated": {
+            "elements": true,
+            "text": true
+          },
+          "pagination": {
+            "nextOffset": 30,
+            "nextTextOffset": 500,
+            "offset": 0,
+            "textOffset": 0
+          }
+        },
+        "subtree": {
+          "root": "main",
+          "bytes": 3029,
+          "counts": {
+            "elements": 21,
+            "returned": 21
+          },
+          "truncated": {
+            "elements": false,
+            "text": true
+          }
+        }
+      }
+    }
+  ]
+}

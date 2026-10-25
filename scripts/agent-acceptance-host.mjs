@@ -31,14 +31,15 @@ let session;
 try {
   const fixture = await readFile(new URL("./fixtures/agent-workbench.html", import.meta.url), "utf8");
   const directory = await mkdtemp(path.join(os.tmpdir(), "brizo-agent-qa-"));
-  const longFixture = `<a href="#tail">Deep section</a><span id="control-label">Label from ID</span><button aria-labelledby="control-label" title="Tooltip">Child</button><a href="https://example.com/" title="External link"><span>Visible link name</span></a>${Array.from({length:180},(_,i)=>`<button style="font-size:4px;padding:0">B${i}</button>`).join("")}<p>${"Document beginning. ".repeat(1000)}</p><div style="height:10000px"></div><h2 id="tail">Tail section</h2><p>UNIQUE_VISIBLE_TAIL_EVIDENCE</p><a href="#access_token=fixture-secret">Auth fragment</a><button style="position:fixed;left:600px;top:100px;width:140px;height:40px" onclick="window.coverClicks=(window.coverClicks||0)+1">Covered control</button><div style="position:fixed;left:600px;top:100px;width:140px;height:40px;z-index:999;background:white">Cover</div>`;
+  const longFixture = `<nav>OUTSIDE_NAVIGATION</nav><main aria-label="Long article"><a href="#tail">Deep section</a><span id="control-label">Label from ID</span><button aria-labelledby="control-label" title="Tooltip">Child</button><a href="https://example.com/" title="External link"><span>Visible link name</span></a>${Array.from({length:180},(_,i)=>`<button style="font-size:4px;padding:0">B${i}</button>`).join("")}<p>${"Document beginning. ".repeat(1000)}</p><div style="height:10000px"></div><h2 id="tail">Tail section</h2><p>UNIQUE_VISIBLE_TAIL_EVIDENCE</p><a href="#access_token=fixture-secret">Auth fragment</a><button style="position:fixed;left:600px;top:100px;width:140px;height:40px" onclick="window.coverClicks=(window.coverClicks||0)+1">Covered control</button><div style="position:fixed;left:600px;top:100px;width:140px;height:40px;z-index:999;background:white">Cover</div></main>`;
+  const componentFixture = (never = false) => `<delayed-filter><template shadowrootmode="open"><input aria-label="Delayed field" value=""></template></delayed-filter><p id="result">Initial</p><script>window.receivedInput=0;${never ? "" : `setTimeout(()=>customElements.define('delayed-filter',class extends HTMLElement{constructor(){super();this.updateComplete=new Promise(resolve=>setTimeout(()=>{const input=this.shadowRoot.querySelector('input');input.value='';input.addEventListener('input',()=>{window.receivedInput++;document.querySelector('#result').textContent='Value: '+input.value;});resolve(true);},80));}}),600);`}</script>`;
   bridge = await startAgentBridge({
     directory,
     // This fixture adapter resolves one synthetic public origin entirely in
     // memory. Production navigation and network policies remain unchanged.
     installNetworkPolicy(partition) {
       partition.protocol.handle("https", request => new URL(request.url).origin === "https://fixture.brizo.example"
-        ? new Response(new URL(request.url).pathname === "/long" ? longFixture : new URL(request.url).searchParams.has("login")
+        ? new Response(new URL(request.url).pathname === "/component" ? componentFixture() : new URL(request.url).pathname === "/not-ready" ? componentFixture(true) : new URL(request.url).pathname === "/frames" ? `<iframe srcdoc="&lt;main aria-label='Frame article'&gt;&lt;button onclick=&quot;this.textContent='Clicked'&quot;&gt;Inside frame&lt;/button&gt;&lt;/main&gt;"></iframe><iframe src="https://cross-origin.example/"></iframe>` : new URL(request.url).pathname === "/long" ? longFixture : new URL(request.url).searchParams.has("login")
           ? fixture.replace("</html>", '<dialog open aria-label="Sign in"><form><label>Password<input type="password" value="login-fixture-value"></label></form></dialog></html>') : fixture,
           { headers: { "Content-Type": "text/html; charset=utf-8" } })
         : new Response("Blocked fixture request", { status: 403 }));
@@ -163,6 +164,18 @@ try {
   assert.equal(session.observation.elements.some(e => e.tag === "span" && e.name === "Label from ID"), false);
   assert.equal(session.observation.elements.find(e => e.name === "Deep section").href, "https://fixture.brizo.example/long#tail");
   results.push({ scenario: "semantic-labels-and-upstream-truncation", passed: true });
+  const firstPage = await session.observe({ scope: "full_page", maxElements: 10, maxChars: 0 });
+  assert.equal(firstPage.pagination.nextOffset, 10);
+  const secondPage = await session.observe({ scope: "full_page", offset: 10, maxElements: 10, maxChars: 0 });
+  assert.equal(firstPage.elements.some(a => secondPage.elements.some(b => a.name === b.name)), false);
+  const whole = await session.observe({ scope: "full_page", maxElements: 1000, maxChars: 0 });
+  assert.ok(whole.elements.some(e => e.name === "Auth fragment"));
+  const article = whole.regions.find(r => r.name === "Long article");
+  const subtree = await session.observe({ scope: "subtree", root: article.ref, maxElements: 20, maxChars: 100 });
+  assert.equal(subtree.scope, "subtree");
+  assert.equal(subtree.pageText.includes("OUTSIDE_NAVIGATION"), false);
+  await assert.rejects(executeBrowserCommand("observe", session.sessionId, { scope: "subtree", root: article.ref, snapshotId: whole.snapshotId }, clientOptions), { code: "STALE_SNAPSHOT" });
+  results.push({ scenario: "full-page-pagination-and-bound-subtree", passed: true });
   await session.act({ action: "click", target: { role: "link", name: "Deep section" } });
   assert.equal(session.observation.url, "https://fixture.brizo.example/long#tail");
   assert.ok(session.observation.pageText.startsWith("Tail section"));
@@ -173,6 +186,28 @@ try {
   assert.equal(await view.webContents.executeJavaScript("window.coverClicks || 0"), 0);
   await session.observe();
   results.push({ scenario: "covered-control-never-receives-click", passed: true });
+  await session.act({ action: "navigate", url: "https://fixture.brizo.example/frames" });
+  const same = session.observation.frames.find(f => f.sameOrigin);
+  const frameView = await session.observe({ scope: "subtree", root: same.ref });
+  assert.ok(frameView.elements.some(e => e.name === "Inside frame"));
+  const buttonTree = await session.observe({ scope: "subtree", root: frameView.elements[0].ref });
+  await session.act({ action: "click", ref: buttonTree.elements[0].ref });
+  await session.observe();
+  const other = session.observation.frames.find(f => !f.sameOrigin);
+  await assert.rejects(session.observe({ scope: "subtree", root: other.ref }), { code: "FRAME_UNAVAILABLE" });
+  await session.observe();
+  results.push({ scenario: "subtree-frame-origin-boundary", passed: true });
+  await session.act({ action: "navigate", url: "https://fixture.brizo.example/component" });
+  await session.act({ action: "fill", target: { role: "textbox", name: "Delayed field" }, value: "durable", wait: { text: "Value: durable", timeoutMs: 1000 } });
+  assert.equal(await view.webContents.executeJavaScript("window.receivedInput"), 1);
+  assert.ok(session.observation.elements.some(e => e.value === "durable"));
+  results.push({ scenario: "declarative-component-fill-after-upgrade", passed: true });
+  await session.act({ action: "navigate", url: "https://fixture.brizo.example/not-ready" });
+  await assert.rejects(session.act({ action: "fill", target: { role: "textbox", name: "Delayed field" }, value: "must-not-write" }), { code: "CONTROL_NOT_READY" });
+  assert.equal(await view.webContents.executeJavaScript("window.receivedInput"), 0);
+  await session.observe();
+  assert.ok(session.observation.elements.some(e => e.name === "Delayed field" && !e.value));
+  results.push({ scenario: "unready-component-has-no-input-effects", passed: true });
   await session.act({ action: "navigate", url: "https://fixture.brizo.example/" });
   await session.observe();
   await assert.rejects(session.act({ action: "click", target: { role: "button", name: "Submit" } }), { code: "NEEDS_CONFIRMATION" });

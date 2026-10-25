@@ -1,3 +1,4 @@
+import { createBrowserObservationScope } from "./agent-observation-scope.mjs";
 import { authorizeBrowserAction } from "./browser-action-policy.mjs";
 import { verifyBrowserActionPostcondition } from "./browser-action-postcondition.mjs";
 import {
@@ -52,14 +53,14 @@ const BROWSER_ACTIONS = new Set([
 // Serialized into the page for every ref-based action. Keeping lookup in one
 // function preserves existing @eN references while allowing those refs to live
 // inside open shadow roots and accessible same-origin frames.
-function locateBrowserAgentElement(domRef) {
+function locateBrowserAgentElement(domRef, attribute = "data-brizo-agent-ref") {
   const expectedRef = String(domRef || "");
   const seenRoots = new WeakSet();
   const visit = (root, context, depth) => {
     if (!root || depth > 8 || seenRoots.has(root)) return null;
     seenRoots.add(root);
-    const direct = [...(root.querySelectorAll?.("[data-brizo-agent-ref]") || [])]
-      .find((element) => element.getAttribute("data-brizo-agent-ref") === expectedRef);
+    const direct = [...(root.querySelectorAll?.("[" + attribute + "]") || [])]
+      .find((element) => element.getAttribute(attribute) === expectedRef);
     if (direct) return { element: direct, ...context };
     const nodes = [...(root.querySelectorAll?.("*") || [])];
     for (const node of nodes) {
@@ -92,6 +93,36 @@ function locateBrowserAgentElement(domRef) {
 }
 
 const BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE = `(${locateBrowserAgentElement.toString()})`;
+
+// Readiness only: no input is queued inside the page and no action is replayed.
+export async function waitForBrowserControlReady(webContents, target, signal) {
+  signal?.throwIfAborted();
+  const result = await evaluateBrowserPage(webContents, `(${async function(domRef, lookup) {
+    const located = lookup(domRef), element = located?.element;
+    if (!element) return { ready: false, reason: "stale" };
+    const deadline = performance.now() + 10000;
+    const bounded = async promise => {
+      let timer;
+      try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("not-ready")), Math.max(1, deadline - performance.now())); })]); }
+      finally { clearTimeout(timer); }
+    };
+    try {
+      // Declarative shadow DOM may exist before its custom element is defined.
+      // Await the real registration and framework update, not a fixed sleep.
+      for (let node = element; node;) {
+        const root = node.getRootNode(), host = root.host;
+        if (!host) break;
+        const registry = host.ownerDocument.defaultView.customElements;
+        if (host.localName.includes("-")) await bounded(registry.whenDefined(host.localName));
+        if (host.updateComplete?.then) await bounded(host.updateComplete);
+        node = host;
+      }
+      return { ready: element.isConnected && lookup(domRef)?.element === element, reason: "stale" };
+    } catch (error) { return { ready: false, reason: "not-ready", detail: String(error.message) }; }
+  }.toString()})(${JSON.stringify(target?.domRef || "")}, ${BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE})`);
+  signal?.throwIfAborted();
+  if (!result?.ready) throw Object.assign(new Error(result?.reason === "stale" ? "The control changed during component initialization. Observe again before filling." : `The control's component is not ready; no input was dispatched. ${result?.detail || ""}`), { code: result?.reason === "stale" ? "STALE_SNAPSHOT" : "CONTROL_NOT_READY" });
+}
 
 function jsonObjectsIn(text) {
   const objects = [];
@@ -520,11 +551,13 @@ export async function detectBrowserLoginRequirement(webContents) {
   return evaluateBrowserPage(webContents, `(${browserLoginRequirement.toString()})()`);
 }
 
-export async function snapshotBrowserPage(webContents, { includeLoginState = false } = {}) {
+export async function snapshotBrowserPage(webContents, { includeLoginState = false, observation } = {}) {
   if (!webContents || webContents.isDestroyed()) throw new Error("当前网页已关闭。");
-  return await evaluateBrowserPage(webContents, `
+  const result = await evaluateBrowserPage(webContents, `
     (() => {
       const loginRequirement = ${includeLoginState ? `(${browserLoginRequirement.toString()})()` : "null"};
+      const scoped = ${observation ? `(${createBrowserObservationScope.toString()})(${JSON.stringify(observation)}, ${BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE})` : "null"};
+      if (scoped?.error) return { scopeError: scoped.error };
       const selector = ${JSON.stringify(INTERACTIVE_SELECTOR)};
       const clean = (value, limit = 180) => String(value || "").replace(/\\s+/g, " ").trim().slice(0, limit);
       const snapshotId = "brizo-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
@@ -576,6 +609,7 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
           && rect.left <= topWidth;
       };
 
+      const available = (element, context) => scoped ? scoped.rendered(element) && (scoped.offscreen || visible(element, context)) : visible(element, context);
       const safeFrameUrl = (value, base) => {
         try {
           const parsed = new URL(String(value || ""), base);
@@ -613,8 +647,8 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
         };
       };
       const appendElement = (element, context, frameRef, frameDepth) => {
-        if (!visible(element, context)) return;
-        if (elements.length >= 140) { omittedElements += 1; return; }
+        if (!available(element, context)) return;
+        if (!scoped && elements.length >= 140) { omittedElements += 1; return; }
         const rect = topRect(element, context);
         const tag = String(element.tagName || "").toLowerCase();
         const nativeType = clean(element.getAttribute("type") || element.type, 30).toLowerCase();
@@ -663,6 +697,7 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
           : /setting|preference|config|设置/i.test(semanticHint)
             ? "设置"
             : "";
+        if (scoped && !scoped.control(element, explicitText || inferredText, sensitive ? "" : rawValue, frameRef)) return;
         const domRef = snapshotId + "-" + (elements.length + 1);
         element.setAttribute("data-brizo-agent-ref", domRef);
         const isSelect = tag === "select";
@@ -731,25 +766,29 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
       const collectRoot = (root, context, frameRef = "", frameDepth = 0, depth = 0) => {
         if (!root || depth > 8 || seenRoots.has(root)) return;
         seenRoots.add(root);
-        root.querySelectorAll?.("[data-brizo-agent-ref]").forEach((element) => {
+        [...(root.nodeType === Node.ELEMENT_NODE && root.matches("[data-brizo-agent-ref]") ? [root] : []), ...(root.querySelectorAll?.("[data-brizo-agent-ref]") || [])].forEach((element) => {
           previousDomRefs.set(element, element.getAttribute("data-brizo-agent-ref"));
           element.removeAttribute("data-brizo-agent-ref");
         });
         const overlays = [...(root.querySelectorAll?.('[role="dialog"],[aria-modal="true"],[role="listbox"],.calendar-modal') || [])]
-          .filter((element) => visible(element, context)).slice(0, 12);
-        for (const overlay of overlays) {
+          .filter((element) => available(element, context)).slice(0, 12);
+        if (!scoped) for (const overlay of overlays) {
           if (overlay.innerText) textChunks.unshift(overlay.innerText);
         }
-        if (root.nodeType === Node.DOCUMENT_NODE && root.body?.innerText) textChunks.push(root.body.innerText);
-        const nodes = [...(root.querySelectorAll?.("*") || [])];
+        if (!scoped && root.nodeType === Node.DOCUMENT_NODE && root.body?.innerText) textChunks.push(root.body.innerText);
+        const nodes = [...(root.nodeType === Node.ELEMENT_NODE ? [root] : []), ...(root.querySelectorAll?.("*") || [])];
+        if (scoped) {
+          for (const node of nodes) if (available(node, context)) scoped.region(node, frameRef);
+          scoped.collectText(nodes, node => available(node, context));
+        }
         // A long flight list can exceed the body-text budget before the target
         // flight. Prioritize text actually revealed by scrolling, including
         // nested lists, instead of repeatedly showing the document's beginning.
-        for (const node of nodes) {
+        if (!scoped) for (const node of nodes) {
           if (viewportTextLength >= 6000) break;
           const textNodes = [...node.childNodes].filter(child => child.nodeType === Node.TEXT_NODE && child.textContent.trim());
           if (!textNodes.length) continue;
-          if (/^(?:SCRIPT|STYLE|NOSCRIPT|TEXTAREA|INPUT)$/.test(node.tagName || "") || !visible(node, context)) continue;
+          if (/^(?:SCRIPT|STYLE|NOSCRIPT|TEXTAREA|INPUT)$/.test(node.tagName || "") || !available(node, context)) continue;
           const view = node.ownerDocument.defaultView;
           let top = 0, bottom = view.innerHeight, left = 0, right = view.innerWidth;
           for (let parent = node; parent; parent = parent.parentElement || parent.getRootNode()?.host) {
@@ -772,7 +811,7 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
         // Reserve the bounded snapshot for their currently visible controls
         // before background links exhaust the 140-element budget.
         const overlayNodes = new Set(nodes.filter((node) => overlays.some((overlay) => overlay.contains(node))));
-        const explicitControls = new Set(root.querySelectorAll?.(selector) || []);
+        const explicitControls = new Set([...(root.nodeType === Node.ELEMENT_NODE && root.matches(selector) ? [root] : []), ...(root.querySelectorAll?.(selector) || [])]);
         // Some custom suggestions expose neither ARIA roles nor a pointer
         // cursor. Keep compact matching text directly below the focused field
         // available for an observed, ref-based click without treating Enter as safe.
@@ -780,9 +819,9 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
         const fieldValue = focused && /^(?:INPUT|TEXTAREA)$/.test(focused.tagName || "")
           && !/^(?:password|file)$/.test(focused.type || "")
           ? clean(focused.value, 80) : "";
-        const fieldRect = fieldValue && visible(focused, context) ? topRect(focused, context) : null;
+        const fieldRect = fieldValue && available(focused, context) ? topRect(focused, context) : null;
         const suggestions = new Set(fieldRect ? nodes.filter((node) => {
-          if (overlayNodes.has(node) || node === focused || !visible(node, context)) return false;
+          if (overlayNodes.has(node) || node === focused || !available(node, context)) return false;
           const label = clean(node.innerText || node.textContent, 100);
           if (!label || label.length > 80 || !label.includes(fieldValue) || node.querySelector(selector)) return false;
           const rect = topRect(node, context);
@@ -799,7 +838,7 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
           // as plain text elements. Expose only compact, visible pointer
           // targets, not arbitrary text or whole clickable page containers.
           if (!/^(?:LABEL|DIV|SPAN|P|DT|DD|LI|TD)$/.test(element.tagName || "")
-            || !visible(element, context)) continue;
+            || !available(element, context)) continue;
           if (element.parentElement?.closest(selector)) continue;
           const view = element.ownerDocument.defaultView;
           if (!suggestions.has(element) && view.getComputedStyle(element).cursor !== "pointer") continue;
@@ -815,7 +854,7 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
           if (node.shadowRoot) collectRoot(node.shadowRoot, context, frameRef, frameDepth, depth + 1);
         }
         for (const frame of nodes.filter((node) => /^(?:IFRAME|FRAME)$/.test(node.tagName || ""))) {
-          if (frames.length >= 24 || seenFrames.has(frame) || !visible(frame, context)) continue;
+          if (frames.length >= 24 || seenFrames.has(frame) || !available(frame, context)) continue;
           seenFrames.add(frame);
           const rect = topRect(frame, context);
           const nextFrameRef = "@f" + (frames.length + 1);
@@ -831,6 +870,7 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
           }
           frames.push({
             ref: nextFrameRef,
+            ...(scoped ? { domRef: scoped.frame(frame, nextFrameRef) } : {}),
             sameOrigin,
             name: clean(frame.getAttribute("aria-label") || frame.getAttribute("title") || frame.getAttribute("name"), 120),
             url: safeFrameUrl(childUrl || frame.getAttribute("src"), frame.ownerDocument?.baseURI),
@@ -846,12 +886,14 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
         }
       };
 
-      collectRoot(document, { offsetX: 0, offsetY: 0, scaleX: 1, scaleY: 1 });
+      collectRoot(scoped?.root || document, scoped?.context || { offsetX: 0, offsetY: 0, scaleX: 1, scaleY: 1 });
+      const scopedResult = scoped?.finish();
       const combinedText = (viewportChunks.length ? [viewportChunks.join(" "), ...textChunks] : textChunks).join("\\n");
-      const pageText = clean(combinedText, 10000);
+      const pageText = scopedResult ? scopedResult.pageText : clean(combinedText, 10000);
       return {
         ${includeLoginState ? "loginRequirement," : ""}
-        truncated: { elements: omittedElements > 0, omittedElements, text: clean(combinedText, 10001).length > 10000 },
+        ...(scopedResult ? { securityText: clean([...document.querySelectorAll('[role="alert"],[role="dialog"]')].filter(e => e.checkVisibility({ visibilityProperty: true, opacityProperty: true })).map(e => e.innerText).join(" ") + " " + (document.body?.innerText || ""), 10000) } : {}),
+        ...(scopedResult ? { ...scopedResult, regions: scoped.regions } : { truncated: { elements: omittedElements > 0, omittedElements, text: clean(combinedText, 10001).length > 10000 } }),
         title: clean(document.title, 240),
         url: location.href,
         pageText,
@@ -861,6 +903,8 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
       };
     })()
   `);
+  if (result?.scopeError) throw Object.assign(new Error("The observation root is stale or inaccessible."), { code: result.scopeError === "ROOT_GONE" ? "STALE_SNAPSHOT" : "FRAME_UNAVAILABLE" });
+  return result;
 }
 
 function actionTarget(snapshot, action) {
@@ -1033,6 +1077,7 @@ export async function executeBrowserCommandAction({ action, command, sendInputEv
     return { status: "continued" };
   }
   if (kind === "fill") {
+    await waitForBrowserControlReady(webContents, target, signal);
     if (target.disabled || target.readOnly) throw new Error("目标输入控件当前不可编辑。");
     const value = String(action.value || "").slice(0, 4000);
     const filled = await evaluateBrowserPage(webContents, `
@@ -1062,7 +1107,7 @@ export async function executeBrowserCommandAction({ action, command, sendInputEv
           else element.value = ${JSON.stringify(value)};
         }
         const view = element.ownerDocument?.defaultView || window;
-        element.dispatchEvent(new view.InputEvent("input", { bubbles: true, inputType: "insertText", data: ${JSON.stringify(value)} }));
+        element.dispatchEvent(new view.InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: ${JSON.stringify(value)} }));
         element.dispatchEvent(new view.Event("change", { bubbles: true }));
         return new Promise((resolve) => {
           const verify = () => resolve({

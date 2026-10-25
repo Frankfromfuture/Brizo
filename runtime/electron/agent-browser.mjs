@@ -1,6 +1,6 @@
 import { WebContentsView, session } from "electron";
 import { randomUUID } from "node:crypto";
-import { detectBrowserLoginRequirement, executeBrowserCommandAction, evaluateBrowserPage, loadBrowserPageWhenReady, parseBrowserCommandAction, snapshotBrowserPage } from "./browser-command-agent.mjs";
+import { detectBrowserLoginRequirement, executeBrowserCommandAction, evaluateBrowserPage, loadBrowserPageWhenReady, parseBrowserCommandAction, snapshotBrowserPage, waitForBrowserControlReady } from "./browser-command-agent.mjs";
 import { detectBrowserSecurityBlock } from "./browser-security-block.mjs";
 import { dispatchPageEvents, withPageInput } from "./agent-page-input.mjs";
 import { agentError, errorRecovery, findTarget, presentObservation, validateAgentAction, validateBatch, validateObservationOptions, waitForObservation } from "./agent-session-tools.mjs";
@@ -117,15 +117,30 @@ export async function createAgentSandbox({ id, goal, client, url, host, installN
     if (record.activeId === tabId) record.activeId = tabs.keys().next().value;
     invalidate(); layout(); publish();
   };
-  const readSnapshot = async signal => {
+  const observationSelection = (options = {}) => {
+    validateObservationOptions(options);
+    const selection = Object.fromEntries(["scope", "maxChars", "maxElements", "offset", "textOffset", "filter"].filter(key => options[key] !== undefined).map(key => [key, options[key]]));
+    selection.scope ||= "viewport";
+    if (selection.scope === "subtree") {
+      const cached = active().observation;
+      if (!cached || cached.snapshotId !== options.snapshotId || cached.generation !== active().generation) throw agentError("STALE_SNAPSHOT", "Subtree roots require the latest observation ID.");
+      const root = [...(cached.snapshot.regions || []), ...cached.snapshot.elements, ...(cached.snapshot.frames || [])].find(item => item.ref === options.root);
+      if (!root?.domRef) throw agentError("ROOT_NOT_FOUND", "The root is absent from the latest observation.");
+      if (options.root.startsWith("@f") && !root.sameOrigin) throw agentError("FRAME_UNAVAILABLE", "Cross-origin frames remain an inaccessible boundary.");
+      selection.rootDomRef = root.domRef;
+      selection.rootAttribute = options.root.startsWith("@r") ? "data-brizo-region-ref" : options.root.startsWith("@f") ? "data-brizo-frame-ref" : "data-brizo-agent-ref";
+    }
+    return selection;
+  };
+  const readSnapshot = async (signal, selection = { scope: "viewport" }) => {
     signal?.throwIfAborted();
     const tab = active(), wc = tab.view.webContents;
-    const snapshot = await snapshotBrowserPage(wc, { includeLoginState: true });
+    const snapshot = await snapshotBrowserPage(wc, { includeLoginState: true, observation: selection });
     const needsLogin = Object.hasOwn(snapshot, "loginRequirement") ? snapshot.loginRequirement : await detectBrowserLoginRequirement(wc);
     if (needsLogin) { handoff("网页需要登录，请手动完成后交还 AI。", "NEEDS_LOGIN"); throw failure(record.detail, "NEEDS_LOGIN"); }
     metrics.observations++;
     signal?.throwIfAborted();
-    const block = detectBrowserSecurityBlock(snapshot);
+    const block = detectBrowserSecurityBlock({ ...snapshot, pageText: snapshot.securityText || snapshot.pageText });
     if (block) { handoff(block.message, "SITE_BLOCKED"); throw failure(block.message, "SITE_BLOCKED"); }
     return snapshot;
   };
@@ -140,9 +155,9 @@ export async function createAgentSandbox({ id, goal, client, url, host, installN
     while (observations.size > 4) observations.delete(observations.keys().next().value);
     return output;
   };
-  const observe = async (signal, options = {}) => storeObservation(await readSnapshot(signal), options);
+  const observe = async (signal, options = {}) => storeObservation(await readSnapshot(signal, observationSelection(options)), options);
   const wait = async (condition, signal, options) => {
-    const result = await waitForObservation(() => readSnapshot(signal), condition, signal);
+    const result = await waitForObservation(() => readSnapshot(signal, observationSelection(options)), condition, signal);
     return { observation: storeObservation(result.snapshot, options), wait: { polls: result.polls, elapsedMs: result.elapsedMs } };
   };
   const act = async (args, signal, options = {}) => {
@@ -150,7 +165,11 @@ export async function createAgentSandbox({ id, goal, client, url, host, installN
     validateObservationOptions(options);
     const tab = active(), cached = tab.observation;
     if (!cached || cached.snapshotId !== args.snapshotId || cached.generation !== tab.generation) throw agentError("STALE_SNAPSHOT", "页面观察已失效，请重新 observe 后再操作。");
-    const fresh = await readSnapshot(signal);
+    if (args.action === "fill") {
+      const prior = args.target ? findTarget(cached.snapshot, args.target) : cached.snapshot.elements.find(item => item.ref === args.ref);
+      await waitForBrowserControlReady(tab.view.webContents, prior, signal);
+    }
+    const fresh = await readSnapshot(signal, cached.snapshot.selection);
     if (cached.generation !== tab.generation) throw agentError("STALE_SNAPSHOT", "页面已跳转，请重新观察。");
     const supplied = { ...args };
     if (args.target) supplied.ref = findTarget(fresh, args.target).ref;
