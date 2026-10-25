@@ -41,9 +41,10 @@ export async function executeVisualAction(contents, action, snapshot, signal) {
           await mouse("mousePressed", from, { button: "left", buttons: 1, clickCount });
           down = true;
           if (action.action === "drag") {
-            for (let step = 1; step <= 12; step++) await mouse("mouseMoved", {
-              x: from.x + (to.x - from.x) * step / 12,
-              y: from.y + (to.y - from.y) * step / 12,
+            const steps = action.steps ?? 2;
+            for (let step = 1; step <= steps; step++) await mouse("mouseMoved", {
+              x: from.x + (to.x - from.x) * step / steps,
+              y: from.y + (to.y - from.y) * step / steps,
             }, { button: "left", buttons: 1 });
           }
           await mouse("mouseReleased", to, { button: "left", buttons: 0, clickCount });

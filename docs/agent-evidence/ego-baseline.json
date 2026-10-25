@@ -1,0 +1,638 @@
+{
+  "phase": "baseline",
+  "hostMetadata": {
+    "ready": true,
+    "electron": "44.2.0",
+    "chromium": "152.0.7977.76"
+  },
+  "egoMetadata": {
+    "ready": true,
+    "initialSnapshot": "[p1 \"Agent workbench\" | space \"Brizo agent benchmark October 25\"(50): 1 managed, 0 untracked — p1* \"Agent workbench\"]\nroot\n  heading\n    text \"Agent workbench\"\n  container\n    text \"Search\"\n    textbox \"Search\" [ref=67]\n  container\n    text \"City\"\n    textbox \"City\" [ref=68]\n  container\n    text \"Sort\"\n    combobox \"Sort\" [ref=69]\n      text \"Relevance\"\n  button [ref=70]\n    text \"Search\"\n  button [ref=71]\n    text \"Submit\"\n  paragraph\n    text \"No results yet\"\n  canvas \"Card board\" [ref=72]\n  paragraph\n    text \"Drag the blue card\"\n  container\n    button [ref=73]\n      text \"Item 0\"\n    button [ref=74]\n      text \"Item 1\"\n    button [ref=75]\n      text \"Item 2\"\n    button [ref=76]\n      text \"Item 3\"\n    button [ref=77]\n      text \"Item 4\"\n    button [ref=78]\n      text \"Item 5\"\n    button [ref=79]\n      text \"Item 6\"\n    button [ref=80]\n      text \"Item 7\"\n    button [ref=81]\n      text \"Item 8\"\n    button [ref=82]\n      text \"Item 9\"\n    button [ref=83]\n      text \"Item 10\"\n    button [ref=84]\n      text \"Item 11\"\n    button [ref=85]\n      text \"Item 12\"\n    button [ref=86]\n      text \"Item 13\"\n    button [ref=87]\n      text \"Item 14\"\n    button [ref=88]\n      text \"Item 15\"\n    button [ref=89]\n      text \"Item 16\"\n    button [ref=90]\n      text \"Item 17\"\n    button [ref=91]\n      text \"Item 18\"\n    button [ref=92]\n      text \"Item 19\"\n    button [ref=93]\n      text \"Item 20\"\n    button [ref=94]\n      text \"Item 21\"\n    button [ref=95]\n      text \"Item 22\"\n    button [ref=96]\n      text \"Item 23\"\n    button [ref=97]\n      text \"Item 24\"\n    button [ref=98]\n      text \"Item 25\"\n    button [ref=99]\n      text \"Item 26\"\n    button [ref=100]\n      text \"Item 27\"\n    button [ref=101]\n      text \"Item 28\"\n    button [ref=102]\n      text \"Item 29\"\n    button [ref=103]\n      text \"Item 30\"\n    button [ref=104]\n      text \"Item 31\"\n    button [ref=105]\n      text \"Item 32\"\n    button [ref=106]\n      text \"Item 33\"\n    button [ref=107]\n      text \"Item 34\"\n    button [ref=108]\n      text \"Item 35\"\n    button [ref=109]\n      text \"Item 36\"\n    button [ref=110]\n      text \"Item 37\"\n    button [ref=111]\n      text \"Item 38\"\n    button [ref=112]\n      text \"Item 39\"\n    button [ref=113]\n      text \"Item 40\"\n    button [ref=114]\n      text \"Item 41\"\n    button [ref=115]\n      text \"Item 42\"\n    button [ref=116]\n      text \"Item 43\"\n    button [ref=117]\n      text \"Item 44\"\n    button [ref=118]\n      text \"Item 45\"\n    button [ref=119]\n      text \"Item 46\"\n    button [ref=120]\n      text \"Item 47\"\n    button [ref=121]\n      text \"Item 48\"\n    button [ref=122]\n      text \"Item 49\"\n    button [ref=123]\n      text \"Item 50\"\n    button [ref=124]\n      text \"Item 51\"\n    button [ref=125]\n      text \"Item 52\"\n    button [ref=126]\n      text \"Item 53\"\n    button [ref=127]\n      text \"Item 54\"\n    button [ref=128]\n      text \"Item 55\"\n    button [ref=129]\n      text \"Item 56\"\n    button [ref=130]\n      text \"Item 57\"\n    button [ref=131]\n      text \"Item 58\"\n    button [ref=132]\n      text \"Item 59\"\n",
+    "viewport": {
+      "width": 1348,
+      "height": 802,
+      "dpr": 2
+    },
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+    "runtimeVersion": "0.6.0.20"
+  },
+  "rows": [
+    {
+      "engine": "brizo",
+      "scenario": "observation",
+      "trial": 0,
+      "elapsedMs": 6.753541000000041,
+      "outputBytes": 9663,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "ego",
+      "scenario": "observation",
+      "trial": 0,
+      "elapsedMs": 4.486375000094995,
+      "outputBytes": 3069,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "ego",
+      "scenario": "observation",
+      "trial": 1,
+      "elapsedMs": 4.692916999920271,
+      "outputBytes": 3069,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "brizo",
+      "scenario": "observation",
+      "trial": 1,
+      "elapsedMs": 5.90929200000005,
+      "outputBytes": 9663,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "brizo",
+      "scenario": "observation",
+      "trial": 2,
+      "elapsedMs": 6.177792000000181,
+      "outputBytes": 9663,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "ego",
+      "scenario": "observation",
+      "trial": 2,
+      "elapsedMs": 4.950291000073776,
+      "outputBytes": 3069,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "ego",
+      "scenario": "observation",
+      "trial": 3,
+      "elapsedMs": 6.377375000040047,
+      "outputBytes": 3069,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "brizo",
+      "scenario": "observation",
+      "trial": 3,
+      "elapsedMs": 6.060625000000073,
+      "outputBytes": 9663,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "brizo",
+      "scenario": "observation",
+      "trial": 4,
+      "elapsedMs": 5.645625000000109,
+      "outputBytes": 9663,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "ego",
+      "scenario": "observation",
+      "trial": 4,
+      "elapsedMs": 5.9563330000964925,
+      "outputBytes": 3069,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "brizo",
+      "scenario": "form",
+      "trial": 0,
+      "elapsedMs": 684.931208,
+      "outputBytes": 9735,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "ego",
+      "scenario": "form",
+      "trial": 0,
+      "elapsedMs": 1414.9714579998981,
+      "outputBytes": 3125,
+      "success": true,
+      "apiCalls": 6
+    },
+    {
+      "engine": "ego",
+      "scenario": "form",
+      "trial": 1,
+      "elapsedMs": 1364.9484579999698,
+      "outputBytes": 3125,
+      "success": true,
+      "apiCalls": 6
+    },
+    {
+      "engine": "brizo",
+      "scenario": "form",
+      "trial": 1,
+      "elapsedMs": 645.0680419999999,
+      "outputBytes": 9735,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "brizo",
+      "scenario": "form",
+      "trial": 2,
+      "elapsedMs": 644.456792,
+      "outputBytes": 9735,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "ego",
+      "scenario": "form",
+      "trial": 2,
+      "elapsedMs": 1377.6129159999546,
+      "outputBytes": 3125,
+      "success": true,
+      "apiCalls": 6
+    },
+    {
+      "engine": "ego",
+      "scenario": "form",
+      "trial": 3,
+      "elapsedMs": 1284.6804169999668,
+      "outputBytes": 3125,
+      "success": true,
+      "apiCalls": 6
+    },
+    {
+      "engine": "brizo",
+      "scenario": "form",
+      "trial": 3,
+      "elapsedMs": 627.4193340000002,
+      "outputBytes": 9735,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "brizo",
+      "scenario": "form",
+      "trial": 4,
+      "elapsedMs": 665.3227499999994,
+      "outputBytes": 9735,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "ego",
+      "scenario": "form",
+      "trial": 4,
+      "elapsedMs": 1270.3634170000441,
+      "outputBytes": 3125,
+      "success": true,
+      "apiCalls": 6
+    },
+    {
+      "engine": "brizo",
+      "scenario": "async-wait",
+      "trial": 0,
+      "elapsedMs": 175.6452079999999,
+      "outputBytes": 9761,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "ego",
+      "scenario": "async-wait",
+      "trial": 0,
+      "elapsedMs": 234.7546250000596,
+      "outputBytes": 3131,
+      "success": true,
+      "apiCalls": 3
+    },
+    {
+      "engine": "ego",
+      "scenario": "async-wait",
+      "trial": 1,
+      "elapsedMs": 243.29791700001806,
+      "outputBytes": 3131,
+      "success": true,
+      "apiCalls": 3
+    },
+    {
+      "engine": "brizo",
+      "scenario": "async-wait",
+      "trial": 1,
+      "elapsedMs": 176.53212500000154,
+      "outputBytes": 9761,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "brizo",
+      "scenario": "async-wait",
+      "trial": 2,
+      "elapsedMs": 179.13437499999964,
+      "outputBytes": 9761,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "ego",
+      "scenario": "async-wait",
+      "trial": 2,
+      "elapsedMs": 248.75500000000466,
+      "outputBytes": 3131,
+      "success": true,
+      "apiCalls": 3
+    },
+    {
+      "engine": "ego",
+      "scenario": "async-wait",
+      "trial": 3,
+      "elapsedMs": 236.2869580000406,
+      "outputBytes": 3188,
+      "success": true,
+      "apiCalls": 3
+    },
+    {
+      "engine": "brizo",
+      "scenario": "async-wait",
+      "trial": 3,
+      "elapsedMs": 175.44879199999923,
+      "outputBytes": 9761,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "brizo",
+      "scenario": "async-wait",
+      "trial": 4,
+      "elapsedMs": 177.55087500000081,
+      "outputBytes": 9761,
+      "success": true,
+      "apiCalls": 1
+    },
+    {
+      "engine": "ego",
+      "scenario": "async-wait",
+      "trial": 4,
+      "elapsedMs": 239.6805839999579,
+      "outputBytes": 3197,
+      "success": true,
+      "apiCalls": 3
+    },
+    {
+      "engine": "brizo",
+      "scenario": "canvas",
+      "trial": 0,
+      "elapsedMs": 350.6134170000005,
+      "outputBytes": 9652,
+      "success": true,
+      "apiCalls": 3,
+      "imageMetadata": [
+        {
+          "pngWidth": 2696,
+          "pngHeight": 1604,
+          "reported": {
+            "width": 2696,
+            "height": 1604
+          },
+          "scale": {
+            "x": 2,
+            "y": 2
+          },
+          "viewport": {
+            "height": 802,
+            "scrollY": 0,
+            "width": 1348,
+            "units": "css-pixels"
+          }
+        },
+        {
+          "pngWidth": 2696,
+          "pngHeight": 1604,
+          "reported": {
+            "width": 2696,
+            "height": 1604
+          },
+          "scale": {
+            "x": 2,
+            "y": 2
+          },
+          "viewport": {
+            "height": 802,
+            "scrollY": 0,
+            "width": 1348,
+            "units": "css-pixels"
+          }
+        }
+      ],
+      "screenshotsOmitted": 2
+    },
+    {
+      "engine": "ego",
+      "scenario": "canvas",
+      "trial": 0,
+      "elapsedMs": 449.71187500003725,
+      "outputBytes": 3129,
+      "success": true,
+      "apiCalls": 8,
+      "imageMetadata": [
+        {
+          "pngWidth": 1348,
+          "pngHeight": 802
+        },
+        {
+          "pngWidth": 1348,
+          "pngHeight": 802
+        }
+      ],
+      "screenshotsOmitted": 2
+    },
+    {
+      "engine": "ego",
+      "scenario": "canvas",
+      "trial": 1,
+      "elapsedMs": 143.82133399997838,
+      "outputBytes": 3129,
+      "success": true,
+      "apiCalls": 8,
+      "imageMetadata": [
+        {
+          "pngWidth": 1348,
+          "pngHeight": 802
+        },
+        {
+          "pngWidth": 1348,
+          "pngHeight": 802
+        }
+      ],
+      "screenshotsOmitted": 2
+    },
+    {
+      "engine": "brizo",
+      "scenario": "canvas",
+      "trial": 1,
+      "elapsedMs": 348.61487500000294,
+      "outputBytes": 9652,
+      "success": true,
+      "apiCalls": 3,
+      "imageMetadata": [
+        {
+          "pngWidth": 2696,
+          "pngHeight": 1604,
+          "reported": {
+            "width": 2696,
+            "height": 1604
+          },
+          "scale": {
+            "x": 2,
+            "y": 2
+          },
+          "viewport": {
+            "height": 802,
+            "scrollY": 0,
+            "width": 1348,
+            "units": "css-pixels"
+          }
+        },
+        {
+          "pngWidth": 2696,
+          "pngHeight": 1604,
+          "reported": {
+            "width": 2696,
+            "height": 1604
+          },
+          "scale": {
+            "x": 2,
+            "y": 2
+          },
+          "viewport": {
+            "height": 802,
+            "scrollY": 0,
+            "width": 1348,
+            "units": "css-pixels"
+          }
+        }
+      ],
+      "screenshotsOmitted": 2
+    },
+    {
+      "engine": "brizo",
+      "scenario": "canvas",
+      "trial": 2,
+      "elapsedMs": 351.4684589999997,
+      "outputBytes": 9652,
+      "success": true,
+      "apiCalls": 3,
+      "imageMetadata": [
+        {
+          "pngWidth": 2696,
+          "pngHeight": 1604,
+          "reported": {
+            "width": 2696,
+            "height": 1604
+          },
+          "scale": {
+            "x": 2,
+            "y": 2
+          },
+          "viewport": {
+            "height": 802,
+            "scrollY": 0,
+            "width": 1348,
+            "units": "css-pixels"
+          }
+        },
+        {
+          "pngWidth": 2696,
+          "pngHeight": 1604,
+          "reported": {
+            "width": 2696,
+            "height": 1604
+          },
+          "scale": {
+            "x": 2,
+            "y": 2
+          },
+          "viewport": {
+            "height": 802,
+            "scrollY": 0,
+            "width": 1348,
+            "units": "css-pixels"
+          }
+        }
+      ],
+      "screenshotsOmitted": 2
+    },
+    {
+      "engine": "ego",
+      "scenario": "canvas",
+      "trial": 2,
+      "elapsedMs": 182.02483399992343,
+      "outputBytes": 3129,
+      "success": true,
+      "apiCalls": 8,
+      "imageMetadata": [
+        {
+          "pngWidth": 1348,
+          "pngHeight": 802
+        },
+        {
+          "pngWidth": 1348,
+          "pngHeight": 802
+        }
+      ],
+      "screenshotsOmitted": 2
+    },
+    {
+      "engine": "ego",
+      "scenario": "canvas",
+      "trial": 3,
+      "elapsedMs": 158.99220800003968,
+      "outputBytes": 3129,
+      "success": true,
+      "apiCalls": 8,
+      "imageMetadata": [
+        {
+          "pngWidth": 1348,
+          "pngHeight": 802
+        },
+        {
+          "pngWidth": 1348,
+          "pngHeight": 802
+        }
+      ],
+      "screenshotsOmitted": 2
+    },
+    {
+      "engine": "brizo",
+      "scenario": "canvas",
+      "trial": 3,
+      "elapsedMs": 346.09604200000103,
+      "outputBytes": 9652,
+      "success": true,
+      "apiCalls": 3,
+      "imageMetadata": [
+        {
+          "pngWidth": 2696,
+          "pngHeight": 1604,
+          "reported": {
+            "width": 2696,
+            "height": 1604
+          },
+          "scale": {
+            "x": 2,
+            "y": 2
+          },
+          "viewport": {
+            "height": 802,
+            "scrollY": 0,
+            "width": 1348,
+            "units": "css-pixels"
+          }
+        },
+        {
+          "pngWidth": 2696,
+          "pngHeight": 1604,
+          "reported": {
+            "width": 2696,
+            "height": 1604
+          },
+          "scale": {
+            "x": 2,
+            "y": 2
+          },
+          "viewport": {
+            "height": 802,
+            "scrollY": 0,
+            "width": 1348,
+            "units": "css-pixels"
+          }
+        }
+      ],
+      "screenshotsOmitted": 2
+    },
+    {
+      "engine": "brizo",
+      "scenario": "canvas",
+      "trial": 4,
+      "elapsedMs": 356.9542079999992,
+      "outputBytes": 9652,
+      "success": true,
+      "apiCalls": 3,
+      "imageMetadata": [
+        {
+          "pngWidth": 2696,
+          "pngHeight": 1604,
+          "reported": {
+            "width": 2696,
+            "height": 1604
+          },
+          "scale": {
+            "x": 2,
+            "y": 2
+          },
+          "viewport": {
+            "height": 802,
+            "scrollY": 0,
+            "width": 1348,
+            "units": "css-pixels"
+          }
+        },
+        {
+          "pngWidth": 2696,
+          "pngHeight": 1604,
+          "reported": {
+            "width": 2696,
+            "height": 1604
+          },
+          "scale": {
+            "x": 2,
+            "y": 2
+          },
+          "viewport": {
+            "height": 802,
+            "scrollY": 0,
+            "width": 1348,
+            "units": "css-pixels"
+          }
+        }
+      ],
+      "screenshotsOmitted": 2
+    },
+    {
+      "engine": "ego",
+      "scenario": "canvas",
+      "trial": 4,
+      "elapsedMs": 152.5883750000503,
+      "outputBytes": 3129,
+      "success": true,
+      "apiCalls": 8,
+      "imageMetadata": [
+        {
+          "pngWidth": 1348,
+          "pngHeight": 802
+        },
+        {
+          "pngWidth": 1348,
+          "pngHeight": 802
+        }
+      ],
+      "screenshotsOmitted": 2
+    }
+  ],
+  "measurement": {
+    "elapsedMs": "Runtime API work including final semantic observation; excludes startup, navigation, and initial observation.",
+    "outputBytes": "UTF-8 final semantic observation body only; excludes screenshots and enclosing action receipts.",
+    "apiCalls": "SDK/API calls inside one outer Agent script, not LLM tool rounds.",
+    "samplesPerEnginePerScenario": 5
+  },
+  "comparability": "Exploratory baseline. Canvas screenshot resolution differed; exclude baseline canvas time from matched comparison."
+}

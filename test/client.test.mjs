@@ -126,3 +126,41 @@ test("stores create capabilities outside command output", async t => {
   );
   assert.equal(saved.capability, capability);
 });
+
+test("SDK connection reuse retains credential-file revocation and never replays failures", async t => {
+  if (process.platform === "win32") { t.skip("Unix socket fixture"); return; }
+  const directory = await mkdtemp(path.join(os.tmpdir(), "brizo-reuse-"));
+  const socketPath = path.join(directory, "bridge-abcdef.sock");
+  const token = "e".repeat(64), sessionId = "12345678-1234-1234-1234-123456789abc";
+  let pings = 0, actions = 0, failNext = false;
+  const server = net.createServer(socket => {
+    socket.setEncoding("utf8");
+    socket.on("data", input => {
+      const request = JSON.parse(input.trim());
+      assert.equal(request.token, token);
+      if (request.method === "ping") { pings++; socket.end(`${JSON.stringify({ok:true,result:{protocol:1,product:"Brizo",pid:process.pid}})}\n`); return; }
+      actions++;
+      if (failNext) { failNext = false; socket.end('{"ok":false,"error":{"code":"DISCONNECTED","message":"fixture disconnect"}}\n'); return; }
+      socket.end('{"ok":true,"result":{"status":"agent"}}\n');
+    });
+  });
+  await new Promise(resolve => server.listen(socketPath, resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(directory,{recursive:true,force:true}); });
+  await writeFile(path.join(directory,"runtime.json"),JSON.stringify({protocol:1,socketPath,token,pid:process.pid}));
+  await mkdir(path.join(directory,"sessions"));
+  const credentials = path.join(directory,"sessions",`${sessionId}.json`);
+  await writeFile(credentials,JSON.stringify({capability:"fixture-capability",pid:process.pid}));
+  const options = {directory,reuseConnection:true};
+  await executeBrowserCommand("status",sessionId,{},options);
+  await executeBrowserCommand("status",sessionId,{},options);
+  assert.equal(pings,1);
+  assert.equal(actions,2);
+  failNext = true;
+  await assert.rejects(executeBrowserCommand("act",sessionId,{action:"click"},options),{code:"DISCONNECTED"});
+  assert.equal(actions,3);
+  await executeBrowserCommand("status",sessionId,{},options);
+  assert.equal(pings,2);
+  await rm(credentials);
+  await assert.rejects(executeBrowserCommand("status",sessionId,{},options),{code:"ENOENT"});
+  assert.equal(actions,4);
+});

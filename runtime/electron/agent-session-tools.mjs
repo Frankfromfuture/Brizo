@@ -5,6 +5,7 @@ export const agentError = (code, message, details = {}) => Object.assign(new Err
 export function validateObservationOptions(options = {}) {
   if (!options || typeof options !== "object" || Array.isArray(options)) throw agentError("ARGUMENT_INVALID", "Observation options must be an object.");
   if (options.detail !== undefined && !["compact", "full"].includes(options.detail)) throw agentError("ARGUMENT_INVALID", "detail must be compact or full.");
+  if (options.format !== undefined && !["json", "text"].includes(options.format)) throw agentError("ARGUMENT_INVALID", "format must be json or text.");
   for (const [key, limit] of [["maxChars", 10000], ["maxElements", 140]]) {
     if (options[key] !== undefined && (!Number.isInteger(options[key]) || options[key] < 0 || options[key] > limit)) throw agentError("ARGUMENT_INVALID", `${key} must be 0–${limit}.`);
   }
@@ -25,6 +26,7 @@ export function validateAgentAction(action) {
   if (action.ref && !/^@e[1-9]\d*$/u.test(action.ref)) throw agentError("TARGET_INVALID", "ref must come from the latest observation.");
   if (["fill", "select", "click"].includes(action.action) && !action.ref && !action.target && action.x === undefined) throw agentError("TARGET_INVALID", "Action needs ref, target or canvas coordinates.");
   if (action.action === "navigate" && typeof action.url !== "string") throw agentError("ARGUMENT_INVALID", "navigate needs a URL.");
+  if (action.steps !== undefined && (action.action !== "drag" || !Number.isInteger(action.steps) || action.steps < 1 || action.steps > 60)) throw agentError("ARGUMENT_INVALID", "drag steps must be 1–60.");
   if (action.wait) validateWait(action.wait);
   if (action.observe) validateObservationOptions(action.observe);
   return action;
@@ -68,6 +70,21 @@ export function findTarget(snapshot, target, { optional = false } = {}) {
 
 const identity = element => JSON.stringify([element.frameRef, element.tag, semanticRole(element), element.name, element.fieldName, element.href]);
 const signature = element => JSON.stringify(Object.fromEntries(Object.entries(element).filter(([key]) => !["ref", "domRef", "previousDomRef", "x", "y"].includes(key))));
+
+function controlText(element) {
+  const parts = [element.ref, element.role];
+  if (element.name) parts.push(JSON.stringify(element.name));
+  for (const key of ["fieldName", "value", "href", "frameRef", "min", "max", "step", "pattern"]) {
+    if (element[key] !== undefined && element[key] !== "") parts.push(`${key}=${JSON.stringify(element[key])}`);
+  }
+  for (const key of ["disabled", "readOnly", "required", "checked", "selected", "multiple", "sensitive", "credentialField"]) if (element[key]) parts.push(key);
+  if (element.type && !["button", "text", "select-one"].includes(element.type)) parts.push(`type=${element.type}`);
+  for (const key of ["minLength", "maxLength"]) if (element[key] !== undefined && element[key] !== null) parts.push(`${key}=${element[key]}`);
+  if (element.sensitive || element.valueLength > String(element.value || "").length) parts.push(`valueLength=${element.valueLength || 0}`);
+  if (element.options?.length) parts.push(`options=${JSON.stringify(element.options)}`);
+  if (element.validity && !element.validity.valid) parts.push(`validity=${JSON.stringify(element.validity)}`);
+  return parts.join(" ");
+}
 
 export function presentObservation(snapshot, { tabId, snapshotId, options = {}, previous, cleanUrl = value => value }) {
   validateObservationOptions(options);
@@ -115,7 +132,8 @@ export function presentObservation(snapshot, { tabId, snapshotId, options = {}, 
   return {
     tabId, snapshotId, title: snapshot.title, url: cleanUrl(snapshot.url), pageText,
     viewport: { ...snapshot.viewport, units: "css-pixels" },
-    frames: snapshot.frames?.map(frame => ({ ...frame, url: cleanUrl(frame.url) })), elements,
+    frames: snapshot.frames?.map(frame => ({ ...frame, url: cleanUrl(frame.url) })),
+    ...(options.format === "text" ? { controls: elements.map(controlText).join("\n") } : { elements }),
     ...(changes ? { changes } : {}),
     truncated: { elements: totalElements > elements.length, text: Boolean(maxChars < snapshot.pageText.length && (!changes || changes.textChanged)) },
     counts: { elements: snapshot.elements.length, returned: elements.length },

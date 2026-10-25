@@ -2,6 +2,10 @@
 
 ## 0.5.0
 
+- Add line-based text observations, CSS/device screenshot scales and configurable drag steps. Combine login detection with snapshot collection.
+- Reuse validated SDK transport discovery while checking session credentials on every call; invalidate failed connections without replaying actions.
+- Publish reproducible paired Ego Space benchmarks with raw samples, matched screenshot dimensions and explicit measurement limits.
+
 - Return initial observations and runtime capabilities from task creation; preserve screenshot observation IDs and CSS/image coordinate metadata through the client.
 - Add semantic targets, preflighted 20-step batches with partial failure evidence, bounded condition waits and structured recovery advice.
 - Add compact, filtered and delta observations with disclosed output limits; retain full control details on request.

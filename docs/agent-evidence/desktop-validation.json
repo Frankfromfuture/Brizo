@@ -1,0 +1,97 @@
+{
+  "ok": true,
+  "date": "2026-10-25T03:47:17.523Z",
+  "platform": "darwin",
+  "electron": "44.2.0",
+  "chromium": "152.0.7977.76",
+  "scenarios": [
+    {
+      "scenario": "create-includes-observation",
+      "passed": true
+    },
+    {
+      "scenario": "css-and-device-screenshot-metadata",
+      "passed": true
+    },
+    {
+      "scenario": "screenshot-then-action",
+      "passed": true
+    },
+    {
+      "scenario": "semantic-batch-with-async-result",
+      "passed": true
+    },
+    {
+      "scenario": "observation-budget",
+      "passed": true,
+      "bytes": {
+        "full": 45492,
+        "compact": 11091,
+        "filtered": 547
+      }
+    },
+    {
+      "scenario": "delta-after-edit",
+      "passed": true
+    },
+    {
+      "scenario": "wait-timeout-keeps-agent-control",
+      "passed": true
+    },
+    {
+      "scenario": "stale-snapshot-rejected",
+      "passed": true
+    },
+    {
+      "scenario": "batch-stops-and-returns-partial-evidence",
+      "passed": true
+    },
+    {
+      "scenario": "invalid-later-step-has-no-earlier-effects",
+      "passed": true
+    },
+    {
+      "scenario": "desktop-followup-and-progress-preserved",
+      "passed": true
+    },
+    {
+      "scenario": "canvas-drag-at-125-percent-zoom",
+      "passed": true,
+      "screenshot": "desktop-canvas-after.png",
+      "before": "desktop-canvas-before.png"
+    },
+    {
+      "scenario": "coordinates-cannot-bypass-dom-controls",
+      "passed": true
+    },
+    {
+      "scenario": "unauthorized-submit-constraint-preserved",
+      "passed": true
+    },
+    {
+      "scenario": "parallel-observation-stops-at-login",
+      "passed": true
+    },
+    {
+      "scenario": "entire-run-hidden",
+      "passed": true
+    }
+  ],
+  "metrics": {
+    "calls": 29,
+    "outputBytes": 219392,
+    "elapsedMs": 1963
+  },
+  "profileIsolated": true,
+  "foregroundCalls": 0,
+  "verification": {
+    "mirrorCheck": "passed",
+    "productionBuild": "passed",
+    "host": "current desktop dist/client/index.html and synchronized packages/brizo Runtime",
+    "preservedRegression": "desktop-followup-and-progress-preserved"
+  },
+  "comparison": {
+    "ego": "measured_separately",
+    "report": "../ego-comparison-2026-10-25.md"
+  }
+}

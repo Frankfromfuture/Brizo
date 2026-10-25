@@ -484,11 +484,9 @@ async function loadUrlFollowingRedirects(webContents, url, signal) {
   }
 }
 
-export async function detectBrowserLoginRequirement(webContents) {
-  if (!webContents || webContents.isDestroyed()) return null;
-  // Inspect form structure only; never read credential values or ask the model
-  // to decide whether it should enter them. Optional header/sidebar login stays inert.
-  return evaluateBrowserPage(webContents, `(() => {
+// One structural check shared by direct detection and atomic page observations.
+// Credential values are never read; optional header/sidebar login stays inert.
+function browserLoginRequirement() {
     const visible = (node) => {
       const r = node.getBoundingClientRect(), s = getComputedStyle(node);
       return s.display !== "none" && s.visibility !== "hidden" && Number(s.opacity || 1) > .02
@@ -496,7 +494,7 @@ export async function detectBrowserLoginRequirement(webContents) {
     };
     const auth = /login|log[-_ ]?in|signin|sign[-_ ]?in|passport|登录|登陆/i;
     const route = auth.test(location.hostname + location.pathname);
-    const text = String(document.body?.innerText || "").replace(/\\s+/g, " ");
+    const text = String(document.body?.innerText || "").replace(/\s+/g, " ");
     const required = /(?:请先|必须|需要|仅限).{0,8}(?:登录|登陆)|(?:登录|登陆)后.{0,12}(?:查看|访问|继续|搜索|购买)|sign in to continue|login required/i.test(text);
     const seeds = [...document.querySelectorAll('input[type="password"],input[autocomplete="username"],input[autocomplete="current-password"],input[autocomplete="one-time-code"],iframe')]
       .filter((node) => visible(node) && (node.tagName !== "IFRAME" || auth.test(node.src + " " + node.title)));
@@ -515,13 +513,18 @@ export async function detectBrowserLoginRequirement(webContents) {
           && text.length < 1400 && auth.test(form.innerText)) return { required: true };
     }
     return null;
-  })()`);
 }
 
-export async function snapshotBrowserPage(webContents) {
+export async function detectBrowserLoginRequirement(webContents) {
+  if (!webContents || webContents.isDestroyed()) return null;
+  return evaluateBrowserPage(webContents, `(${browserLoginRequirement.toString()})()`);
+}
+
+export async function snapshotBrowserPage(webContents, { includeLoginState = false } = {}) {
   if (!webContents || webContents.isDestroyed()) throw new Error("当前网页已关闭。");
   return await evaluateBrowserPage(webContents, `
     (() => {
+      const loginRequirement = ${includeLoginState ? `(${browserLoginRequirement.toString()})()` : "null"};
       const selector = ${JSON.stringify(INTERACTIVE_SELECTOR)};
       const clean = (value, limit = 180) => String(value || "").replace(/\\s+/g, " ").trim().slice(0, limit);
       const snapshotId = "brizo-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
@@ -812,6 +815,7 @@ export async function snapshotBrowserPage(webContents) {
       collectRoot(document, { offsetX: 0, offsetY: 0, scaleX: 1, scaleY: 1 });
       const pageText = clean(textChunks.join("\\n"), 10000);
       return {
+        ${includeLoginState ? "loginRequirement," : ""}
         title: clean(document.title, 240),
         url: location.href,
         pageText,

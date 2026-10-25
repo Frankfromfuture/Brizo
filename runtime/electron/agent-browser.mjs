@@ -118,8 +118,9 @@ export async function createAgentSandbox({ id, goal, client, url, host, installN
   const readSnapshot = async signal => {
     signal?.throwIfAborted();
     const tab = active(), wc = tab.view.webContents;
-    if (await detectBrowserLoginRequirement(wc)) { handoff("网页需要登录，请手动完成后交还 AI。", "NEEDS_LOGIN"); throw failure(record.detail, "NEEDS_LOGIN"); }
-    const snapshot = await snapshotBrowserPage(wc);
+    const snapshot = await snapshotBrowserPage(wc, { includeLoginState: true });
+    const needsLogin = Object.hasOwn(snapshot, "loginRequirement") ? snapshot.loginRequirement : await detectBrowserLoginRequirement(wc);
+    if (needsLogin) { handoff("网页需要登录，请手动完成后交还 AI。", "NEEDS_LOGIN"); throw failure(record.detail, "NEEDS_LOGIN"); }
     metrics.observations++;
     signal?.throwIfAborted();
     const block = detectBrowserSecurityBlock(snapshot);
@@ -127,6 +128,7 @@ export async function createAgentSandbox({ id, goal, client, url, host, installN
     return snapshot;
   };
   const storeObservation = (snapshot, options = {}) => {
+    options = { format: observeOptions?.format || "json", ...options };
     const tab = active();
     const previous = options.since ? observations.get(options.since) : undefined;
     const snapshotId = randomUUID();
@@ -209,9 +211,13 @@ export async function createAgentSandbox({ id, goal, client, url, host, installN
       if (method === "observe") return await timed(observe(signal, args));
       if (method === "wait") return await timed(wait(args, signal, args.observe));
       if (method === "screenshot") {
+        if (args.scale !== undefined && !["css", "device"].includes(args.scale)) throw agentError("ARGUMENT_INVALID", "Screenshot scale must be css or device.");
         const observation = await timed(observe(signal, args.observe));
         const contents = active().view.webContents;
-        const image = await timed(contents.capturePage(undefined, { stayHidden: true, stayAwake: true }));
+        const captured = await timed(contents.capturePage(undefined, { stayHidden: true, stayAwake: true }));
+        const capturedSize = captured.getSize();
+        const image = args.scale !== "device" && (capturedSize.width !== observation.viewport.width || capturedSize.height !== observation.viewport.height)
+          ? captured.resize({ width: observation.viewport.width, height: observation.viewport.height, quality: "good" }) : captured;
         signal.throwIfAborted();
         const current = active();
         if (current.observation?.snapshotId !== observation.snapshotId || current.observation.generation !== current.generation) throw agentError("STALE_SNAPSHOT", "The document changed during capture. Take a new screenshot.");

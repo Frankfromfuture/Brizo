@@ -37,7 +37,9 @@ try {
     // memory. Production navigation and network policies remain unchanged.
     installNetworkPolicy(partition) {
       partition.protocol.handle("https", request => new URL(request.url).origin === "https://fixture.brizo.example"
-        ? new Response(fixture, { headers: { "Content-Type": "text/html; charset=utf-8" } })
+        ? new Response(new URL(request.url).searchParams.has("login")
+          ? fixture.replace("</html>", '<dialog open aria-label="Sign in"><form><label>Password<input type="password" value="login-fixture-value"></label></form></dialog></html>') : fixture,
+          { headers: { "Content-Type": "text/html; charset=utf-8" } })
         : new Response("Blocked fixture request", { status: 403 }));
     },
     validateTarget(address) {
@@ -75,6 +77,14 @@ try {
 
   const capture = await session.screenshot({ maxChars: 300 });
   assert.ok(capture.path && capture.observation.snapshotId && capture.imageScale.x > 0);
+  const pixels = await readFile(capture.path);
+  assert.equal(pixels.readUInt32BE(16), capture.viewport.width);
+  assert.equal(pixels.readUInt32BE(20), capture.viewport.height);
+  const device = await session.screenshot({ scale: "device", maxChars: 300 });
+  const devicePixels = await readFile(device.path);
+  assert.equal(devicePixels.readUInt32BE(16), device.imageSize.width);
+  assert.ok(device.imageSize.width >= capture.imageSize.width);
+  results.push({ scenario: "css-and-device-screenshot-metadata", passed: true });
   const filled = await session.act({ action: "fill", target: { fieldName: "q" }, value: "Brizo" });
   assert.equal(filled.outcome.postcondition.verified, true);
   results.push({ scenario: "screenshot-then-action", passed: true });
@@ -143,6 +153,14 @@ try {
   const status = await executeBrowserCommand("status", session.sessionId, {}, clientOptions);
   assert.equal(status.pauseReason.code, "NEEDS_CONFIRMATION");
   results.push({ scenario: "unauthorized-submit-constraint-preserved", passed: true });
+  await bridge.control(session.sessionId, "resume");
+  await session.observe();
+  await assert.rejects(session.act({ action: "navigate", url: "https://fixture.brizo.example/?login=1" }), error => {
+    assert.equal(error.code, "NEEDS_LOGIN");
+    assert.equal(`${error.message} ${JSON.stringify(error.details)}`.includes("login-fixture-value"), false);
+    return true;
+  });
+  results.push({ scenario: "parallel-observation-stops-at-login", passed: true });
   assert.equal(window.isVisible(), false);
   assert.deepEqual(foregroundCalls, []);
   results.push({ scenario: "entire-run-hidden", passed: true });

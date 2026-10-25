@@ -35,11 +35,13 @@ Observation options apply to `observe`, an action/batch's `observe`, a wait's `o
 {"filter":{"role":"button","text":"Search"},"maxChars":500,"maxElements":10}
 ```
 
-The default compact view omits empty optional fields. Omitted booleans are false; `detail:"full"` retains empty values and validity information. `truncated` and `counts` disclose output limits. Filtering preserves original `@eN` refs; it does not renumber controls. `since` produces a delta from one of the last four observations in the same tab. Removed refs are historical; actions always need the newest snapshot ID and either a fresh ref or a semantic target. A delta cache miss returns `SNAPSHOT_UNKNOWN`.
+The default compact view omits empty optional fields. Omitted booleans are false; `detail:"full"` retains empty values and validity information. `format:"text"` returns line-based `controls` instead of `elements`, with the same original refs, roles, names, field values and constraints. Control names are JSON-quoted so page text cannot inject another apparent control line. `create.observe.format` sets the session's output default; per-call format overrides remain available. Programmatic clients retain the default JSON format. `truncated` and `counts` disclose output limits. Filtering preserves original `@eN` refs; it does not renumber controls. `since` produces a delta from one of the last four observations in the same tab. Removed refs are historical; actions always need the newest snapshot ID and either a fresh ref or a semantic target. A delta cache miss returns `SNAPSHOT_UNKNOWN`.
 
 ## Screenshots and canvas
 
 `screenshot` returns a local `path`, `observation`, `snapshotId`, `viewport`, `imageSize`, and `imageScale`. The client preserves the metadata when it saves PNG bytes. The returned observation is the starting point for the next action. Capture uses Electron's `stayHidden:true` and `stayAwake:true`; it never activates a native window.
+
+The default `scale:"css"` returns an image at viewport CSS resolution. Use `scale:"device"` to retain device-resolution pixels. The SDK accepts `task.screenshot({scale:"device",format:"text"})`. Metadata reflects the actual saved PNG. Drag uses two movement segments by default; `steps` accepts 1–60 for applications that need a finer path.
 
 Coordinate `click`, `hover`, `double-click` and `drag` use viewport CSS pixels. Divide image pixels by the corresponding `imageScale` component before acting. Coordinates must be inside the observed viewport and on the same visible canvas. Ordinary DOM controls use refs or semantic targets. Drag emits pressed-button movement and releases the pointer on cancellation. Input receipts explicitly state that visual application success is unverified; inspect a screenshot or wait for an application-visible result.
 
@@ -68,5 +70,7 @@ await task.finish('Filled the observed search field.', { keep: false });
 `AgentSession` also supports `observe`, `batch`, `wait`, `screenshot`, `open`, `switch`, `diagnostics` and `close`. It tracks snapshot IDs and retains partial batch evidence. It never creates a replacement task or retries actions after an error. To resume in a later process, construct `new AgentSession(sessionId)`, then observe. The CLI retains the session capability in its protected local state; do not copy it into scripts.
 
 `diagnostics` returns aggregate calls, observations, actions, failures and elapsed request time, together with state and runtime capabilities. It does not collect page console contents, cookies or network bodies. Read `error.recovery` for the suggested next operation and whether user intervention is needed.
+
+The SDK reuses a validated runtime connection within its client-options lifetime, avoiding a redundant handshake for each operation. Session credentials are still read on every call and checked by the server. Transport failures invalidate the connection cache and are returned without replaying the action. The cache is module-private and never appears in command output.
 
 Local help is available through `brizo help act|batch|wait|observe|screenshot|visual|agent`. `brizo skill` prints the installed guide without opening a browser.

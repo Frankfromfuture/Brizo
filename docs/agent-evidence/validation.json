@@ -1,12 +1,16 @@
 {
   "ok": true,
-  "date": "2026-10-25T02:34:18.706Z",
+  "date": "2026-10-25T03:38:19.951Z",
   "platform": "darwin",
   "electron": "44.2.0",
   "chromium": "152.0.7977.76",
   "scenarios": [
     {
       "scenario": "create-includes-observation",
+      "passed": true
+    },
+    {
+      "scenario": "css-and-device-screenshot-metadata",
       "passed": true
     },
     {
@@ -21,8 +25,8 @@
       "scenario": "observation-budget",
       "passed": true,
       "bytes": {
-        "full": 40763,
-        "compact": 9331,
+        "full": 40130,
+        "compact": 9201,
         "filtered": 483
       }
     },
@@ -61,29 +65,32 @@
       "passed": true
     },
     {
+      "scenario": "parallel-observation-stops-at-login",
+      "passed": true
+    },
+    {
       "scenario": "entire-run-hidden",
       "passed": true
     }
   ],
   "metrics": {
-    "calls": 24,
-    "outputBytes": 161493,
-    "elapsedMs": 1845
+    "calls": 27,
+    "outputBytes": 171986,
+    "elapsedMs": 1755
   },
   "profileIsolated": true,
   "foregroundCalls": 0,
   "verification": {
     "command": "npm run check",
-    "tests": 118,
-    "passed": 118,
+    "tests": 122,
+    "passed": 122,
     "failed": 0,
     "boundary": "passed",
     "syntax": "passed",
     "packageDryRun": "passed"
   },
   "comparison": {
-    "ego": "not_measured",
-    "reason": "Isolated hidden Ego runtime requires onboarding; foreground setup was not authorized.",
-    "brizoMeasurement": "single hidden fixture acceptance run, not a cross-browser speed benchmark"
+    "ego": "measured_separately",
+    "report": "../ego-comparison-2026-10-25.md"
   }
 }

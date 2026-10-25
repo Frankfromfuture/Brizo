@@ -8,7 +8,7 @@ description: 用本机 Brizo 隔离沙箱浏览网站、查询资料、填写表
 当前 Agent 负责规划与结果说明，Brizo 执行网页操作。每个用户目标只创建一个会话，后续复用 `sessionId`。使用本 skill 目录下的 `scripts/brizo.mjs`，路径加引号。
 
 ```sh
-node "/本 skill 的绝对路径/scripts/brizo.mjs" create --json '{"goal":"在百度搜索 Brizo","client":"当前 Agent 名称","url":"https://www.baidu.com/"}'
+node "/本 skill 的绝对路径/scripts/brizo.mjs" create --json '{"goal":"在百度搜索 Brizo","client":"当前 Agent 名称","url":"https://www.baidu.com/","observe":{"format":"text"}}'
 ```
 
 保留用户原始目标与限制。创建结果直接包含 `observation`；旧宿主未返回时再运行 `observe SESSION_ID`。复杂输入保存为 UTF-8 JSON 文件，用 `--input "/绝对路径/request.json"` 传入。已知接口即可操作，需要时才查 `capabilities` 或 `help TOPIC`。
@@ -38,7 +38,11 @@ node "/本 skill 的绝对路径/scripts/brizo.mjs" act SESSION_ID --json '{"sna
 
 默认观察精简空字段。`observe` 可传 JSON 参数 `filter:{role,text,frameRef}`、`maxChars`、`maxElements`；`since` 返回最近四份观察中的变化。完整属性用 `detail:"full"`。变化观察中的旧引用只作说明，后续使用新编号、新引用或语义目标。
 
+Agent 阅读优先使用 `format:"text"`，控件在 `controls` 中按行显示，保留 ref、角色、名称、值和限制。程序需要对象数组时用 `format:"json"` 读取 `elements`。创建时指定的格式会作为后续观察的默认值，单次调用仍可覆盖。
+
 Canvas 使用 `screenshot SESSION_ID`。返回本机图片路径、对应 `observation`、`viewport`、`imageSize`、`imageScale`。看过图片后，用其观察编号执行 `click(x,y)`、`hover(x,y)`、`double-click(x,y)`、`drag(from,to)`。坐标使用视口 CSS 像素；图片像素除以 `imageScale` 后再操作。坐标输入限于同一可见 Canvas，普通控件使用 ref 或语义目标。回执只证明输入已派发，结果从截图或应用可见状态核对。
+
+截图默认 `scale:"css"`，坐标与图片像素对应；需要设备分辨率细节时用 `scale:"device"`。拖拽默认两段移动；应用需要更细路径时可指定 `steps`（1–60）。
 
 | 命令 | JSON 输入 | 用途 |
 | --- | --- | --- |

@@ -1,0 +1,117 @@
+[
+  {
+    "phase": "baseline",
+    "reasonExcludedFromHeadline": "Baseline before optimization; canvas image resolution differed.",
+    "samples": 40,
+    "mediansMs": {
+      "async-wait": {
+        "brizo": 176.53212500000154,
+        "ego": 239.6805839999579
+      },
+      "canvas": {
+        "brizo": 350.6134170000005,
+        "ego": 158.99220800003968
+      },
+      "form": {
+        "brizo": 645.0680419999999,
+        "ego": 1364.9484579999698
+      },
+      "observation": {
+        "brizo": 6.060625000000073,
+        "ego": 4.950291000073776
+      }
+    }
+  },
+  {
+    "phase": "optimized",
+    "reasonExcludedFromHeadline": "Exploratory; same Ego page reused for prolonged profiling.",
+    "samples": 40,
+    "mediansMs": {
+      "async-wait": {
+        "brizo": 177.88191700000243,
+        "ego": 265.0775840000715
+      },
+      "canvas": {
+        "brizo": 314.6137920000001,
+        "ego": 181.83437499997672
+      },
+      "form": {
+        "brizo": 644.5104169999995,
+        "ego": 1413.8567090000724
+      },
+      "observation": {
+        "brizo": 5.482250000000022,
+        "ego": 14.892416000016965
+      }
+    }
+  },
+  {
+    "phase": "final",
+    "reasonExcludedFromHeadline": "Exploratory; prolonged page reuse increased Ego snapshot times.",
+    "samples": 40,
+    "mediansMs": {
+      "async-wait": {
+        "brizo": 176.90441699999974,
+        "ego": 284.4947079999838
+      },
+      "canvas": {
+        "brizo": 136.91958299999897,
+        "ego": 249.67808300000615
+      },
+      "form": {
+        "brizo": 644.1068749999995,
+        "ego": 1425.082041000016
+      },
+      "observation": {
+        "brizo": 5.823750000000018,
+        "ego": 24.210540999891236
+      }
+    }
+  },
+  {
+    "phase": "final-fresh",
+    "reasonExcludedFromHeadline": "Fresh-page diagnostic before SDK connection reuse; screenshot dimensions later rechecked.",
+    "samples": 40,
+    "mediansMs": {
+      "async-wait": {
+        "brizo": 177.77187499999854,
+        "ego": 242.5610409998335
+      },
+      "canvas": {
+        "brizo": 132.12483300000167,
+        "ego": 136.0183749999851
+      },
+      "form": {
+        "brizo": 644.2129169999989,
+        "ego": 1385.1557090000715
+      },
+      "observation": {
+        "brizo": 5.694082999999864,
+        "ego": 5.003333000000566
+      }
+    }
+  },
+  {
+    "phase": "release",
+    "reasonExcludedFromHeadline": "Preliminary release run; screenshot dimensions 1348x802 versus 1336x790, superseded by matched run.",
+    "samples": 40,
+    "mediansMs": {
+      "async-wait": {
+        "brizo": 178.2235419999979,
+        "ego": 238.6817090001423
+      },
+      "canvas": {
+        "brizo": 131.78587499999776,
+        "ego": 151.39958399999887
+      },
+      "form": {
+        "brizo": 644.7689170000012,
+        "ego": 1403.4659169998486
+      },
+      "observation": {
+        "brizo": 5.060249999999996,
+        "ego": 5.024916999973357
+      }
+    }
+  }
+]
