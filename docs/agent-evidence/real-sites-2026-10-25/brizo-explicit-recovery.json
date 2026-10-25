@@ -1,0 +1,122 @@
+{
+  "engine": "brizo",
+  "phase": "recovery",
+  "date": "2026-10-25T04:11:28.997Z",
+  "sourceFiles": {
+    "runtime/electron/agent-browser.mjs": "d68cabb69b4a4cfeb85f85dc032cc02452c96e328b0c7d36cf9b68b7f0a31aa6",
+    "runtime/electron/browser-command-agent.mjs": "90debd002aa14000038b327ad2f907c350b1142a742a42af55eb1a868dfdaa40",
+    "runtime/electron/agent-session-tools.mjs": "18ae6be01279dc2cccd3bf691c942e616448906e4ac0e8cb2f522070a558f0a8",
+    "lib/agent-session.mjs": "d0d47e611fddc50bbb1b2a479ffb1c40ef9304604d629d3cb894de75b4322c0e"
+  },
+  "results": [
+    {
+      "site": "mdn",
+      "success": true,
+      "records": [
+        {
+          "name": "filter-sidebar",
+          "elapsedMs": 5349.690416,
+          "success": true,
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript",
+          "outputBytes": 12687,
+          "firstError": {
+            "code": "CONDITION_TIMEOUT",
+            "message": "Expected page condition was not observed. No action was retried."
+          },
+          "recoveryAttempts": 1
+        },
+        {
+          "name": "promise",
+          "elapsedMs": 489.9132090000003,
+          "success": true,
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise",
+          "outputBytes": 14994
+        },
+        {
+          "name": "static-methods",
+          "elapsedMs": 198.10970799999996,
+          "success": true,
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise#static_methods",
+          "outputBytes": 15183
+        },
+        {
+          "name": "all-settled",
+          "elapsedMs": 536.5275419999998,
+          "success": true,
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/allSettled",
+          "outputBytes": 9900
+        },
+        {
+          "name": "back",
+          "elapsedMs": 208.04500000000007,
+          "success": true,
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise#static_methods",
+          "outputBytes": 15029
+        }
+      ],
+      "apiCalls": 6,
+      "fallbacks": [
+        {
+          "kind": "explicit-refill-after-observed-blank"
+        }
+      ]
+    },
+    {
+      "site": "github",
+      "success": false,
+      "records": [
+        {
+          "name": "branch-menu",
+          "elapsedMs": 218.83295799999905,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 16546
+        },
+        {
+          "name": "filter-branches",
+          "elapsedMs": 204.1864999999998,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 20157
+        },
+        {
+          "name": "cancel-menu",
+          "elapsedMs": 218.515625,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 19935
+        },
+        {
+          "name": "tags",
+          "elapsedMs": 711.2146670000002,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright/tags",
+          "outputBytes": 19960
+        },
+        {
+          "name": "release",
+          "elapsedMs": 490.6759170000005,
+          "success": false,
+          "url": "https://github.com/microsoft/playwright/tags",
+          "outputBytes": 6081,
+          "firstError": {
+            "code": "TARGET_AMBIGUOUS",
+            "message": "11 observed controls match target. Add name, fieldName or frameRef."
+          },
+          "recoveryAttempts": 0,
+          "error": {
+            "code": "TARGET_AMBIGUOUS",
+            "message": "11 observed controls match target. Add name, fieldName or frameRef."
+          }
+        }
+      ],
+      "apiCalls": 6,
+      "fallbacks": [
+        {
+          "kind": "scroll-and-wait",
+          "target": "/microsoft/playwright/releases/tag/"
+        }
+      ]
+    }
+  ]
+}

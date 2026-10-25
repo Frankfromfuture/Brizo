@@ -38,6 +38,12 @@ node "/本 skill 的绝对路径/scripts/brizo.mjs" act SESSION_ID --json '{"sna
 
 默认观察精简空字段。`observe` 可传 JSON 参数 `filter:{role,text,frameRef}`、`maxChars`、`maxElements`；`since` 返回最近四份观察中的变化。完整属性用 `detail:"full"`。变化观察中的旧引用只作说明，后续使用新编号、新引用或语义目标。
 
+长页面的正文优先返回当前视口内容，再补文档开头。目录链接保留普通章节片段；含令牌参数的片段仍会隐藏。`truncated` 同时反映采集上限与输出上限；控件列表仍限于当前视口，目标未出现时先滚动，再观察。
+
+点击已观察到的链接时，若后续步骤依赖新页面，附上预期 URL 或目标控件的 `wait`；页面改了地址，内容可能还在加载。存在性等待允许多个匹配，点击及值验证仍需唯一目标。`TARGET_OCCLUDED` 表示控件被遮住，先重新观察。
+
+`CONDITION_TIMEOUT` 会附带当前观察并保留控制权。先核对字段值和页面状态，再决定接续哪一步。动态页面若把刚填的值清空，可在确认当前字段为空后明确重填一次；保留首次失败记录。SDK 不会自动重放动作。
+
 Agent 阅读优先使用 `format:"text"`，控件在 `controls` 中按行显示，保留 ref、角色、名称、值和限制。程序需要对象数组时用 `format:"json"` 读取 `elements`。创建时指定的格式会作为后续观察的默认值，单次调用仍可覆盖。
 
 Canvas 使用 `screenshot SESSION_ID`。返回本机图片路径、对应 `observation`、`viewport`、`imageSize`、`imageScale`。看过图片后，用其观察编号执行 `click(x,y)`、`hover(x,y)`、`double-click(x,y)`、`drag(from,to)`。坐标使用视口 CSS 像素；图片像素除以 `imageScale` 后再操作。坐标输入限于同一可见 Canvas，普通控件使用 ref 或语义目标。回执只证明输入已派发，结果从截图或应用可见状态核对。

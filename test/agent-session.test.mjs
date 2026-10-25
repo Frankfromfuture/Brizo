@@ -148,3 +148,22 @@ test("legacy hosts retain basic actions and recover refs after screenshot withou
   assert.equal(calls.at(-1).args.snapshotId, "old-2");
   assert.equal(calls.some(call => call.method === "batch"), false);
 });
+
+
+test("observations retain upstream collection truncation even at the presentation limit", () => {
+  const page = { ...snapshot(), truncated: { elements: true, text: true } };
+  const output = presentObservation(page, {});
+  assert.equal(output.truncated.elements, true);
+  assert.equal(output.truncated.text, true);
+});
+
+
+test("existence waits accept multiple links while actions and value waits stay unambiguous", () => {
+  const page = snapshot();
+  page.elements = [1, 2].map(i => ({ ref: `@e${i}`, tag: "a", name: `Release ${i}`, href: `https://example.com/releases/tag/v${i}` }));
+  const target = { role: "link", href: "/releases/tag/", exact: false };
+  assert.equal(matchesWait(page, { target }), true);
+  assert.equal(matchesWait(page, { target, state: "hidden" }), false);
+  assert.throws(() => findTarget(page, target), { code: "TARGET_AMBIGUOUS" });
+  assert.throws(() => matchesWait(page, { target, value: "x" }), { code: "TARGET_AMBIGUOUS" });
+});

@@ -71,7 +71,7 @@ Windows PowerShell 可使用相同的 `--json` 写法。任务含复杂引号或
 
 需要脚本时，可使用 `brizo/agent` 的 `createAgentSession`，由 SDK 跟踪观察编号。按需查看 `brizo help batch`、`brizo help wait` 或 [Agent API](./docs/agent-api.md)。这些能力需要宿主同步嵌入 0.5 运行时；仅更新 CLI 不会更新桌面宿主。`brizo capabilities` 描述本机客户端，实际宿主能力以 `create` 或 `ping` 的返回为准。
 
-隐藏 Chromium 验收及测量范围见[验收记录](./docs/agent-validation.md)。与 Ego 独立 Space 的后台配对测试见[实测报告](./docs/ego-comparison-2026-10-25.md)：两边各 20/20 成功，Brizo 三项任务耗时更低，纯观察基本持平。
+隐藏 Chromium 验收及测量范围见[验收记录](./docs/agent-validation.md)。真实网站连续任务及仍存在的差距见[三站实测](./docs/real-sites-comparison-2026-10-25.md)。与 Ego 独立 Space 的后台配对测试见[实测报告](./docs/ego-comparison-2026-10-25.md)：两边各 20/20 成功，Brizo 三项任务耗时更低，纯观察基本持平。
 
 ## 作为运行时使用
 

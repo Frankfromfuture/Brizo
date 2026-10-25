@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-25",
+  "sites": [
+    "https://en.wikipedia.org/wiki/Artificial_intelligence",
+    "https://developer.mozilla.org/en-US/docs/Web/JavaScript",
+    "https://github.com/microsoft/playwright"
+  ],
+  "viewport": {
+    "width": 1348,
+    "height": 802,
+    "dpr": 2
+  },
+  "brizo": {
+    "electron": "44.2.0",
+    "chromium": "152.0.7977.76",
+    "foregroundCalls": 0,
+    "baselineCommit": "2feb1f10c6c63bf490ed2e8abc428157dffb1f4f"
+  },
+  "ego": {
+    "runtime": "0.6.0.20",
+    "skill": "2.1.0",
+    "userAgentChrome": "154.0.0.0",
+    "spaceId": 51,
+    "page": "p1",
+    "finished": true
+  },
+  "samples": "One diagnostic flow per site and explicitly listed targeted repair runs; not a statistical speed study.",
+  "timing": "Step runtime work, waits and semantic observation; excludes initial navigation and Ego CLI startup. Subsequent link navigation is included.",
+  "outputBytes": "Final per-step semantic observation body only; excludes action receipts, images, intermediate polling and CLI framing.",
+  "apiCalls": "Internal SDK/runtime calls, not LLM tool rounds.",
+  "evidencePolicy": "Public artifacts contain metrics, URLs, failures and source hashes. Full site snapshots remain local; page bodies are not republished.",
+  "sourceFiles": {
+    "runtime/electron/agent-browser.mjs": "d68cabb69b4a4cfeb85f85dc032cc02452c96e328b0c7d36cf9b68b7f0a31aa6",
+    "runtime/electron/browser-command-agent.mjs": "90debd002aa14000038b327ad2f907c350b1142a742a42af55eb1a868dfdaa40",
+    "runtime/electron/agent-session-tools.mjs": "81606a6947c38bc4d18f06a2dc5f8c286ceb847f09934b0307b8501b1667cce3",
+    "lib/agent-session.mjs": "d0d47e611fddc50bbb1b2a479ffb1c40ef9304604d629d3cb894de75b4322c0e"
+  }
+}

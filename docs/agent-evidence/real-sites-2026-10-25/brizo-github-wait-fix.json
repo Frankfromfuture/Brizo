@@ -1,0 +1,68 @@
+{
+  "engine": "brizo",
+  "phase": "recovery",
+  "date": "2026-10-25T04:13:16.637Z",
+  "sourceFiles": {
+    "runtime/electron/agent-browser.mjs": "d68cabb69b4a4cfeb85f85dc032cc02452c96e328b0c7d36cf9b68b7f0a31aa6",
+    "runtime/electron/browser-command-agent.mjs": "90debd002aa14000038b327ad2f907c350b1142a742a42af55eb1a868dfdaa40",
+    "runtime/electron/agent-session-tools.mjs": "81606a6947c38bc4d18f06a2dc5f8c286ceb847f09934b0307b8501b1667cce3",
+    "lib/agent-session.mjs": "d0d47e611fddc50bbb1b2a479ffb1c40ef9304604d629d3cb894de75b4322c0e"
+  },
+  "results": [
+    {
+      "site": "github",
+      "success": true,
+      "records": [
+        {
+          "name": "branch-menu",
+          "elapsedMs": 243.88116699999955,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 20137
+        },
+        {
+          "name": "filter-branches",
+          "elapsedMs": 205.63008400000035,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 20157
+        },
+        {
+          "name": "cancel-menu",
+          "elapsedMs": 211.11170899999888,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 19935
+        },
+        {
+          "name": "tags",
+          "elapsedMs": 815.6979169999995,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright/tags",
+          "outputBytes": 19960
+        },
+        {
+          "name": "release",
+          "elapsedMs": 924.7197909999995,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright/releases/tag/v1.64.1",
+          "outputBytes": 4990
+        },
+        {
+          "name": "back",
+          "elapsedMs": 174.59558300000026,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright/tags",
+          "outputBytes": 4974
+        }
+      ],
+      "apiCalls": 8,
+      "fallbacks": [
+        {
+          "kind": "scroll-and-wait",
+          "target": "/microsoft/playwright/releases/tag/"
+        }
+      ]
+    }
+  ]
+}

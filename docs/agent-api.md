@@ -74,3 +74,14 @@ await task.finish('Filled the observed search field.', { keep: false });
 The SDK reuses a validated runtime connection within its client-options lifetime, avoiding a redundant handshake for each operation. Session credentials are still read on every call and checked by the server. Transport failures invalidate the connection cache and are returned without replaying the action. The cache is module-private and never appears in command output.
 
 Local help is available through `brizo help act|batch|wait|observe|screenshot|visual|agent`. `brizo skill` prints the installed guide without opening a browser.
+
+
+### 长页面和连续任务
+
+观察正文优先包含视口中的文本，随后补充文档开头；`truncated` 继承底层采集上限。普通章节片段保留在 URL 与链接中，含参数的认证片段继续隐藏。控件观察仍受视口与 140 项上限约束。
+
+控件名称支持 `aria-labelledby`，可见文字优先于提示 title，交互控件中的装饰子节点不再重复作为控件返回。点击先将目标滚入视图并检查遮挡；公共 Runtime 返回 `TARGET_OCCLUDED` 时没有派发点击。桌面宿主原有的更完整命中检查保持不变。
+
+存在性等待可接受多个匹配；动作、控件值和选中状态验证仍要求唯一目标。`CONDITION_TIMEOUT` 的 `details.observation` 提供当前状态，SDK 据此更新观察编号。页面初始化覆盖输入等情况仍需调用方判断后显式恢复，不做隐式动作重试。
+
+真实网站流程、失败与恢复记录见 [三站实测](./real-sites-comparison-2026-10-25.md)。

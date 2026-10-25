@@ -12,7 +12,9 @@ const cleanUrl = value => {
   try {
     const url = new URL(value);
     if (!/^https?:$/.test(url.protocol)) return "";
-    url.username = ""; url.password = ""; url.hash = "";
+    url.username = ""; url.password = "";
+    // Preserve ordinary section IDs; OAuth/token payload fragments stay private.
+    if (!/^#[\p{L}\p{N}_.:-]{1,160}$/u.test(url.hash)) url.hash = "";
     for (const key of [...url.searchParams.keys()]) if (/token|password|secret|auth|session|api.?key|^code$/i.test(key)) url.searchParams.delete(key);
     return url.href;
   } catch { return ""; }
@@ -265,6 +267,9 @@ export async function createAgentSandbox({ id, goal, client, url, host, installN
     } catch (error) {
       metrics.failures++;
       error.recovery = errorRecovery(error.code);
+      if (error.code === "CONDITION_TIMEOUT" && record.status === "agent" && !signal.aborted && !error.details?.observation) {
+        error.details = { ...error.details, observation: await observe(signal, args.observe).catch(() => null) };
+      }
       if (signal.aborted && record.status === "agent") handoff(error.message, error.code || "BROWSER_PAUSED");
       throw error;
     } finally {

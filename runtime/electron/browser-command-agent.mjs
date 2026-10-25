@@ -533,6 +533,9 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
       const elements = [];
       const frames = [];
       const textChunks = [];
+      const viewportChunks = [];
+      let viewportTextLength = 0;
+      let omittedElements = 0;
       const seenRoots = new WeakSet();
       const seenFrames = new WeakSet();
       const previousDomRefs = new WeakMap();
@@ -610,7 +613,8 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
         };
       };
       const appendElement = (element, context, frameRef, frameDepth) => {
-        if (elements.length >= 140 || !visible(element, context)) return;
+        if (!visible(element, context)) return;
+        if (elements.length >= 140) { omittedElements += 1; return; }
         const rect = topRect(element, context);
         const tag = String(element.tagName || "").toLowerCase();
         const nativeType = clean(element.getAttribute("type") || element.type, 30).toLowerCase();
@@ -642,11 +646,14 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
         const rawValue = sensitive ? "" : contentEditable
           ? element.innerText || element.textContent || ""
           : "value" in element ? element.value ?? "" : "";
+        const labelledBy = (element.getAttribute("aria-labelledby") || "").trim().split(/\\s+/).filter(Boolean)
+          .map(id => element.getRootNode().getElementById?.(id)?.textContent || "").join(" ");
         const explicitText = clean(
-          element.getAttribute("aria-label")
+          labelledBy
+          || element.getAttribute("aria-label")
           || labels
-          || element.getAttribute("title")
           || element.innerText
+          || element.getAttribute("title")
           || element.getAttribute("placeholder")
           || element.getAttribute("alt")
           || (sensitive ? "" : rawValue),
@@ -735,6 +742,32 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
         }
         if (root.nodeType === Node.DOCUMENT_NODE && root.body?.innerText) textChunks.push(root.body.innerText);
         const nodes = [...(root.querySelectorAll?.("*") || [])];
+        // A long flight list can exceed the body-text budget before the target
+        // flight. Prioritize text actually revealed by scrolling, including
+        // nested lists, instead of repeatedly showing the document's beginning.
+        for (const node of nodes) {
+          if (viewportTextLength >= 6000) break;
+          const textNodes = [...node.childNodes].filter(child => child.nodeType === Node.TEXT_NODE && child.textContent.trim());
+          if (!textNodes.length) continue;
+          if (/^(?:SCRIPT|STYLE|NOSCRIPT|TEXTAREA|INPUT)$/.test(node.tagName || "") || !visible(node, context)) continue;
+          const view = node.ownerDocument.defaultView;
+          let top = 0, bottom = view.innerHeight, left = 0, right = view.innerWidth;
+          for (let parent = node; parent; parent = parent.parentElement || parent.getRootNode()?.host) {
+            const style = view.getComputedStyle(parent);
+            const bounds = parent.getBoundingClientRect();
+            if (/auto|scroll|hidden|clip/.test(style.overflowY)) { top = Math.max(top, bounds.top); bottom = Math.min(bottom, bounds.bottom); }
+            if (/auto|scroll|hidden|clip/.test(style.overflowX)) { left = Math.max(left, bounds.left); right = Math.min(right, bounds.right); }
+          }
+          if (bottom <= top || right <= left) continue;
+          for (const child of textNodes) {
+            const range = node.ownerDocument.createRange();
+            range.selectNodeContents(child);
+            if (![...range.getClientRects()].some(rect => rect.bottom > top && rect.top < bottom && rect.right > left && rect.left < right)) continue;
+            const text = clean(child.textContent, 6000 - viewportTextLength);
+            viewportChunks.push(text);
+            viewportTextLength += text.length;
+          }
+        }
         // Portalled calendars/listboxes often follow the entire document.
         // Reserve the bounded snapshot for their currently visible controls
         // before background links exhaust the 140-element budget.
@@ -767,6 +800,7 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
           // targets, not arbitrary text or whole clickable page containers.
           if (!/^(?:LABEL|DIV|SPAN|P|DT|DD|LI|TD)$/.test(element.tagName || "")
             || !visible(element, context)) continue;
+          if (element.parentElement?.closest(selector)) continue;
           const view = element.ownerDocument.defaultView;
           if (!suggestions.has(element) && view.getComputedStyle(element).cursor !== "pointer") continue;
           const label = clean(element.innerText || element.textContent, 100);
@@ -813,9 +847,11 @@ export async function snapshotBrowserPage(webContents, { includeLoginState = fal
       };
 
       collectRoot(document, { offsetX: 0, offsetY: 0, scaleX: 1, scaleY: 1 });
-      const pageText = clean(textChunks.join("\\n"), 10000);
+      const combinedText = (viewportChunks.length ? [viewportChunks.join(" "), ...textChunks] : textChunks).join("\\n");
+      const pageText = clean(combinedText, 10000);
       return {
         ${includeLoginState ? "loginRequirement," : ""}
+        truncated: { elements: omittedElements > 0, omittedElements, text: clean(combinedText, 10001).length > 10000 },
         title: clean(document.title, 240),
         url: location.href,
         pageText,
@@ -966,8 +1002,19 @@ export async function executeBrowserCommandAction({ action, command, sendInputEv
         const located = ${BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE}(${JSON.stringify(target.domRef || "")});
         const element = located?.element;
         if (!element) return null;
+        element.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
         const rect = element.getBoundingClientRect();
         if (rect.width <= 1 || rect.height <= 1) return null;
+        const x = rect.left + rect.width / 2, y = rect.top + rect.height / 2;
+        let hit = element.getRootNode().elementFromPoint(x, y);
+        for (let depth = 0; hit?.shadowRoot && depth < 8; depth++) {
+          const nested = hit.shadowRoot.elementFromPoint(x, y);
+          if (!nested || nested === hit) break;
+          hit = nested;
+        }
+        let reachable = false;
+        for (let node = hit; node; node = node.parentNode || node.host) if (node === element) { reachable = true; break; }
+        if (!reachable) return { blocked: true };
         return {
           x: Math.round(located.offsetX + (rect.left + rect.width / 2) * located.scaleX),
           y: Math.round(located.offsetY + (rect.top + rect.height / 2) * located.scaleY),
@@ -975,6 +1022,7 @@ export async function executeBrowserCommandAction({ action, command, sendInputEv
       })()
     `);
     if (!position) throw new Error("页面元素引用已经失效，请重新观察页面。");
+    if (position.blocked) throw Object.assign(new Error("The observed control is covered; no click was dispatched."), { code: "TARGET_OCCLUDED" });
     const point = scaledInputPoint(webContents, position);
     await dispatchInput([
       { type: "mouseMove", x: point.x, y: point.y },

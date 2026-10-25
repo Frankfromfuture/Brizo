@@ -1,0 +1,126 @@
+[
+  {
+    "file": "brizo-baseline.json",
+    "reason": "Initial public-runtime probes; earlier driver used broad names and omitted a branch-menu wait. Use isolated Wikipedia text/fragment defects, not a headline success-rate comparison.",
+    "results": [
+      {
+        "site": "wikipedia",
+        "success": false,
+        "errors": []
+      },
+      {
+        "site": "mdn",
+        "success": false,
+        "errors": [
+          {
+            "code": "CONDITION_TIMEOUT",
+            "message": "Expected page condition was not observed. No action was retried."
+          }
+        ]
+      },
+      {
+        "site": "github",
+        "success": false,
+        "errors": [
+          {
+            "code": "TARGET_NOT_FOUND",
+            "message": "No observed control matches target."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "brizo-improved.json",
+    "reason": "Intermediate probe before click scroll/hit testing and before links used explicit navigation waits.",
+    "results": [
+      {
+        "site": "wikipedia",
+        "success": false,
+        "errors": [
+          {
+            "code": "TARGET_NOT_FOUND",
+            "message": "No observed control matches target."
+          }
+        ]
+      },
+      {
+        "site": "mdn",
+        "success": true,
+        "errors": []
+      },
+      {
+        "site": "github",
+        "success": false,
+        "errors": [
+          {
+            "code": "TARGET_NOT_OBSERVED",
+            "message": "Target link is absent from current observation: /microsoft/playwright/releases/tag/"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "ego-comparison.json",
+    "reason": "Pilot broad names caused duplicate-locator errors; navigation had no explicit waits.",
+    "results": [
+      {
+        "site": "wikipedia",
+        "success": false,
+        "errors": [
+          {
+            "code": "ACTION_ERROR",
+            "message": "Locator loc=role:link[name=\"History\"] matched 2 elements. Use a current snapshot ref or a more specific role, text, or CSS selector."
+          }
+        ]
+      },
+      {
+        "site": "mdn",
+        "success": false,
+        "errors": [
+          {
+            "code": "ACTION_ERROR",
+            "message": "Locator loc=role:link[name=\"Static methods\"] matched 2 elements. Use a current snapshot ref or a more specific role, text, or CSS selector."
+          }
+        ]
+      },
+      {
+        "site": "github",
+        "success": false,
+        "errors": [
+          {
+            "code": "TARGET_NOT_OBSERVED",
+            "message": "Target link is absent from current observation: /microsoft/playwright/releases/tag/"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "ego-explicit-waits.json",
+    "reason": "Pilot ref target disconnected after a full snapshot. Final driver resolves an observed href to a stable selector.",
+    "results": [
+      {
+        "site": "wikipedia",
+        "success": true,
+        "errors": []
+      },
+      {
+        "site": "mdn",
+        "success": true,
+        "errors": []
+      },
+      {
+        "site": "github",
+        "success": false,
+        "errors": [
+          {
+            "code": "ACTION_ERROR",
+            "message": "page.click timed out after 3000ms: page.click failed: element is not connected"
+          }
+        ]
+      }
+    ]
+  }
+]

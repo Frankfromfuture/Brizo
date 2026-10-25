@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "date": "2026-10-25T03:47:17.523Z",
+  "date": "2026-10-25T04:13:12.412Z",
   "platform": "darwin",
   "electron": "44.2.0",
   "chromium": "152.0.7977.76",
@@ -65,6 +65,18 @@
       "passed": true
     },
     {
+      "scenario": "semantic-labels-and-upstream-truncation",
+      "passed": true
+    },
+    {
+      "scenario": "deep-section-text-and-safe-fragments",
+      "passed": true
+    },
+    {
+      "scenario": "covered-control-never-receives-click",
+      "passed": true
+    },
+    {
       "scenario": "unauthorized-submit-constraint-preserved",
       "passed": true
     },
@@ -78,20 +90,20 @@
     }
   ],
   "metrics": {
-    "calls": 29,
-    "outputBytes": 219392,
-    "elapsedMs": 1963
+    "calls": 34,
+    "outputBytes": 291261,
+    "elapsedMs": 5651
   },
   "profileIsolated": true,
   "foregroundCalls": 0,
   "verification": {
-    "mirrorCheck": "passed",
+    "tests": 124,
+    "passed": 124,
+    "failed": 0,
+    "boundary": "passed",
+    "syntax": "passed",
+    "packageDryRun": "passed",
     "productionBuild": "passed",
-    "host": "current desktop dist/client/index.html and synchronized packages/brizo Runtime",
-    "preservedRegression": "desktop-followup-and-progress-preserved"
-  },
-  "comparison": {
-    "ego": "measured_separately",
-    "report": "../ego-comparison-2026-10-25.md"
+    "mirrorCheck": "passed"
   }
 }

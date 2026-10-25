@@ -31,13 +31,14 @@ let session;
 try {
   const fixture = await readFile(new URL("./fixtures/agent-workbench.html", import.meta.url), "utf8");
   const directory = await mkdtemp(path.join(os.tmpdir(), "brizo-agent-qa-"));
+  const longFixture = `<a href="#tail">Deep section</a><span id="control-label">Label from ID</span><button aria-labelledby="control-label" title="Tooltip">Child</button><a href="https://example.com/" title="External link"><span>Visible link name</span></a>${Array.from({length:180},(_,i)=>`<button style="font-size:4px;padding:0">B${i}</button>`).join("")}<p>${"Document beginning. ".repeat(1000)}</p><div style="height:10000px"></div><h2 id="tail">Tail section</h2><p>UNIQUE_VISIBLE_TAIL_EVIDENCE</p><a href="#access_token=fixture-secret">Auth fragment</a><button style="position:fixed;left:600px;top:100px;width:140px;height:40px" onclick="window.coverClicks=(window.coverClicks||0)+1">Covered control</button><div style="position:fixed;left:600px;top:100px;width:140px;height:40px;z-index:999;background:white">Cover</div>`;
   bridge = await startAgentBridge({
     directory,
     // This fixture adapter resolves one synthetic public origin entirely in
     // memory. Production navigation and network policies remain unchanged.
     installNetworkPolicy(partition) {
       partition.protocol.handle("https", request => new URL(request.url).origin === "https://fixture.brizo.example"
-        ? new Response(new URL(request.url).searchParams.has("login")
+        ? new Response(new URL(request.url).pathname === "/long" ? longFixture : new URL(request.url).searchParams.has("login")
           ? fixture.replace("</html>", '<dialog open aria-label="Sign in"><form><label>Password<input type="password" value="login-fixture-value"></label></form></dialog></html>') : fixture,
           { headers: { "Content-Type": "text/html; charset=utf-8" } })
         : new Response("Blocked fixture request", { status: 403 }));
@@ -112,9 +113,13 @@ try {
   assert.ok(delta.elements.length < before.elements.length);
   results.push({ scenario: "delta-after-edit", passed: true });
 
-  await assert.rejects(session.wait({ text: "never-appears", timeoutMs: 100 }), { code: "CONDITION_TIMEOUT" });
+  await assert.rejects(session.wait({ text: "never-appears", timeoutMs: 100 }), error => {
+    assert.equal(error.code, "CONDITION_TIMEOUT");
+    assert.ok(error.details.observation.snapshotId);
+    return true;
+  });
   assert.equal((await session.diagnostics()).state.status, "agent");
-  await session.observe();
+  assert.ok(session.observation.snapshotId);
   results.push({ scenario: "wait-timeout-keeps-agent-control", passed: true });
 
   const stale = session.observation.snapshotId;
@@ -148,6 +153,27 @@ try {
   await assert.rejects(session.act({ action: "click", x: 5, y: 5 }), { code: "VISUAL_TARGET_INVALID" });
   results.push({ scenario: "coordinates-cannot-bypass-dom-controls", passed: true });
 
+  await session.observe();
+  view.webContents.setZoomFactor(1);
+  await session.act({ action: "navigate", url: "https://fixture.brizo.example/long" });
+  assert.equal(session.observation.truncated.elements, true);
+  assert.equal(session.observation.truncated.text, true);
+  assert.ok(session.observation.elements.some(e => e.name === "Label from ID"));
+  assert.ok(session.observation.elements.some(e => e.name === "Visible link name"));
+  assert.equal(session.observation.elements.some(e => e.tag === "span" && e.name === "Label from ID"), false);
+  assert.equal(session.observation.elements.find(e => e.name === "Deep section").href, "https://fixture.brizo.example/long#tail");
+  results.push({ scenario: "semantic-labels-and-upstream-truncation", passed: true });
+  await session.act({ action: "click", target: { role: "link", name: "Deep section" } });
+  assert.equal(session.observation.url, "https://fixture.brizo.example/long#tail");
+  assert.ok(session.observation.pageText.startsWith("Tail section"));
+  assert.ok(session.observation.pageText.includes("UNIQUE_VISIBLE_TAIL_EVIDENCE"));
+  assert.equal(JSON.stringify(session.observation).includes("fixture-secret"), false);
+  results.push({ scenario: "deep-section-text-and-safe-fragments", passed: true });
+  await assert.rejects(session.act({ action: "click", target: { role: "button", name: "Covered control" } }), { code: "TARGET_OCCLUDED" });
+  assert.equal(await view.webContents.executeJavaScript("window.coverClicks || 0"), 0);
+  await session.observe();
+  results.push({ scenario: "covered-control-never-receives-click", passed: true });
+  await session.act({ action: "navigate", url: "https://fixture.brizo.example/" });
   await session.observe();
   await assert.rejects(session.act({ action: "click", target: { role: "button", name: "Submit" } }), { code: "NEEDS_CONFIRMATION" });
   const status = await executeBrowserCommand("status", session.sessionId, {}, clientOptions);

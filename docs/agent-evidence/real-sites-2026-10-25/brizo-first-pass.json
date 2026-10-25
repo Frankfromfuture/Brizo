@@ -1,0 +1,126 @@
+{
+  "engine": "brizo",
+  "phase": "release",
+  "date": "2026-10-25T04:09:07.720Z",
+  "sourceFiles": {
+    "runtime/electron/agent-browser.mjs": "d68cabb69b4a4cfeb85f85dc032cc02452c96e328b0c7d36cf9b68b7f0a31aa6",
+    "runtime/electron/browser-command-agent.mjs": "90debd002aa14000038b327ad2f907c350b1142a742a42af55eb1a868dfdaa40",
+    "runtime/electron/agent-session-tools.mjs": "18ae6be01279dc2cccd3bf691c942e616448906e4ac0e8cb2f522070a558f0a8",
+    "lib/agent-session.mjs": "d0d47e611fddc50bbb1b2a479ffb1c40ef9304604d629d3cb894de75b4322c0e"
+  },
+  "results": [
+    {
+      "site": "wikipedia",
+      "success": true,
+      "records": [
+        {
+          "name": "ethics",
+          "elapsedMs": 447.61741700000016,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence#Ethics",
+          "outputBytes": 14497
+        },
+        {
+          "name": "collapse-ethics",
+          "elapsedMs": 482.064083,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence#Ethics",
+          "outputBytes": 14592
+        },
+        {
+          "name": "history",
+          "elapsedMs": 431.713667,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence#History",
+          "outputBytes": 16303
+        },
+        {
+          "name": "top",
+          "elapsedMs": 384.83858299999974,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence",
+          "outputBytes": 23541
+        },
+        {
+          "name": "search",
+          "elapsedMs": 354.8418750000001,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence",
+          "outputBytes": 23568
+        },
+        {
+          "name": "search-enter",
+          "elapsedMs": 1413.954166,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Machine_learning",
+          "outputBytes": 22904
+        }
+      ],
+      "apiCalls": 6
+    },
+    {
+      "site": "mdn",
+      "success": false,
+      "records": [
+        {
+          "name": "filter-sidebar",
+          "elapsedMs": 5172.021666000001,
+          "success": false,
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript",
+          "outputBytes": 18890,
+          "error": {
+            "code": "CONDITION_TIMEOUT",
+            "message": "Expected page condition was not observed. No action was retried."
+          }
+        }
+      ],
+      "apiCalls": 1
+    },
+    {
+      "site": "github",
+      "success": false,
+      "records": [
+        {
+          "name": "branch-menu",
+          "elapsedMs": 221.05762500000128,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 16546
+        },
+        {
+          "name": "filter-branches",
+          "elapsedMs": 186.38354199999958,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 16584
+        },
+        {
+          "name": "cancel-menu",
+          "elapsedMs": 224.4195830000026,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 19935
+        },
+        {
+          "name": "tags",
+          "elapsedMs": 699.5440420000014,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright/tags",
+          "outputBytes": 19960
+        },
+        {
+          "name": "release",
+          "elapsedMs": 0.15933299999960582,
+          "success": false,
+          "url": "https://github.com/microsoft/playwright/tags",
+          "outputBytes": 19960,
+          "error": {
+            "code": "TARGET_NOT_OBSERVED",
+            "message": "Target link is absent from current observation: /microsoft/playwright/releases/tag/"
+          }
+        }
+      ],
+      "apiCalls": 4
+    }
+  ]
+}

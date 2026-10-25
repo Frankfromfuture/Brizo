@@ -1,0 +1,112 @@
+{
+  "engine": "brizo",
+  "phase": "baseline",
+  "date": "2026-10-25T03:59:49.153Z",
+  "sourceFiles": {
+    "runtime/electron/agent-browser.mjs": "90252e337c5099fc6c95091a45615624069972cb6fcf58831025c6b5150323dd",
+    "runtime/electron/browser-command-agent.mjs": "02c3fc3b2e124b8e1efcb31050135c4b7d83cdaece6aa37fc5d8fe38a78204ac",
+    "runtime/electron/agent-session-tools.mjs": "a3deed6468f6447f77f6b812025467cf98ecd34a82dedbe2904efeb24080e4e3",
+    "lib/agent-session.mjs": "d0d47e611fddc50bbb1b2a479ffb1c40ef9304604d629d3cb894de75b4322c0e"
+  },
+  "results": [
+    {
+      "site": "wikipedia",
+      "success": false,
+      "records": [
+        {
+          "name": "ethics",
+          "elapsedMs": 343.960875,
+          "success": false,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence",
+          "outputBytes": 15528
+        },
+        {
+          "name": "collapse-ethics",
+          "elapsedMs": 335.0414999999998,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence",
+          "outputBytes": 15003
+        },
+        {
+          "name": "history",
+          "elapsedMs": 299.158541,
+          "success": false,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence",
+          "outputBytes": 17166
+        },
+        {
+          "name": "top",
+          "elapsedMs": 254.87770899999987,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence",
+          "outputBytes": 21866
+        },
+        {
+          "name": "search",
+          "elapsedMs": 274.3555409999999,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Artificial_intelligence",
+          "outputBytes": 21893
+        },
+        {
+          "name": "search-enter",
+          "elapsedMs": 1320.465542,
+          "success": true,
+          "url": "https://en.wikipedia.org/wiki/Machine_learning",
+          "outputBytes": 20924
+        }
+      ],
+      "apiCalls": 6
+    },
+    {
+      "site": "mdn",
+      "success": false,
+      "records": [
+        {
+          "name": "filter-sidebar",
+          "elapsedMs": 5164.887666999999,
+          "success": false,
+          "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript",
+          "outputBytes": 16164,
+          "error": {
+            "code": "CONDITION_TIMEOUT",
+            "message": "Expected page condition was not observed. No action was retried."
+          }
+        }
+      ],
+      "apiCalls": 1
+    },
+    {
+      "site": "github",
+      "success": false,
+      "records": [
+        {
+          "name": "branch-menu",
+          "elapsedMs": 210.200499999999,
+          "success": false,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 17429
+        },
+        {
+          "name": "filter-branches",
+          "elapsedMs": 171.18937499999993,
+          "success": true,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 22195
+        },
+        {
+          "name": "cancel-menu",
+          "elapsedMs": 18.990999999999985,
+          "success": false,
+          "url": "https://github.com/microsoft/playwright",
+          "outputBytes": 22195,
+          "error": {
+            "code": "TARGET_NOT_FOUND",
+            "message": "No observed control matches target."
+          }
+        }
+      ],
+      "apiCalls": 3
+    }
+  ]
+}

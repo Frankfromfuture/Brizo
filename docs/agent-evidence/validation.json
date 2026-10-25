@@ -1,6 +1,6 @@
 {
   "ok": true,
-  "date": "2026-10-25T03:38:19.951Z",
+  "date": "2026-10-25T04:08:52.259Z",
   "platform": "darwin",
   "electron": "44.2.0",
   "chromium": "152.0.7977.76",
@@ -25,8 +25,8 @@
       "scenario": "observation-budget",
       "passed": true,
       "bytes": {
-        "full": 40130,
-        "compact": 9201,
+        "full": 40579,
+        "compact": 9650,
         "filtered": 483
       }
     },
@@ -61,6 +61,18 @@
       "passed": true
     },
     {
+      "scenario": "semantic-labels-and-upstream-truncation",
+      "passed": true
+    },
+    {
+      "scenario": "deep-section-text-and-safe-fragments",
+      "passed": true
+    },
+    {
+      "scenario": "covered-control-never-receives-click",
+      "passed": true
+    },
+    {
       "scenario": "unauthorized-submit-constraint-preserved",
       "passed": true
     },
@@ -74,23 +86,18 @@
     }
   ],
   "metrics": {
-    "calls": 27,
-    "outputBytes": 171986,
-    "elapsedMs": 1755
+    "calls": 32,
+    "outputBytes": 242972,
+    "elapsedMs": 2295
   },
   "profileIsolated": true,
   "foregroundCalls": 0,
   "verification": {
-    "command": "npm run check",
-    "tests": 122,
-    "passed": 122,
+    "tests": 124,
+    "passed": 124,
     "failed": 0,
     "boundary": "passed",
     "syntax": "passed",
     "packageDryRun": "passed"
-  },
-  "comparison": {
-    "ego": "measured_separately",
-    "report": "../ego-comparison-2026-10-25.md"
   }
 }

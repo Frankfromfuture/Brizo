@@ -2,6 +2,10 @@
 
 ## 0.5.0
 
+- Prioritize viewport text on long pages, retain safe section fragments, resolve labelled controls and disclose upstream truncation.
+- Scroll observed click targets into view and reject covered controls before dispatch. Return fresh observations on condition timeouts without replaying actions.
+- Allow multiple matches for existence waits while preserving action/value ambiguity checks. Publish live Wikipedia, MDN and GitHub workflows, including failures and explicit recovery costs.
+
 - Add line-based text observations, CSS/device screenshot scales and configurable drag steps. Combine login detection with snapshot collection.
 - Reuse validated SDK transport discovery while checking session credentials on every call; invalidate failed connections without replaying actions.
 - Publish reproducible paired Ego Space benchmarks with raw samples, matched screenshot dimensions and explicit measurement limits.

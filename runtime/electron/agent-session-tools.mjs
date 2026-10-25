@@ -34,7 +34,7 @@ export function validateAgentAction(action) {
 
 export function errorRecovery(code) {
   if (["STALE_SNAPSHOT", "SNAPSHOT_UNKNOWN", "SCREENSHOT_REQUIRED"].includes(code)) return { retryable: true, next: code === "SCREENSHOT_REQUIRED" ? "screenshot" : "observe", requiresUser: false };
-  if (code === "CONDITION_TIMEOUT" || code === "TARGET_NOT_FOUND") return { retryable: true, next: "observe", requiresUser: false };
+  if (code === "CONDITION_TIMEOUT" || code === "TARGET_NOT_FOUND" || code === "TARGET_OCCLUDED") return { retryable: true, next: "observe", requiresUser: false };
   if (code === "TARGET_AMBIGUOUS") return { retryable: false, next: "narrow-target", requiresUser: false };
   if (["USER_CONTROL", "NEEDS_LOGIN", "SITE_BLOCKED", "NEEDS_CONFIRMATION", "BROWSER_PAUSED", "TIMEOUT", "DISCONNECTED"].includes(code)) {
     return { retryable: false, next: "status", requiresUser: true };
@@ -48,7 +48,7 @@ export function semanticRole(element) {
     || (element.tag === "input" ? ({ checkbox: "checkbox", radio: "radio", button: "button", submit: "button" })[element.type] || "textbox" : element.tag);
 }
 
-export function findTarget(snapshot, target, { optional = false } = {}) {
+export function findTarget(snapshot, target, { optional = false, allowMultiple = false } = {}) {
   if (!target || typeof target !== "object" || Array.isArray(target)) throw agentError("TARGET_INVALID", "target must be a role/name, text, fieldName or href object.");
   const allowed = new Set(["role", "name", "text", "fieldName", "href", "frameRef", "exact"]);
   if (Object.keys(target).some(key => !allowed.has(key)) || !Object.keys(target).some(key => key !== "exact")) {
@@ -64,7 +64,7 @@ export function findTarget(snapshot, target, { optional = false } = {}) {
   }));
   if (!matches.length && optional) return null;
   if (!matches.length) throw agentError("TARGET_NOT_FOUND", "No observed control matches target.");
-  if (matches.length !== 1) throw agentError("TARGET_AMBIGUOUS", `${matches.length} observed controls match target. Add name, fieldName or frameRef.`);
+  if (matches.length !== 1 && !allowMultiple) throw agentError("TARGET_AMBIGUOUS", `${matches.length} observed controls match target. Add name, fieldName or frameRef.`);
   return matches[0];
 }
 
@@ -135,7 +135,7 @@ export function presentObservation(snapshot, { tabId, snapshotId, options = {}, 
     frames: snapshot.frames?.map(frame => ({ ...frame, url: cleanUrl(frame.url) })),
     ...(options.format === "text" ? { controls: elements.map(controlText).join("\n") } : { elements }),
     ...(changes ? { changes } : {}),
-    truncated: { elements: totalElements > elements.length, text: Boolean(maxChars < snapshot.pageText.length && (!changes || changes.textChanged)) },
+    truncated: { elements: Boolean(snapshot.truncated?.elements || totalElements > elements.length), text: Boolean((snapshot.truncated?.text || maxChars < snapshot.pageText.length) && (!changes || changes.textChanged)) },
     counts: { elements: snapshot.elements.length, returned: elements.length },
   };
 }
@@ -156,7 +156,7 @@ export function matchesWait(snapshot, condition) {
   if (condition.text !== undefined && !snapshot.pageText.includes(String(condition.text))) return false;
   if (condition.url !== undefined && !snapshot.url.includes(String(condition.url))) return false;
   if (condition.target) {
-    const target = findTarget(snapshot, condition.target, { optional: true });
+    const target = findTarget(snapshot, condition.target, { optional: true, allowMultiple: condition.value === undefined && condition.checked === undefined && (!condition.state || ["visible", "hidden"].includes(condition.state)) });
     if (condition.state === "hidden") return !target;
     if (!target || (condition.state === "enabled" && target.disabled) || (condition.state === "disabled" && !target.disabled)) return false;
     if (condition.value !== undefined && target.value !== condition.value) return false;
