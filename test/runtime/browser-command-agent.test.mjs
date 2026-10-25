@@ -30,6 +30,7 @@ function mockWebContents(snapshot = { elements: [], pageText: "", title: "Test",
   return {
     inputs,
     executeJavaScript: async (script = "") => {
+      if (script.includes("registry.whenDefined")) return { ready: true };
       if (script.includes("const loginPattern") || script.includes("const auth = /login")) return null;
       if (script.includes("const snapshotId")) return snapshot;
       if (script.includes("matched: Boolean(element.isConnected && currentValue()")) {

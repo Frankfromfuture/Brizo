@@ -6,6 +6,7 @@ import path from "node:path";
 import {
   BRIZO_PRODUCT_NAME,
   BRIZO_PROTOCOL_VERSION,
+  BRIZO_AGENT_CAPABILITIES,
   isBridgeMethod,
 } from "../../lib/protocol.mjs";
 
@@ -53,6 +54,7 @@ export async function startAgentBridgeCore({
         protocol: BRIZO_PROTOCOL_VERSION,
         product: BRIZO_PRODUCT_NAME,
         pid: process.pid,
+        capabilities: BRIZO_AGENT_CAPABILITIES,
       };
     }
     if (request.method === "create") {
@@ -72,6 +74,7 @@ export async function startAgentBridgeCore({
           goal,
           client: String(request.args?.client || "外部 Agent").slice(0, 80),
           url: request.args?.url,
+          observeOptions: request.args?.observe,
           host,
           installNetworkPolicy,
           validateTarget,
@@ -82,7 +85,7 @@ export async function startAgentBridgeCore({
           throw new Error("创建请求已取消。");
         }
         sessions.set(id, { capability, sandbox });
-        return { sessionId: id, capability, state: sandbox.state() };
+        return { sessionId: id, capability, state: sandbox.state(), ...(sandbox.capabilities ? { capabilities: sandbox.capabilities } : {}), ...(sandbox.initialObservation ? { observation: sandbox.initialObservation } : {}) };
       } finally {
         creating -= 1;
       }
@@ -131,6 +134,8 @@ export async function startAgentBridgeCore({
             error: {
               code: error.code || "BRIZO_ERROR",
               message: error.message || "浏览器操作失败。",
+              ...(error.recovery ? { recovery: error.recovery } : {}),
+              ...(error.details ? { details: error.details } : {}),
             },
           };
         }

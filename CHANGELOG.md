@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.0
+
+- Wait for declarative shadow-root components to register and finish their update before filling; revalidate the target without replaying input.
+- Add viewport, full-page and snapshot-bound subtree observations with region/frame refs and control/text pagination. Preserve frame-origin and login boundaries.
+- Return scope text once instead of duplicating the document prefix; default to 6000 text characters and allow up to 1000 controls per paged observation.
+
+- Prioritize viewport text on long pages, retain safe section fragments, resolve labelled controls and disclose upstream truncation.
+- Scroll observed click targets into view and reject covered controls before dispatch. Return fresh observations on condition timeouts without replaying actions.
+- Allow multiple matches for existence waits while preserving action/value ambiguity checks. Publish live Wikipedia, MDN and GitHub workflows, including failures and explicit recovery costs.
+
+- Add line-based text observations, CSS/device screenshot scales and configurable drag steps. Combine login detection with snapshot collection.
+- Reuse validated SDK transport discovery while checking session credentials on every call; invalidate failed connections without replaying actions.
+- Publish reproducible paired Ego Space benchmarks with raw samples, matched screenshot dimensions and explicit measurement limits.
+
+- Return initial observations and runtime capabilities from task creation; preserve screenshot observation IDs and CSS/image coordinate metadata through the client.
+- Add semantic targets, preflighted 20-step batches with partial failure evidence, bounded condition waits and structured recovery advice.
+- Add compact, filtered and delta observations with disclosed output limits; retain full control details on request.
+- Add screenshot-bound canvas click, hover, double-click and drag, including cancellation cleanup and viewport-change checks.
+- Add a JavaScript session SDK, local topic help, skill output and aggregate diagnostics.
+- Detect legacy running hosts, retain single ref-based actions, and refresh screenshot refs without dispatching unsupported extensions.
+- Capture with explicit hidden-window options and support trusted offscreen embedding hosts. Add reproducible hidden Electron acceptance fixtures.
+
+
 ## 0.4.3 - 2026-09-06
 
 - Treated exact search, query, filter, sort, and result-view controls as read-only form actions across sites, including text search fields submitted with Enter.

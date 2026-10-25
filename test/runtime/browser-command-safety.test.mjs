@@ -26,6 +26,7 @@ class MockWebContents extends EventEmitter {
 
   async executeJavaScript(script = "") {
     this.scripts.push(script);
+    if (script.includes("registry.whenDefined")) return { ready: true };
     if (script.includes("matched: Boolean(element.isConnected && currentValue()")) {
       return { filled: true, matched: true };
     }
@@ -86,8 +87,8 @@ test("fill changes only the target value and never submits a search form", async
 
   assert.equal(result.result, "filled");
   assert.equal(webContents.inputs.length, 0, "fill must not synthesize mouse or keyboard submission events");
-  assert.equal(webContents.scripts.length, 1);
-  assert.doesNotMatch(webContents.scripts[0], /requestSubmit|\.click\s*\(|keyCode\s*:\s*["']Enter/i);
+  assert.equal(webContents.scripts.length, 2);
+  assert.doesNotMatch(webContents.scripts.at(-1), /requestSubmit|\.click\s*\(|keyCode\s*:\s*["']Enter/i);
 });
 
 test("negative Chinese submission constraints override positive-looking page controls", async () => {

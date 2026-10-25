@@ -1,0 +1,34 @@
+{
+  "date": "2026-10-25",
+  "baselineCommit": "15e765f677c098f621a6cf76439de9b3ccac7ccd",
+  "brizo": {
+    "electron": "44.2.0",
+    "chromium": "152.0.7977.76"
+  },
+  "ego": {
+    "runtime": "0.6.0.20",
+    "skill": "2.1.0",
+    "spaceId": 52
+  },
+  "viewport": {
+    "width": 1348,
+    "height": 802,
+    "dpr": 2
+  },
+  "measurement": "One flow per site and explicitly logged targeted confirmations. Output bytes cover semantic observation bodies, not images, tokens or complete IPC traces.",
+  "sourceFiles": {
+    "runtime/electron/agent-browser.mjs": "4e8dc3bf6e83cb319855e5b82ac6b98d3985943fb71b03e2f7ed0a4a22bf5269",
+    "runtime/electron/browser-command-agent.mjs": "76b2b1ab21d695feae51484fcf54e1fa5b6e57c98ffd3b312077aeab16271854",
+    "runtime/electron/agent-session-tools.mjs": "3ee6fa354c46c2a740c83a394de23e560b338f97bdfb666557e3ba314f467351",
+    "lib/agent-session.mjs": "fd502c839c634dd3f83d27354784ad8521664294c20f85aae131ca3b1cbd27e1",
+    "runtime/electron/agent-observation-scope.mjs": "5a0dbff690f78fe7233fb828cbf592af1a4718219bec2d24ebcaef65070d8976"
+  },
+  "measuredRevision": "79b3242b0508016b4452270d812d7aea257255bd",
+  "frameCoordinateFollowup": {
+    "sourceFile": "runtime/electron/browser-command-agent.mjs",
+    "sha256": "befbc7c0dd051a39d89f2d1eb49f4f5c5f9e3670e2a51c8dea99cbad08c99183",
+    "publicEvidence": "frame-acceptance.json",
+    "desktopEvidence": "frame-desktop-acceptance.json",
+    "scope": "Targeted offscreen same-origin frame click regression after the three-site measurement; top-document task logic unchanged."
+  }
+}

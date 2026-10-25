@@ -95,7 +95,7 @@ test("a click with no observable result cannot satisfy a later done claim", asyn
 
 test("fill executor rejects a controlled input that reverts before verification", async () => {
   const webContents = {
-    executeJavaScript: async () => ({ filled: true, matched: false }),
+    executeJavaScript: async (script = "") => script.includes("registry.whenDefined") ? { ready: true } : ({ filled: true, matched: false }),
   };
   await assert.rejects(executeBrowserCommandAction({
     action: { action: "fill", ref: "@e1", value: "Alice" },

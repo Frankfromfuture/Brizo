@@ -1,3 +1,4 @@
+import { createBrowserObservationScope } from "./agent-observation-scope.mjs";
 import { authorizeBrowserAction } from "./browser-action-policy.mjs";
 import { verifyBrowserActionPostcondition } from "./browser-action-postcondition.mjs";
 import {
@@ -52,14 +53,14 @@ const BROWSER_ACTIONS = new Set([
 // Serialized into the page for every ref-based action. Keeping lookup in one
 // function preserves existing @eN references while allowing those refs to live
 // inside open shadow roots and accessible same-origin frames.
-function locateBrowserAgentElement(domRef) {
+function locateBrowserAgentElement(domRef, attribute = "data-brizo-agent-ref") {
   const expectedRef = String(domRef || "");
   const seenRoots = new WeakSet();
   const visit = (root, context, depth) => {
     if (!root || depth > 8 || seenRoots.has(root)) return null;
     seenRoots.add(root);
-    const direct = [...(root.querySelectorAll?.("[data-brizo-agent-ref]") || [])]
-      .find((element) => element.getAttribute("data-brizo-agent-ref") === expectedRef);
+    const direct = [...(root.querySelectorAll?.("[" + attribute + "]") || [])]
+      .find((element) => element.getAttribute(attribute) === expectedRef);
     if (direct) return { element: direct, ...context };
     const nodes = [...(root.querySelectorAll?.("*") || [])];
     for (const node of nodes) {
@@ -92,6 +93,36 @@ function locateBrowserAgentElement(domRef) {
 }
 
 const BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE = `(${locateBrowserAgentElement.toString()})`;
+
+// Readiness only: no input is queued inside the page and no action is replayed.
+export async function waitForBrowserControlReady(webContents, target, signal) {
+  signal?.throwIfAborted();
+  const result = await evaluateBrowserPage(webContents, `(${async function(domRef, lookup) {
+    const located = lookup(domRef), element = located?.element;
+    if (!element) return { ready: false, reason: "stale" };
+    const deadline = performance.now() + 10000;
+    const bounded = async promise => {
+      let timer;
+      try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("not-ready")), Math.max(1, deadline - performance.now())); })]); }
+      finally { clearTimeout(timer); }
+    };
+    try {
+      // Declarative shadow DOM may exist before its custom element is defined.
+      // Await the real registration and framework update, not a fixed sleep.
+      for (let node = element; node;) {
+        const root = node.getRootNode(), host = root.host;
+        if (!host) break;
+        const registry = host.ownerDocument.defaultView.customElements;
+        if (host.localName.includes("-")) await bounded(registry.whenDefined(host.localName));
+        if (host.updateComplete?.then) await bounded(host.updateComplete);
+        node = host;
+      }
+      return { ready: element.isConnected && lookup(domRef)?.element === element, reason: "stale" };
+    } catch (error) { return { ready: false, reason: "not-ready", detail: String(error.message) }; }
+  }.toString()})(${JSON.stringify(target?.domRef || "")}, ${BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE})`);
+  signal?.throwIfAborted();
+  if (!result?.ready) throw Object.assign(new Error(result?.reason === "stale" ? "The control changed during component initialization. Observe again before filling." : `The control's component is not ready; no input was dispatched. ${result?.detail || ""}`), { code: result?.reason === "stale" ? "STALE_SNAPSHOT" : "CONTROL_NOT_READY" });
+}
 
 function jsonObjectsIn(text) {
   const objects = [];
@@ -484,11 +515,9 @@ async function loadUrlFollowingRedirects(webContents, url, signal) {
   }
 }
 
-export async function detectBrowserLoginRequirement(webContents) {
-  if (!webContents || webContents.isDestroyed()) return null;
-  // Inspect form structure only; never read credential values or ask the model
-  // to decide whether it should enter them. Optional header/sidebar login stays inert.
-  return evaluateBrowserPage(webContents, `(() => {
+// One structural check shared by direct detection and atomic page observations.
+// Credential values are never read; optional header/sidebar login stays inert.
+function browserLoginRequirement() {
     const visible = (node) => {
       const r = node.getBoundingClientRect(), s = getComputedStyle(node);
       return s.display !== "none" && s.visibility !== "hidden" && Number(s.opacity || 1) > .02
@@ -496,7 +525,7 @@ export async function detectBrowserLoginRequirement(webContents) {
     };
     const auth = /login|log[-_ ]?in|signin|sign[-_ ]?in|passport|登录|登陆/i;
     const route = auth.test(location.hostname + location.pathname);
-    const text = String(document.body?.innerText || "").replace(/\\s+/g, " ");
+    const text = String(document.body?.innerText || "").replace(/\s+/g, " ");
     const required = /(?:请先|必须|需要|仅限).{0,8}(?:登录|登陆)|(?:登录|登陆)后.{0,12}(?:查看|访问|继续|搜索|购买)|sign in to continue|login required/i.test(text);
     const seeds = [...document.querySelectorAll('input[type="password"],input[autocomplete="username"],input[autocomplete="current-password"],input[autocomplete="one-time-code"],iframe')]
       .filter((node) => visible(node) && (node.tagName !== "IFRAME" || auth.test(node.src + " " + node.title)));
@@ -515,13 +544,20 @@ export async function detectBrowserLoginRequirement(webContents) {
           && text.length < 1400 && auth.test(form.innerText)) return { required: true };
     }
     return null;
-  })()`);
 }
 
-export async function snapshotBrowserPage(webContents) {
+export async function detectBrowserLoginRequirement(webContents) {
+  if (!webContents || webContents.isDestroyed()) return null;
+  return evaluateBrowserPage(webContents, `(${browserLoginRequirement.toString()})()`);
+}
+
+export async function snapshotBrowserPage(webContents, { includeLoginState = false, observation } = {}) {
   if (!webContents || webContents.isDestroyed()) throw new Error("当前网页已关闭。");
-  return await evaluateBrowserPage(webContents, `
+  const result = await evaluateBrowserPage(webContents, `
     (() => {
+      const loginRequirement = ${includeLoginState ? `(${browserLoginRequirement.toString()})()` : "null"};
+      const scoped = ${observation ? `(${createBrowserObservationScope.toString()})(${JSON.stringify(observation)}, ${BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE})` : "null"};
+      if (scoped?.error) return { scopeError: scoped.error };
       const selector = ${JSON.stringify(INTERACTIVE_SELECTOR)};
       const clean = (value, limit = 180) => String(value || "").replace(/\\s+/g, " ").trim().slice(0, limit);
       const snapshotId = "brizo-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
@@ -530,6 +566,9 @@ export async function snapshotBrowserPage(webContents) {
       const elements = [];
       const frames = [];
       const textChunks = [];
+      const viewportChunks = [];
+      let viewportTextLength = 0;
+      let omittedElements = 0;
       const seenRoots = new WeakSet();
       const seenFrames = new WeakSet();
       const previousDomRefs = new WeakMap();
@@ -570,6 +609,7 @@ export async function snapshotBrowserPage(webContents) {
           && rect.left <= topWidth;
       };
 
+      const available = (element, context) => scoped ? scoped.rendered(element) && (scoped.offscreen || visible(element, context)) : visible(element, context);
       const safeFrameUrl = (value, base) => {
         try {
           const parsed = new URL(String(value || ""), base);
@@ -607,7 +647,8 @@ export async function snapshotBrowserPage(webContents) {
         };
       };
       const appendElement = (element, context, frameRef, frameDepth) => {
-        if (elements.length >= 140 || !visible(element, context)) return;
+        if (!available(element, context)) return;
+        if (!scoped && elements.length >= 140) { omittedElements += 1; return; }
         const rect = topRect(element, context);
         const tag = String(element.tagName || "").toLowerCase();
         const nativeType = clean(element.getAttribute("type") || element.type, 30).toLowerCase();
@@ -639,11 +680,14 @@ export async function snapshotBrowserPage(webContents) {
         const rawValue = sensitive ? "" : contentEditable
           ? element.innerText || element.textContent || ""
           : "value" in element ? element.value ?? "" : "";
+        const labelledBy = (element.getAttribute("aria-labelledby") || "").trim().split(/\\s+/).filter(Boolean)
+          .map(id => element.getRootNode().getElementById?.(id)?.textContent || "").join(" ");
         const explicitText = clean(
-          element.getAttribute("aria-label")
+          labelledBy
+          || element.getAttribute("aria-label")
           || labels
-          || element.getAttribute("title")
           || element.innerText
+          || element.getAttribute("title")
           || element.getAttribute("placeholder")
           || element.getAttribute("alt")
           || (sensitive ? "" : rawValue),
@@ -653,6 +697,7 @@ export async function snapshotBrowserPage(webContents) {
           : /setting|preference|config|设置/i.test(semanticHint)
             ? "设置"
             : "";
+        if (scoped && !scoped.control(element, explicitText || inferredText, sensitive ? "" : rawValue, frameRef)) return;
         const domRef = snapshotId + "-" + (elements.length + 1);
         element.setAttribute("data-brizo-agent-ref", domRef);
         const isSelect = tag === "select";
@@ -721,22 +766,52 @@ export async function snapshotBrowserPage(webContents) {
       const collectRoot = (root, context, frameRef = "", frameDepth = 0, depth = 0) => {
         if (!root || depth > 8 || seenRoots.has(root)) return;
         seenRoots.add(root);
-        root.querySelectorAll?.("[data-brizo-agent-ref]").forEach((element) => {
+        [...(root.nodeType === Node.ELEMENT_NODE && root.matches("[data-brizo-agent-ref]") ? [root] : []), ...(root.querySelectorAll?.("[data-brizo-agent-ref]") || [])].forEach((element) => {
           previousDomRefs.set(element, element.getAttribute("data-brizo-agent-ref"));
           element.removeAttribute("data-brizo-agent-ref");
         });
         const overlays = [...(root.querySelectorAll?.('[role="dialog"],[aria-modal="true"],[role="listbox"],.calendar-modal') || [])]
-          .filter((element) => visible(element, context)).slice(0, 12);
-        for (const overlay of overlays) {
+          .filter((element) => available(element, context)).slice(0, 12);
+        if (!scoped) for (const overlay of overlays) {
           if (overlay.innerText) textChunks.unshift(overlay.innerText);
         }
-        if (root.nodeType === Node.DOCUMENT_NODE && root.body?.innerText) textChunks.push(root.body.innerText);
-        const nodes = [...(root.querySelectorAll?.("*") || [])];
+        if (!scoped && root.nodeType === Node.DOCUMENT_NODE && root.body?.innerText) textChunks.push(root.body.innerText);
+        const nodes = [...(root.nodeType === Node.ELEMENT_NODE ? [root] : []), ...(root.querySelectorAll?.("*") || [])];
+        if (scoped) {
+          for (const node of nodes) if (available(node, context)) scoped.region(node, frameRef);
+          scoped.collectText(nodes, node => available(node, context));
+        }
+        // A long flight list can exceed the body-text budget before the target
+        // flight. Prioritize text actually revealed by scrolling, including
+        // nested lists, instead of repeatedly showing the document's beginning.
+        if (!scoped) for (const node of nodes) {
+          if (viewportTextLength >= 6000) break;
+          const textNodes = [...node.childNodes].filter(child => child.nodeType === Node.TEXT_NODE && child.textContent.trim());
+          if (!textNodes.length) continue;
+          if (/^(?:SCRIPT|STYLE|NOSCRIPT|TEXTAREA|INPUT)$/.test(node.tagName || "") || !available(node, context)) continue;
+          const view = node.ownerDocument.defaultView;
+          let top = 0, bottom = view.innerHeight, left = 0, right = view.innerWidth;
+          for (let parent = node; parent; parent = parent.parentElement || parent.getRootNode()?.host) {
+            const style = view.getComputedStyle(parent);
+            const bounds = parent.getBoundingClientRect();
+            if (/auto|scroll|hidden|clip/.test(style.overflowY)) { top = Math.max(top, bounds.top); bottom = Math.min(bottom, bounds.bottom); }
+            if (/auto|scroll|hidden|clip/.test(style.overflowX)) { left = Math.max(left, bounds.left); right = Math.min(right, bounds.right); }
+          }
+          if (bottom <= top || right <= left) continue;
+          for (const child of textNodes) {
+            const range = node.ownerDocument.createRange();
+            range.selectNodeContents(child);
+            if (![...range.getClientRects()].some(rect => rect.bottom > top && rect.top < bottom && rect.right > left && rect.left < right)) continue;
+            const text = clean(child.textContent, 6000 - viewportTextLength);
+            viewportChunks.push(text);
+            viewportTextLength += text.length;
+          }
+        }
         // Portalled calendars/listboxes often follow the entire document.
         // Reserve the bounded snapshot for their currently visible controls
         // before background links exhaust the 140-element budget.
         const overlayNodes = new Set(nodes.filter((node) => overlays.some((overlay) => overlay.contains(node))));
-        const explicitControls = new Set(root.querySelectorAll?.(selector) || []);
+        const explicitControls = new Set([...(root.nodeType === Node.ELEMENT_NODE && root.matches(selector) ? [root] : []), ...(root.querySelectorAll?.(selector) || [])]);
         // Some custom suggestions expose neither ARIA roles nor a pointer
         // cursor. Keep compact matching text directly below the focused field
         // available for an observed, ref-based click without treating Enter as safe.
@@ -744,9 +819,9 @@ export async function snapshotBrowserPage(webContents) {
         const fieldValue = focused && /^(?:INPUT|TEXTAREA)$/.test(focused.tagName || "")
           && !/^(?:password|file)$/.test(focused.type || "")
           ? clean(focused.value, 80) : "";
-        const fieldRect = fieldValue && visible(focused, context) ? topRect(focused, context) : null;
+        const fieldRect = fieldValue && available(focused, context) ? topRect(focused, context) : null;
         const suggestions = new Set(fieldRect ? nodes.filter((node) => {
-          if (overlayNodes.has(node) || node === focused || !visible(node, context)) return false;
+          if (overlayNodes.has(node) || node === focused || !available(node, context)) return false;
           const label = clean(node.innerText || node.textContent, 100);
           if (!label || label.length > 80 || !label.includes(fieldValue) || node.querySelector(selector)) return false;
           const rect = topRect(node, context);
@@ -763,7 +838,8 @@ export async function snapshotBrowserPage(webContents) {
           // as plain text elements. Expose only compact, visible pointer
           // targets, not arbitrary text or whole clickable page containers.
           if (!/^(?:LABEL|DIV|SPAN|P|DT|DD|LI|TD)$/.test(element.tagName || "")
-            || !visible(element, context)) continue;
+            || !available(element, context)) continue;
+          if (element.parentElement?.closest(selector)) continue;
           const view = element.ownerDocument.defaultView;
           if (!suggestions.has(element) && view.getComputedStyle(element).cursor !== "pointer") continue;
           const label = clean(element.innerText || element.textContent, 100);
@@ -778,7 +854,7 @@ export async function snapshotBrowserPage(webContents) {
           if (node.shadowRoot) collectRoot(node.shadowRoot, context, frameRef, frameDepth, depth + 1);
         }
         for (const frame of nodes.filter((node) => /^(?:IFRAME|FRAME)$/.test(node.tagName || ""))) {
-          if (frames.length >= 24 || seenFrames.has(frame) || !visible(frame, context)) continue;
+          if (frames.length >= 24 || seenFrames.has(frame) || !available(frame, context)) continue;
           seenFrames.add(frame);
           const rect = topRect(frame, context);
           const nextFrameRef = "@f" + (frames.length + 1);
@@ -794,6 +870,7 @@ export async function snapshotBrowserPage(webContents) {
           }
           frames.push({
             ref: nextFrameRef,
+            ...(scoped ? { domRef: scoped.frame(frame, nextFrameRef) } : {}),
             sameOrigin,
             name: clean(frame.getAttribute("aria-label") || frame.getAttribute("title") || frame.getAttribute("name"), 120),
             url: safeFrameUrl(childUrl || frame.getAttribute("src"), frame.ownerDocument?.baseURI),
@@ -809,9 +886,14 @@ export async function snapshotBrowserPage(webContents) {
         }
       };
 
-      collectRoot(document, { offsetX: 0, offsetY: 0, scaleX: 1, scaleY: 1 });
-      const pageText = clean(textChunks.join("\\n"), 10000);
+      collectRoot(scoped?.root || document, scoped?.context || { offsetX: 0, offsetY: 0, scaleX: 1, scaleY: 1 });
+      const scopedResult = scoped?.finish();
+      const combinedText = (viewportChunks.length ? [viewportChunks.join(" "), ...textChunks] : textChunks).join("\\n");
+      const pageText = scopedResult ? scopedResult.pageText : clean(combinedText, 10000);
       return {
+        ${includeLoginState ? "loginRequirement," : ""}
+        ...(scopedResult ? { securityText: clean([...document.querySelectorAll('[role="alert"],[role="dialog"]')].filter(e => e.checkVisibility({ visibilityProperty: true, opacityProperty: true })).map(e => e.innerText).join(" ") + " " + (document.body?.innerText || ""), 10000) } : {}),
+        ...(scopedResult ? { ...scopedResult, regions: scoped.regions } : { truncated: { elements: omittedElements > 0, omittedElements, text: clean(combinedText, 10001).length > 10000 } }),
         title: clean(document.title, 240),
         url: location.href,
         pageText,
@@ -821,6 +903,8 @@ export async function snapshotBrowserPage(webContents) {
       };
     })()
   `);
+  if (result?.scopeError) throw Object.assign(new Error("The observation root is stale or inaccessible."), { code: result.scopeError === "ROOT_GONE" ? "STALE_SNAPSHOT" : "FRAME_UNAVAILABLE" });
+  return result;
 }
 
 function actionTarget(snapshot, action) {
@@ -962,15 +1046,41 @@ export async function executeBrowserCommandAction({ action, command, sendInputEv
         const located = ${BROWSER_AGENT_ELEMENT_LOOKUP_SOURCE}(${JSON.stringify(target.domRef || "")});
         const element = located?.element;
         if (!element) return null;
+        element.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
         const rect = element.getBoundingClientRect();
         if (rect.width <= 1 || rect.height <= 1) return null;
-        return {
-          x: Math.round(located.offsetX + (rect.left + rect.width / 2) * located.scaleX),
-          y: Math.round(located.offsetY + (rect.top + rect.height / 2) * located.scaleY),
+        const deepHit = (root, x, y) => {
+          let hit = root.elementFromPoint(x, y);
+          for (let depth = 0; hit?.shadowRoot && depth < 8; depth++) {
+            const nested = hit.shadowRoot.elementFromPoint(x, y);
+            if (!nested || nested === hit) break;
+            hit = nested;
+          }
+          return hit;
         };
+        const contains = (expected, hit) => {
+          for (let node = hit; node; node = node.parentNode || node.host) if (node === expected) return true;
+          return false;
+        };
+        let x = rect.left + rect.width / 2, y = rect.top + rect.height / 2, owner = element.ownerDocument;
+        let reachable = contains(element, deepHit(owner, x, y));
+        // scrollIntoView can move outer frame viewports. Recompute each level
+        // after scrolling and reject covers in any parent document.
+        for (let depth = 0; reachable && owner !== document && depth < 8; depth++) {
+          const frame = owner.defaultView?.frameElement;
+          if (!frame) { reachable = false; break; }
+          const bounds = frame.getBoundingClientRect();
+          x = bounds.left + (x + frame.clientLeft) * bounds.width / Math.max(1, frame.offsetWidth);
+          y = bounds.top + (y + frame.clientTop) * bounds.height / Math.max(1, frame.offsetHeight);
+          owner = frame.ownerDocument;
+          reachable = contains(frame, deepHit(owner, x, y));
+        }
+        if (!reachable || owner !== document) return { blocked: true };
+        return { x: Math.round(x), y: Math.round(y) };
       })()
     `);
     if (!position) throw new Error("页面元素引用已经失效，请重新观察页面。");
+    if (position.blocked) throw Object.assign(new Error("The observed control is covered; no click was dispatched."), { code: "TARGET_OCCLUDED" });
     const point = scaledInputPoint(webContents, position);
     await dispatchInput([
       { type: "mouseMove", x: point.x, y: point.y },
@@ -981,6 +1091,7 @@ export async function executeBrowserCommandAction({ action, command, sendInputEv
     return { status: "continued" };
   }
   if (kind === "fill") {
+    await waitForBrowserControlReady(webContents, target, signal);
     if (target.disabled || target.readOnly) throw new Error("目标输入控件当前不可编辑。");
     const value = String(action.value || "").slice(0, 4000);
     const filled = await evaluateBrowserPage(webContents, `
@@ -1010,7 +1121,7 @@ export async function executeBrowserCommandAction({ action, command, sendInputEv
           else element.value = ${JSON.stringify(value)};
         }
         const view = element.ownerDocument?.defaultView || window;
-        element.dispatchEvent(new view.InputEvent("input", { bubbles: true, inputType: "insertText", data: ${JSON.stringify(value)} }));
+        element.dispatchEvent(new view.InputEvent("input", { bubbles: true, composed: true, inputType: "insertText", data: ${JSON.stringify(value)} }));
         element.dispatchEvent(new view.Event("change", { bubbles: true }));
         return new Promise((resolve) => {
           const verify = () => resolve({

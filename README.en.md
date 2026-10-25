@@ -1,5 +1,7 @@
 # Brizo Use
 
+Version 0.5 adds initial observations, semantic targets, bounded action batches, condition waits, compact/filtered/delta observations, screenshot-bound canvas input, diagnostics, and the `brizo/agent` SDK. See [Agent API](./docs/agent-api.md) and [validation evidence](./docs/agent-validation.md). These features require an updated embedding host; updating the CLI alone does not update the desktop runtime. No comparative performance claim against Ego is made without an executable baseline.
+
 Brizo is an open-source browser Use runtime and Agent integration toolkit. It connects local AI harnesses such as Claude Code, Cursor, TRAE, Qwen Code, Codex, and others to isolated Brizo browser sessions.
 
 This repository contains only the Use layer: the CLI client, local bridge protocol, isolated task sandbox, page observation and actions, safety policies, result auditing, site adapters, and harness installers. Site flows currently cover Ctrip, Taobao, Xiaohongshu, Douban, Bilibili, and Weibo. The Brizo Browse window, tabs, bookmarks, downloads, passwords, search, and other product code remain in a private repository.

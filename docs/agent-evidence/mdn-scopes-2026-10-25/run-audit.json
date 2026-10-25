@@ -1,0 +1,89 @@
+[
+  {
+    "file": "brizo-release.json",
+    "reason": "Development run: four-second readiness bound and broad name/ref selection; retained as failed diagnostic.",
+    "results": [
+      {
+        "site": "wikipedia",
+        "success": false,
+        "errors": [
+          {
+            "code": "TARGET_NOT_FOUND",
+            "message": "No observed control matches target."
+          }
+        ]
+      },
+      {
+        "site": "mdn",
+        "success": false,
+        "errors": [
+          {
+            "code": "CONTROL_NOT_READY",
+            "message": "The control's component is not ready; no input was dispatched. not-ready"
+          }
+        ]
+      },
+      {
+        "site": "github",
+        "success": false,
+        "errors": [
+          {
+            "code": "STALE_SNAPSHOT",
+            "message": "目标控件已变化，请重新 observe。"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "brizo-verified.json",
+    "reason": "Intermediate successful run before the element-root collection correction; not the final source run.",
+    "results": [
+      {
+        "site": "wikipedia",
+        "success": true,
+        "errors": []
+      },
+      {
+        "site": "mdn",
+        "success": true,
+        "errors": []
+      },
+      {
+        "site": "github",
+        "success": true,
+        "errors": []
+      }
+    ]
+  },
+  {
+    "file": "brizo-final.json",
+    "reason": "Final source: Wikipedia and MDN passed, GitHub release navigation timed out.",
+    "results": [
+      {
+        "site": "wikipedia",
+        "success": true,
+        "errors": []
+      },
+      {
+        "site": "mdn",
+        "success": true,
+        "errors": []
+      },
+      {
+        "site": "github",
+        "success": false,
+        "errors": [
+          {
+            "code": "CONDITION_TIMEOUT",
+            "message": "Expected page condition was not observed. No action was retried."
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "file": "github-confirm.log",
+    "reason": "Targeted confirmation did not reach GitHub because the driver initialized Wikipedia; selected-site initialization was then corrected."
+  }
+]

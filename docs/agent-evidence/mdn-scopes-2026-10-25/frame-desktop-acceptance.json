@@ -1,0 +1,113 @@
+{
+  "ok": true,
+  "date": "2026-10-25T05:00:41.933Z",
+  "platform": "darwin",
+  "electron": "44.2.0",
+  "chromium": "152.0.7977.76",
+  "scenarios": [
+    {
+      "scenario": "create-includes-observation",
+      "passed": true
+    },
+    {
+      "scenario": "css-and-device-screenshot-metadata",
+      "passed": true
+    },
+    {
+      "scenario": "screenshot-then-action",
+      "passed": true
+    },
+    {
+      "scenario": "semantic-batch-with-async-result",
+      "passed": true
+    },
+    {
+      "scenario": "observation-budget",
+      "passed": true,
+      "bytes": {
+        "full": 45710,
+        "compact": 10750,
+        "filtered": 634
+      }
+    },
+    {
+      "scenario": "delta-after-edit",
+      "passed": true
+    },
+    {
+      "scenario": "wait-timeout-keeps-agent-control",
+      "passed": true
+    },
+    {
+      "scenario": "stale-snapshot-rejected",
+      "passed": true
+    },
+    {
+      "scenario": "batch-stops-and-returns-partial-evidence",
+      "passed": true
+    },
+    {
+      "scenario": "invalid-later-step-has-no-earlier-effects",
+      "passed": true
+    },
+    {
+      "scenario": "desktop-followup-and-progress-preserved",
+      "passed": true
+    },
+    {
+      "scenario": "canvas-drag-at-125-percent-zoom",
+      "passed": true
+    },
+    {
+      "scenario": "coordinates-cannot-bypass-dom-controls",
+      "passed": true
+    },
+    {
+      "scenario": "semantic-labels-and-upstream-truncation",
+      "passed": true
+    },
+    {
+      "scenario": "full-page-pagination-and-bound-subtree",
+      "passed": true
+    },
+    {
+      "scenario": "deep-section-text-and-safe-fragments",
+      "passed": true
+    },
+    {
+      "scenario": "covered-control-never-receives-click",
+      "passed": true
+    },
+    {
+      "scenario": "subtree-frame-origin-boundary",
+      "passed": true
+    },
+    {
+      "scenario": "declarative-component-fill-after-upgrade",
+      "passed": true
+    },
+    {
+      "scenario": "unready-component-has-no-input-effects",
+      "passed": true
+    },
+    {
+      "scenario": "unauthorized-submit-constraint-preserved",
+      "passed": true
+    },
+    {
+      "scenario": "parallel-observation-stops-at-login",
+      "passed": true
+    },
+    {
+      "scenario": "entire-run-hidden",
+      "passed": true
+    }
+  ],
+  "metrics": {
+    "calls": 51,
+    "outputBytes": 315365,
+    "elapsedMs": 17106
+  },
+  "profileIsolated": true,
+  "foregroundCalls": 0
+}
