@@ -13,6 +13,8 @@ node "/本 skill 的绝对路径/scripts/brizo.mjs" create --json '{"goal":"在�
 
 保留用户原始目标与限制。创建结果直接包含 `observation`；旧宿主未返回时再运行 `observe SESSION_ID`。复杂输入保存为 UTF-8 JSON 文件，用 `--input "/绝对路径/request.json"` 传入。已知接口即可操作，需要时才查 `capabilities` 或 `help TOPIC`。
 
+以 `create` 返回的宿主 `capabilities` 为准。缺少该字段时沿用旧版：只使用最新 `ref` 的单步动作，截图后重新 `observe`；暂不使用语义 `target`、批处理、条件等待、观察筛选或 Canvas 输入。`brizo capabilities` 只描述客户端，不能证明正在运行的桌面宿主已更新。
+
 观察返回 `snapshotId`、页面文字、视口和 `@eN` 控件。每个观察编号只用于一次动作。优先使用明确的语义目标，名称默认精确匹配，多个匹配会报错：
 
 ```sh

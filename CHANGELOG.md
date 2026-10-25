@@ -7,6 +7,7 @@
 - Add compact, filtered and delta observations with disclosed output limits; retain full control details on request.
 - Add screenshot-bound canvas click, hover, double-click and drag, including cancellation cleanup and viewport-change checks.
 - Add a JavaScript session SDK, local topic help, skill output and aggregate diagnostics.
+- Detect legacy running hosts, retain single ref-based actions, and refresh screenshot refs without dispatching unsupported extensions.
 - Capture with explicit hidden-window options and support trusted offscreen embedding hosts. Add reproducible hidden Electron acceptance fixtures.
 
 

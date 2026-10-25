@@ -2,6 +2,8 @@
 
 The 0.5 API adds optional capabilities to authenticated protocol 1. Existing ref-based actions remain available. A desktop host must embed this runtime to provide the new features; installing a new CLI alone does not update the host. `create` and `ping` report runtime capabilities. `brizo capabilities` describes the installed client and explicitly does not claim to have probed the host.
 
+The SDK recognizes an old host whose `create` response has neither capabilities nor an observation. It obtains the initial observation and refreshes refs after legacy screenshots. Basic ref-based operations continue to work; advanced methods fail locally with `CAPABILITY_UNAVAILABLE`, before dispatch. The Skill uses the same compatibility rule, so installing the new client does not require restarting a user's current browser mid-task.
+
 ## JSON commands
 
 `create` returns `sessionId`, `state`, `capabilities` and the initial `observation`. If login or a site check pauses initial observation, the session is still returned with its actual paused state. Resume that session after user control is returned.

@@ -103,9 +103,29 @@ test("SDK reuses create evidence, follows screenshot evidence, and never replays
 test("SDK keeps partial batch evidence available for explicit recovery", async () => {
   const observation = { snapshotId: "after-error" };
   const session = await createAgentSession({}, { command: async method => {
-    if (method === "create") return { sessionId: "task" };
+    if (method === "create") return { sessionId: "task", observation: { snapshotId: "start" } };
     throw Object.assign(new Error("missing"), { details: { completed: [{ index: 0 }], failedIndex: 1, observation } });
   } });
   await assert.rejects(session.batch([{ action: "click", target: { name: "Next" } }]), error => error.details.failedIndex === 1);
   assert.equal(session.observation, observation);
+});
+
+test("legacy hosts retain basic actions and recover refs after screenshot without unsupported dispatch", async () => {
+  const calls = [];
+  let observations = 0;
+  const task = await createAgentSession({ goal: "fixture" }, { command: async (method, id, args) => {
+    calls.push({ method, args });
+    if (method === "create") return { sessionId: "old-task", state: { status: "agent" } };
+    if (method === "observe") return { snapshotId: `old-${++observations}`, elements: [{ ref: "@e1", name: "Search" }] };
+    if (method === "screenshot") return { path: "/tmp/old.png" };
+    return { observation: { snapshotId: "after-action" } };
+  } });
+  assert.equal(task.observation.snapshotId, "old-1");
+  const capture = await task.screenshot();
+  assert.equal(capture.observation.snapshotId, "old-2");
+  await assert.rejects(task.batch([{ action: "click", ref: "@e1" }]), { code: "CAPABILITY_UNAVAILABLE" });
+  await assert.rejects(task.act({ action: "click", target: { name: "Search" } }), { code: "CAPABILITY_UNAVAILABLE" });
+  await task.act({ action: "click", ref: "@e1" });
+  assert.equal(calls.at(-1).args.snapshotId, "old-2");
+  assert.equal(calls.some(call => call.method === "batch"), false);
 });
